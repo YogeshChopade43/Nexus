@@ -1,0 +1,254 @@
+import { useState, useCallback } from "react";
+import { Plus, Trash2, TestTube, Check, Eye, EyeOff } from "lucide-react";
+import { Card, CardHeader, CardTitle, CardContent } from "../ui/Card";
+import { Button } from "../ui/Button";
+import { Input } from "../ui/Input";
+import { Badge } from "../ui/Badge";
+import type { LLMProviderConfig, LLMProviderInfo, LLMProviderFormData } from "../../types/llm";
+
+interface LLMSettingsProps {
+  configs: LLMProviderConfig[];
+  providerInfo: LLMProviderInfo[];
+  loading: boolean;
+  onCreate: (data: LLMProviderFormData) => Promise<LLMProviderConfig | null>;
+  onUpdate: (id: number, data: Partial<LLMProviderFormData>) => Promise<boolean>;
+  onDelete: (id: number) => Promise<boolean>;
+  onRefresh: () => void;
+  testChat: (providerId: number, message: string) => Promise<{ content: string | null; error: string | null }>;
+}
+
+const PROVIDER_ICONS: Record<string, string> = {
+  openai: "🤖",
+  anthropic: "🦊",
+  ollama: "🦙",
+  grok: "🔮",
+  litellm: "🔗",
+  huggingface: "🧠",
+  groq: "⚡",
+  openrouter: "🌐",
+};
+
+export function LLMSettings({
+  configs,
+  providerInfo,
+  loading,
+  onCreate,
+  onDelete,
+  testChat,
+}: LLMSettingsProps) {
+  const [showForm, setShowForm] = useState(false);
+  const [selectedProvider, setSelectedProvider] = useState<string>("");
+  const [formModel, setFormModel] = useState("");
+  const [formApiKey, setFormApiKey] = useState("");
+  const [formBaseUrl, setFormBaseUrl] = useState("");
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [testing, setTesting] = useState<number | null>(null);
+  const [testResult, setTestResult] = useState<Record<number, { content: string | null; error: string | null }>>({});
+
+  const selectedProviderInfo = providerInfo.find(p => p.name === selectedProvider);
+
+  const getProviderLabel = (name: string) => providerInfo.find(p => p.name === name)?.label || name;
+
+  const handleCreate = useCallback(async () => {
+    if (!selectedProvider) return null;
+    const data: LLMProviderFormData = {
+      provider_name: selectedProvider as any,
+      model: formModel,
+      api_key: formApiKey || undefined,
+      base_url: formBaseUrl || undefined,
+      enabled: true,
+    };
+    const result = await onCreate(data);
+    if (result) {
+      setSelectedProvider("");
+      setFormModel("");
+      setFormApiKey("");
+      setFormBaseUrl("");
+      setShowForm(false);
+    }
+    return result;
+  }, [selectedProvider, formModel, formApiKey, formBaseUrl, onCreate]);
+
+  const handleTest = useCallback(async (config: LLMProviderConfig) => {
+    setTesting(config.id);
+    try {
+      const result = await testChat(config.id, "Say hello in one sentence");
+      setTestResult(prev => ({ ...prev, [config.id]: result }));
+    } catch {
+      setTestResult(prev => ({ ...prev, [config.id]: { content: null, error: "Test failed" } }));
+    } finally {
+      setTesting(null);
+    }
+  }, [testChat]);
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-semibold text-nexus-text">LLM Providers</h2>
+          <p className="text-sm text-nexus-text-secondary mt-1">
+            Configure AI models for Nexus
+          </p>
+        </div>
+        <Button onClick={() => setShowForm(!showForm)} className="gap-1.5">
+          <Plus className="w-4 h-4" />
+          Add Provider
+        </Button>
+      </div>
+
+      {showForm && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Add LLM Provider</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-4">
+              <div>
+                <label className="block text-sm font-medium text-nexus-text mb-2">Provider</label>
+                <select
+                  value={selectedProvider}
+                  onChange={e => {
+                    const providerName = e.target.value;
+                    setSelectedProvider(providerName);
+                    const info = providerInfo.find(p => p.name === providerName);
+                    setFormModel(info?.models[0] || "");
+                  }}
+                  className="w-full px-3 py-2 rounded-lg bg-nexus-bg-secondary border border-nexus-border text-nexus-text focus:outline-none focus:ring-2 focus:ring-nexus-accent focus:border-transparent"
+                >
+                  <option value="">Select a provider...</option>
+                  {providerInfo.map(p => (
+                    <option key={p.name} value={p.name}>
+                      {p.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-nexus-text mb-2">Model</label>
+                <select
+                  value={formModel}
+                  onChange={e => setFormModel(e.target.value)}
+                  disabled={!selectedProvider}
+                  className="w-full px-3 py-2 rounded-lg bg-nexus-bg-secondary border border-nexus-border text-nexus-text focus:outline-none focus:ring-2 focus:ring-nexus-accent focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <option value="">Select a model...</option>
+                  {(selectedProviderInfo?.models || []).map(m => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="relative">
+                <Input
+                  label="API Key"
+                  type={showApiKey ? "text" : "password"}
+                  value={formApiKey}
+                  onChange={e => setFormApiKey(e.target.value)}
+                  placeholder="Enter API key (if required)"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowApiKey(!showApiKey)}
+                  className="absolute right-3 top-[28px] text-nexus-text-muted hover:text-nexus-text transition-colors"
+                  tabIndex={-1}
+                  aria-label={showApiKey ? "Hide API key" : "Show API key"}
+                >
+                  {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+
+              <Input
+                label="Base URL"
+                value={formBaseUrl}
+                onChange={e => setFormBaseUrl(e.target.value)}
+                placeholder="https://api.example.com (optional)"
+              />
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" onClick={() => setShowForm(false)}>
+                Cancel
+              </Button>
+              <Button onClick={handleCreate}>Add Provider</Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {loading ? (
+        <div className="flex items-center justify-center py-8">
+          <div className="animate-spin w-8 h-8 border-2 border-nexus-accent border-t-transparent rounded-full" />
+        </div>
+      ) : configs.length === 0 ? (
+        <Card>
+          <CardContent className="py-8 text-center text-nexus-text-muted">
+            <p>No LLM providers configured yet.</p>
+            <p className="text-xs mt-2">Add a provider above to get started.</p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="grid gap-4">
+          {configs.map(config => (
+            <div key={config.id} className="bg-nexus-bg-tertiary/50 border-nexus-border border rounded-lg p-4">
+              <div className="flex items-start gap-3">
+                <span className="text-2xl">{PROVIDER_ICONS[config.provider_name] || "📦"}</span>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-nexus-text">{getProviderLabel(config.provider_name)}</span>
+                    <Badge variant={config.enabled ? "success" : "default"} size="sm">
+                      {config.enabled ? "Active" : "Disabled"}
+                    </Badge>
+                  </div>
+                  <p className="text-sm text-nexus-text-muted">Model: {config.model}</p>
+                  {config.base_url && <p className="text-xs text-nexus-text-muted">{config.base_url}</p>}
+
+                  <div className="mt-3 flex items-center gap-2">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="gap-1.5"
+                      onClick={() => handleTest(config)}
+                      disabled={testing === config.id}
+                    >
+                      {testing === config.id ? (
+                        <div className="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin" />
+                      ) : testResult[config.id] !== undefined && testResult[config.id] !== null ? (
+                        <>
+                          <Check className="w-3 h-3" />
+                          {testResult[config.id].error ? "Failed" : "Working"}
+                        </>
+                      ) : (
+                        <>
+                          <TestTube className="w-3 h-3" />
+                          Test
+                        </>
+                      )}
+                    </Button>
+                    <Button variant="ghost" size="sm" className="text-nexus-danger" onClick={() => onDelete(config.id)}>
+                      <Trash2 className="w-3 h-3" />
+                    </Button>
+                  </div>
+
+                  {testResult[config.id] !== undefined && (
+                    <div className="mt-3 p-2 bg-nexus-bg-secondary border border-nexus-border rounded text-xs text-nexus-text-secondary">
+                      {testResult[config.id].error ? (
+                        <p className="text-nexus-danger">{testResult[config.id].error}</p>
+                      ) : testResult[config.id].content ? (
+                        <p>{testResult[config.id].content}</p>
+                      ) : (
+                        <p className="text-nexus-danger">Test failed</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
