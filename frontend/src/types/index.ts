@@ -1,4 +1,3 @@
-export * from './app';
 export * from './chat';
 export * from './workflow';
 
@@ -7,3 +6,4 @@ export interface ApiError {
   message: string;
   details?: Record<string, unknown>;
 }
+export * from './mcp';

@@ -8,22 +8,23 @@ export default {
   theme: {
     extend: {
       colors: {
+        // Driven by CSS variables in index.css so the light/dark theme switch works.
         nexus: {
-          bg: '#0a0e17',
-          'bg-secondary': '#111827',
-          'bg-tertiary': '#1f2937',
-          border: '#2d3748',
-          'border-hover': '#374151',
-          text: '#f3f4f6',
-          'text-secondary': '#9ca3af',
-          'text-muted': '#6b7280',
-          accent: '#00d4aa',
-          'accent-hover': '#00b894',
-          'accent-dim': '#00d4aa20',
-          danger: '#ef4444',
-          'danger-hover': '#dc2626',
-          warning: '#f59e0b',
-          info: '#3b82f6',
+          bg: 'rgb(var(--nexus-bg) / <alpha-value>)',
+          'bg-secondary': 'rgb(var(--nexus-bg-secondary) / <alpha-value>)',
+          'bg-tertiary': 'rgb(var(--nexus-bg-tertiary) / <alpha-value>)',
+          border: 'rgb(var(--nexus-border) / <alpha-value>)',
+          'border-hover': 'rgb(var(--nexus-border-hover) / <alpha-value>)',
+          text: 'rgb(var(--nexus-text) / <alpha-value>)',
+          'text-secondary': 'rgb(var(--nexus-text-secondary) / <alpha-value>)',
+          'text-muted': 'rgb(var(--nexus-text-muted) / <alpha-value>)',
+          accent: 'rgb(var(--nexus-accent) / <alpha-value>)',
+          'accent-hover': 'rgb(var(--nexus-accent-hover) / <alpha-value>)',
+          danger: 'rgb(var(--nexus-danger) / <alpha-value>)',
+          'danger-hover': 'rgb(var(--nexus-danger-hover) / <alpha-value>)',
+          warning: 'rgb(var(--nexus-warning) / <alpha-value>)',
+          info: 'rgb(var(--nexus-info) / <alpha-value>)',
+          'accent-dim': 'rgb(var(--nexus-accent) / 0.12)',
         },
       },
       fontFamily: {

@@ -1,58 +1,57 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Optional
 
 from app.core.config import DATABASE_PATH
-from app.core.secrets import decrypt_config, encrypt_config
+
+logger = logging.getLogger(__name__)
 
 
 def get_db_path() -> Path:
-    path = Path(DATABASE_PATH)
+    path = Path(os.getenv("DATABASE_PATH", DATABASE_PATH))
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
 
 
 def get_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(get_db_path())
+    # timeout: wait on locks instead of failing when the scheduler and API write concurrently.
+    conn = sqlite3.connect(get_db_path(), timeout=15)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
-def get_app_states(conn: sqlite3.Connection) -> dict[str, dict[str, bool]]:
-    rows = conn.execute(
-        """
-        SELECT a.app_id, a.enabled,
-               COALESCE(
-                   (SELECT c.connected FROM connections c
-                    WHERE c.app_id = a.app_id
-                    ORDER BY c.id DESC LIMIT 1),
-                   0
-               ) AS connected
-        FROM apps a
-        """
-    ).fetchall()
-    states = {}
-    for row in rows:
-        enabled = bool(row["enabled"])
-        connected = bool(row["connected"])
-        states[row["app_id"]] = {
-            "enabled": enabled,
-            "connected": connected,
-            "available": enabled and connected,
-        }
-    return states
-
-
-def get_effective_app_connections(conn: sqlite3.Connection) -> dict[str, bool]:
-    return {
-        app_id: state["available"]
-        for app_id, state in get_app_states(conn).items()
-    }
+def log_activity(
+    activity_type: str,
+    title: str,
+    description: str = "",
+    metadata: Optional[dict[str, Any]] = None,
+) -> None:
+    """Record an activity entry. Never raises: activity logging must not break callers."""
+    try:
+        conn = get_connection()
+        try:
+            conn.execute(
+                "INSERT INTO activity_log (type, title, description, metadata, timestamp) VALUES (?, ?, ?, ?, ?)",
+                (
+                    activity_type,
+                    title[:200],
+                    description[:1000],
+                    json.dumps(metadata or {}, default=str),
+                    datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        logger.exception("Failed to record activity %s", activity_type)
 
 
 def init_db() -> None:
@@ -60,25 +59,6 @@ def init_db() -> None:
     try:
         conn.executescript(
             """
-            CREATE TABLE IF NOT EXISTS apps (
-                app_id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                description TEXT,
-                category TEXT,
-                icon TEXT,
-                enabled INTEGER DEFAULT 1,
-                capabilities TEXT DEFAULT '[]',
-                created_at TEXT DEFAULT (datetime('now'))
-            );
-            CREATE TABLE IF NOT EXISTS connections (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                app_id TEXT NOT NULL,
-                connected INTEGER DEFAULT 0,
-                config TEXT DEFAULT '{}',
-                connected_at TEXT,
-                disconnected_at TEXT,
-                FOREIGN KEY (app_id) REFERENCES apps(app_id) ON DELETE CASCADE
-            );
             CREATE TABLE IF NOT EXISTS workflows (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
@@ -89,12 +69,56 @@ def init_db() -> None:
                 last_run TEXT,
                 created_at TEXT DEFAULT (datetime('now'))
             );
-            CREATE TABLE IF NOT EXISTS tool_registry (
-                tool_name TEXT PRIMARY KEY,
-                app_id TEXT NOT NULL,
-                description TEXT,
+            CREATE TABLE IF NOT EXISTS workflow_runs (
+                id TEXT PRIMARY KEY,
+                workflow_id INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                completed_at TEXT,
+                input_data TEXT DEFAULT '{}',
+                output TEXT DEFAULT '{}',
+                error TEXT,
+                events TEXT DEFAULT '[]',
+                trace TEXT DEFAULT '[]',
+                FOREIGN KEY (workflow_id) REFERENCES workflows(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS workflow_run_steps (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL,
+                workflow_id INTEGER NOT NULL,
+                node_id TEXT NOT NULL,
+                node_name TEXT NOT NULL,
+                node_type TEXT NOT NULL,
+                tool_name TEXT,
+                status TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                completed_at TEXT,
+                input_data TEXT DEFAULT '{}',
+                output_data TEXT DEFAULT '{}',
+                error TEXT,
+                FOREIGN KEY (run_id) REFERENCES workflow_runs(id) ON DELETE CASCADE,
+                FOREIGN KEY (workflow_id) REFERENCES workflows(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS schedules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                workflow_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                cron_expression TEXT NOT NULL,
+                timezone TEXT DEFAULT 'UTC',
                 enabled INTEGER DEFAULT 1,
-                FOREIGN KEY (app_id) REFERENCES apps(app_id) ON DELETE CASCADE
+                last_run_at TEXT,
+                next_run_at TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (workflow_id) REFERENCES workflows(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS webhook_endpoints (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                workflow_id INTEGER NOT NULL,
+                path TEXT NOT NULL UNIQUE,
+                event_type TEXT NOT NULL,
+                enabled INTEGER DEFAULT 1,
+                created_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (workflow_id) REFERENCES workflows(id) ON DELETE CASCADE
             );
             CREATE TABLE IF NOT EXISTS llm_providers (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -105,6 +129,36 @@ def init_db() -> None:
                 enabled INTEGER DEFAULT 1,
                 created_at TEXT DEFAULT (datetime('now')),
                 updated_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE IF NOT EXISTS agent_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL UNIQUE,
+                title TEXT,
+                messages TEXT DEFAULT '[]',
+                metadata TEXT DEFAULT '{}',
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE IF NOT EXISTS user_settings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                settings TEXT DEFAULT '{}',
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE IF NOT EXISTS api_settings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                settings TEXT DEFAULT '{}',
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE IF NOT EXISTS activity_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                description TEXT,
+                metadata TEXT DEFAULT '{}',
+                timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+                user_id TEXT DEFAULT 'user'
             );
             """
         )
@@ -118,10 +172,101 @@ def init_db() -> None:
             "is_active": "ALTER TABLE workflows ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1",
             "updated_at": "ALTER TABLE workflows ADD COLUMN updated_at TEXT",
             "created_by": "ALTER TABLE workflows ADD COLUMN created_by TEXT",
+            "schedule": "ALTER TABLE workflows ADD COLUMN schedule TEXT DEFAULT '{}'",
+            "webhook": "ALTER TABLE workflows ADD COLUMN webhook TEXT DEFAULT '{}'",
+            "llm_provider_id": "ALTER TABLE workflows ADD COLUMN llm_provider_id INTEGER",
         }
         for column, statement in migrations.items():
             if column not in workflow_columns:
                 conn.execute(statement)
+        schedule_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(schedules)").fetchall()
+        }
+        schedule_migrations = {
+            "input_data": "ALTER TABLE schedules ADD COLUMN input_data TEXT DEFAULT '{}'",
+        }
+        for column, statement in schedule_migrations.items():
+            if column not in schedule_columns:
+                conn.execute(statement)
+        webhook_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(webhook_endpoints)").fetchall()
+        }
+        webhook_migrations = {
+            "input_data": "ALTER TABLE webhook_endpoints ADD COLUMN input_data TEXT DEFAULT '{}'",
+            "secret": "ALTER TABLE webhook_endpoints ADD COLUMN secret TEXT DEFAULT ''",
+        }
+        for column, statement in webhook_migrations.items():
+            if column in webhook_columns:
+                continue
+            try:
+                conn.execute(statement)
+            except Exception:
+                pass
+        agent_session_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(agent_sessions)").fetchall()
+        }
+        agent_session_migrations = {
+            "title": "ALTER TABLE agent_sessions ADD COLUMN title TEXT",
+        }
+        for column, statement in agent_session_migrations.items():
+            if column not in agent_session_columns:
+                try:
+                    conn.execute(statement)
+                except Exception:
+                    pass
+        from app.mcp.store import init_table as init_mcp_table
+
+        init_mcp_table(conn)
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS trigger_state (
+                workflow_id INTEGER PRIMARY KEY,
+                seen TEXT DEFAULT '[]',
+                baseline_done INTEGER DEFAULT 0,
+                last_checked_at TEXT,
+                last_error TEXT,
+                FOREIGN KEY (workflow_id) REFERENCES workflows(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_runs_workflow ON workflow_runs(workflow_id, started_at);
+            CREATE INDEX IF NOT EXISTS idx_activity_ts ON activity_log(timestamp);
+            """
+        )
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.commit()
+    finally:
+        conn.close()
+
+
+def migrate_llm_api_keys() -> None:
+    """Encrypt any plaintext LLM API keys already stored in the database.
+
+    Idempotent: values already prefixed with ``fernet-llm:`` are left alone.
+    Requires ``NEXUS_SECRET_KEY`` to be set; skips silently if it is missing so
+    that the app still starts in degraded mode rather than crashing.
+    """
+    import os
+
+    if not os.getenv("NEXUS_SECRET_KEY"):
+        return
+    from app.core.secrets import encrypt_api_key, LLM_KEY_PREFIX
+
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT id, api_key FROM llm_providers WHERE api_key IS NOT NULL AND api_key != ''"
+        ).fetchall()
+        for row in rows:
+            api_key = row["api_key"]
+            if not api_key or api_key.startswith(LLM_KEY_PREFIX):
+                continue
+            encrypted = encrypt_api_key(api_key)
+            if encrypted and encrypted != api_key:
+                conn.execute(
+                    "UPDATE llm_providers SET api_key = ?, updated_at = datetime('now') WHERE id = ?",
+                    (encrypted, row["id"]),
+                )
+        conn.commit()
+    except Exception:
+        conn.rollback()
     finally:
         conn.close()

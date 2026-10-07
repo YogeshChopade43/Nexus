@@ -51,7 +51,10 @@ export function ExecutionTrace({ trace, autoScroll = true }: ExecutionTraceProps
     }
   };
 
-  const getStatusBadge = (type: ExecutionTraceEntry['type']) => {
+  const getStatusBadge = (type: ExecutionTraceEntry['type'], status?: string) => {
+    if (status === 'success') return <Badge variant="success" size="sm">Completed</Badge>;
+    if (status === 'failed') return <Badge variant="danger" size="sm">Failed</Badge>;
+    if (status === 'skipped') return <Badge variant="warning" size="sm">Skipped</Badge>;
     switch (type) {
       case 'start':
         return <Badge variant="info" size="sm">Running</Badge>;
@@ -109,7 +112,7 @@ export function ExecutionTrace({ trace, autoScroll = true }: ExecutionTraceProps
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
                       <span className="font-mono text-sm text-nexus-text">{entry.nodeName || entry.nodeId || 'Unknown'}</span>
-                      {getStatusBadge(entry.type)}
+                      {getStatusBadge(entry.type, entry.status)}
                       {entry.duration !== undefined && entry.duration !== null && (
                         <span className="text-xs text-nexus-text-muted ml-auto">
                           {entry.duration}ms
@@ -119,6 +122,7 @@ export function ExecutionTrace({ trace, autoScroll = true }: ExecutionTraceProps
                     <time className="text-xs text-nexus-text-muted">
                       {formatRelativeTime(entry.timestamp)}
                     </time>
+                    {entry.reason && <span className="text-xs text-nexus-text-muted"> · {entry.reason}</span>}
                   </div>
                 </div>
 

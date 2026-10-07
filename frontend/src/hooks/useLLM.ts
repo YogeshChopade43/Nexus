@@ -1,5 +1,6 @@
-import { useState, useCallback, useEffect } from "react";
+import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { llmService } from "../services/llm";
+import { getErrorMessage } from "../lib/utils";
 import type {
   LLMProviderConfig,
   LLMProviderInfo,
@@ -12,7 +13,7 @@ interface UseLLMReturn {
   configs: LLMProviderConfig[];
   providerInfo: LLMProviderInfo[];
   loading: boolean;
-    error: Error | null;
+  error: Error | null;
   createConfig: (data: LLMProviderFormData) => Promise<LLMProviderConfig | null>;
   updateConfig: (id: number, data: Partial<LLMProviderFormData>) => Promise<boolean>;
   deleteConfig: (id: number) => Promise<boolean>;
@@ -21,32 +22,48 @@ interface UseLLMReturn {
   testChat: (providerId: number, message: string) => Promise<{ content: string | null; error: string | null }>;
 }
 
-export function useLLM(): UseLLMReturn {
-  const [configs, setConfigs] = useState<LLMProviderConfig[]>([]);
-  const [providerInfo, setProviderInfo] = useState<LLMProviderInfo[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
+interface LLMState {
+  configs: LLMProviderConfig[];
+  providerInfo: LLMProviderInfo[];
+  loading: boolean;
+  error: Error | null;
+}
 
-  const refreshConfigs = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const [cfgs, infos] = await Promise.all([
-        llmService.listConfigs(),
-        llmService.listProviders(),
-      ]);
-      setConfigs(cfgs);
-      setProviderInfo(infos);
-    } catch (err) {
-      setError(new Error(err instanceof Error ? err.message : String(err)));
-    } finally {
-      setLoading(false);
-    }
-      }, []);
+// One shared store: the chat panel, settings and workflow editor must agree on which
+// providers exist, or a provider deleted in Settings stays selected in the chat.
+let state: LLMState = { configs: [], providerInfo: [], loading: false, error: null };
+let loaded = false;
+const listeners = new Set<() => void>();
+
+function setState(patch: Partial<LLMState>) {
+  state = { ...state, ...patch };
+  listeners.forEach(listener => listener());
+}
+
+function subscribe(listener: () => void) {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+async function refreshShared(): Promise<void> {
+  loaded = true;
+  setState({ loading: true, error: null });
+  try {
+    const [configs, providerInfo] = await Promise.all([llmService.listConfigs(), llmService.listProviders()]);
+    setState({ configs, providerInfo, loading: false });
+  } catch (err) {
+    setState({ loading: false, error: new Error(getErrorMessage(err)) });
+  }
+}
+
+export function useLLM(): UseLLMReturn {
+  const { configs, providerInfo, loading, error } = useSyncExternalStore(subscribe, () => state);
+  const setError = useCallback((err: Error) => setState({ error: err }), []);
+  const refreshConfigs = useCallback(() => refreshShared(), []);
 
   useEffect(() => {
-    refreshConfigs();
-  }, [refreshConfigs]);
+    if (!loaded) void refreshShared();
+  }, []);
 
   const createConfig = useCallback(
     async (data: LLMProviderFormData): Promise<LLMProviderConfig | null> => {
@@ -55,7 +72,7 @@ export function useLLM(): UseLLMReturn {
         await refreshConfigs();
         return config;
       } catch (err) {
-        setError(new Error(err instanceof Error ? err.message : String(err)));
+        setError(new Error(getErrorMessage(err)));
         return null;
       }
     },
@@ -69,7 +86,7 @@ export function useLLM(): UseLLMReturn {
         await refreshConfigs();
         return true;
       } catch (err) {
-        setError(new Error(err instanceof Error ? err.message : String(err)));
+        setError(new Error(getErrorMessage(err)));
         return false;
       }
     },
@@ -83,7 +100,7 @@ export function useLLM(): UseLLMReturn {
         await refreshConfigs();
         return true;
       } catch (err) {
-        setError(new Error(err instanceof Error ? err.message : String(err)));
+        setError(new Error(getErrorMessage(err)));
         return false;
       }
     },
@@ -94,7 +111,7 @@ export function useLLM(): UseLLMReturn {
     try {
       return await llmService.chat(req);
     } catch (err) {
-      setError(new Error(err instanceof Error ? err.message : String(err)));
+      setError(new Error(getErrorMessage(err)));
       return null;
     }
   }, []);
@@ -102,21 +119,13 @@ export function useLLM(): UseLLMReturn {
   const testChat = useCallback(
     async (providerId: number, message: string): Promise<{ content: string | null; error: string | null }> => {
       try {
-        const config = await llmService.getConfig(providerId);
-        if (!config) return { content: null, error: "Provider config not found" };
         const result = await llmService.chat({
           messages: [{ role: "user", content: message }],
-          model: config.model,
-          provider_name: config.provider_name,
+          provider_id: providerId,
         });
         return { content: result?.content ?? null, error: null };
       } catch (err) {
-        const errorMsg = err instanceof Error
-          ? err.message
-          : err && typeof err === 'object' && 'message' in err
-            ? (err as Record<string, unknown>).message as string
-            : String(err);
-        return { content: null, error: errorMsg };
+        return { content: null, error: getErrorMessage(err) };
       }
     },
     []

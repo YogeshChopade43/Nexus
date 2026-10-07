@@ -30,3 +30,12 @@ pnpm-debug.log*
 .vscode/
 *.swp
 *.swo
+plans/
+.kilo/
+# Auto-generated development encryption key
+.nexus_secret_key
+*.db-wal
+*.db-shm
+backend/server_log.txt
+.playwright-mcp/
+.superpowers/

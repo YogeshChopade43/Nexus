@@ -40,6 +40,7 @@ class LLMResponse(BaseModel):
 class ChatRequest(BaseModel):
     messages: list[dict[str, str]]
     model: Optional[str] = None
+    provider_id: Optional[int] = None
     provider_name: Optional[str] = None
     temperature: Optional[float] = None
     max_tokens: Optional[int] = None

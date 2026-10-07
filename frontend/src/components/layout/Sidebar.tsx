@@ -3,7 +3,7 @@ import { cn } from '../../lib/utils';
 import {
   Bot,
   GitBranch,
-  Box,
+  Server,
   Activity,
   Settings,
   ChevronLeft,
@@ -22,7 +22,7 @@ export function Sidebar({ collapsed = false, onToggleCollapse }: SidebarProps) {
   const navigation = [
     { path: '/', label: 'Agent', icon: Bot, exact: true },
     { path: '/workflows', label: 'Workflows', icon: GitBranch },
-    { path: '/apps', label: 'Apps', icon: Box },
+    { path: '/servers', label: 'MCP Servers', icon: Server },
     { path: '/activity', label: 'Activity', icon: Activity },
     { path: '/settings', label: 'Settings', icon: Settings },
   ];

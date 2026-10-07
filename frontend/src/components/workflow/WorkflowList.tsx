@@ -78,10 +78,15 @@ export function WorkflowList({
                   )}
                 >
                   <div className="flex items-start justify-between gap-3">
-                    <div className="flex-1 min-w-0">
+                    <div className="flex-1 min-w-0 pr-24">
                       <div className="flex items-center gap-2 mb-1">
                         <span className="font-medium text-nexus-text truncate">{workflow.name}</span>
                         {workflow.isActive && <Badge variant="accent" size="sm">Active</Badge>}
+                        {workflow.last_status && (
+                          <Badge variant={workflow.last_status === 'completed' ? 'success' : workflow.last_status === 'failed' ? 'danger' : 'warning'} size="sm">
+                            {workflow.last_status}
+                          </Badge>
+                        )}
                       </div>
                       <p className="text-sm text-nexus-text-secondary truncate">{workflow.description}</p>
                       <div className="flex items-center gap-3 mt-2 text-xs text-nexus-text-muted">
@@ -92,7 +97,11 @@ export function WorkflowList({
                     </div>
                   </div>
                 </div>
-                <div className="absolute right-2 top-1/2 -translate-y-1/2">
+                <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                  <Button variant="primary" size="sm" aria-label={`Run ${workflow.name}`} className="gap-1"
+                    onClick={(e) => { e.stopPropagation(); onExecute(workflow); }}>
+                    <Play className="w-3.5 h-3.5" /> Run
+                  </Button>
                   <Dropdown trigger={<MoreVertical className="w-5 h-5 text-nexus-text-muted" />} items={menuItems(workflow)} />
                 </div>
               </div>

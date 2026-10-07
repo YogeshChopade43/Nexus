@@ -5,6 +5,19 @@ const envBaseUrl =
     (import.meta.env?.VITE_API_URL || import.meta.env?.VITE_API_BASE_URL)) ||
   DEFAULT_BASE_URL;
 
+/** FastAPI returns `detail` as a string, or a list of {msg} objects for validation errors. */
+function errorMessage(data: { message?: string; detail?: unknown }, fallback: string): string {
+  if (data.message) return data.message;
+  if (typeof data.detail === 'string') return data.detail;
+  if (Array.isArray(data.detail)) {
+    return data.detail
+      .map((d: { msg?: string }) => (d.msg ?? '').replace(/^Value error, /, ''))
+      .filter(Boolean)
+      .join('; ') || fallback;
+  }
+  return fallback;
+}
+
 class ApiService {
   private baseUrl: string;
   private defaultHeaders: HeadersInit;
@@ -18,6 +31,10 @@ class ApiService {
 
   setBaseUrl(url: string) {
     this.baseUrl = url;
+  }
+
+  getBaseUrl(): string {
+    return this.baseUrl;
   }
 
   private async request<T>(
@@ -37,7 +54,7 @@ class ApiService {
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      const message = errorData.message || errorData.detail || response.statusText;
+      const message = errorMessage(errorData, response.statusText);
       throw {
         code: `HTTP_${response.status}`,
         message,
@@ -100,7 +117,7 @@ class ApiService {
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      const message = errorData.message || errorData.detail || response.statusText;
+      const message = errorMessage(errorData, response.statusText);
       throw {
         code: `HTTP_${response.status}`,
         message,
@@ -115,15 +132,18 @@ class ApiService {
       throw new Error('Response body is not readable');
     }
 
+    let buffer = '';
     try {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split('\n').filter((line) => line.trim());
+        // SSE lines can be split across network chunks; keep the partial tail for the next read.
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
 
-        for (const line of lines) {
+        for (const line of lines.filter((l) => l.trim())) {
           if (line.startsWith('data: ')) {
             const jsonStr = line.slice(6);
             if (jsonStr === '[DONE]') {

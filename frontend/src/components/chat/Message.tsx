@@ -1,8 +1,89 @@
 import { cn, formatRelativeTime } from '../../lib/utils';
-import { Copy } from 'lucide-react';
+import { Copy, Bot, AlertCircle, CheckCircle2, Info } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Tooltip } from '../ui/Tooltip';
-import type { ChatMessage } from '../../types/chat';
+import type { ChatMessage, AgentEvent } from '../../types/chat';
+import type { ReactNode } from 'react';
+
+const EVENT_ICONS: Record<string, React.ElementType> = {
+  tool_executed: CheckCircle2,
+  tool_error: AlertCircle,
+  app_unavailable: Info,
+  intent_no_match: Bot,
+  llm_error: AlertCircle,
+};
+
+const EVENT_COLORS: Record<string, string> = {
+  tool_executed: 'text-green-400',
+  tool_error: 'text-red-400',
+  app_unavailable: 'text-amber-400',
+  intent_no_match: 'text-nexus-text-muted',
+  llm_error: 'text-red-400',
+};
+
+function renderEvent(event: AgentEvent): ReactNode {
+  const Icon = EVENT_ICONS[event.type] || Bot;
+  const colorClass = EVENT_COLORS[event.type] || 'text-nexus-text-muted';
+  const toolName = String(event.tool_name ?? event.type);
+  const appId = String(event.app_id ?? '');
+  const error = String(event.error ?? '');
+  const reason = String(event.reason ?? '');
+  const hasData = !!event.data && typeof event.data === 'object';
+  const summary = String(event.summary ?? '');
+
+  switch (event.type) {
+    case 'tool_executed':
+      return (
+        <div className="flex items-start gap-2.5">
+          <Icon className={`w-4 h-4 mt-0.5 ${colorClass}`} />
+          <div className="flex-1 min-w-0">
+            <span className="font-medium text-nexus-text">{toolName}</span>
+            {appId && <span className="text-xs text-nexus-text-muted"> ({appId})</span>}
+            {summary && (
+              <p className="text-sm text-nexus-text-secondary mt-0.5">{summary}</p>
+            )}
+            {!summary && hasData && Object.keys(event.data as Record<string, unknown>).length > 0 && (
+              <pre className="mt-1 text-xs text-nexus-text-secondary bg-nexus-bg-tertiary/30 rounded p-1.5 overflow-x-auto">
+                {JSON.stringify(event.data, null, 2)}
+              </pre>
+            )}
+          </div>
+        </div>
+      );
+    case 'tool_error':
+      return (
+        <div className="flex items-start gap-2.5">
+          <Icon className={`w-4 h-4 mt-0.5 ${colorClass}`} />
+          <div className="flex-1">
+            <span className="font-medium text-nexus-text">{toolName}</span>
+            {error && <span className="text-sm text-nexus-text-secondary ml-2">— {error}</span>}
+          </div>
+        </div>
+      );
+    case 'app_unavailable':
+      return (
+        <div className="flex items-start gap-2.5">
+          <Icon className={`w-4 h-4 mt-0.5 ${colorClass}`} />
+          <div className="flex-1">
+            <span className="font-medium text-nexus-text capitalize">{appId || 'App'}</span>
+            <span className="text-sm text-nexus-text-secondary ml-2">— {reason || 'not available'}</span>
+          </div>
+        </div>
+      );
+    case 'llm_error':
+      return (
+        <div className="flex items-start gap-2.5">
+          <Icon className={`w-4 h-4 mt-0.5 ${colorClass}`} />
+          <div className="flex-1">
+            <span className="font-medium text-nexus-text">LLM request failed</span>
+            {error && <span className="text-sm text-nexus-text-secondary">— {error}</span>}
+          </div>
+        </div>
+      );
+    default:
+      return null;
+  }
+}
 
 interface MessageProps {
   message: ChatMessage;
@@ -11,6 +92,7 @@ interface MessageProps {
 
 export function Message({ message, onCopy }: MessageProps) {
   const isUser = message.role === 'user';
+  const visibleEvents = (message.events ?? []).filter(e => e.type !== 'intent_no_match');
 
   return (
     <div
@@ -67,6 +149,16 @@ export function Message({ message, onCopy }: MessageProps) {
             </Tooltip>
           )}
         </div>
+        {/* Agent events */}
+        {!isUser && visibleEvents.length > 0 && (
+          <div className="mt-2 space-y-1.5 pl-1">
+            {visibleEvents.map((event, idx) => (
+              <div key={idx} className="flex items-start gap-2 text-xs">
+                {renderEvent(event)}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {isUser && (

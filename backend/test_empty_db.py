@@ -5,6 +5,8 @@ import os
 
 # Use isolated database for testing
 os.environ["DATABASE_PATH"] = os.path.join(tempfile.gettempdir(), "nexus_test_empty.db")
+os.environ["NEXUS_SKIP_VALIDATION"] = "true"
+os.environ["NEXUS_SECRET_KEY"] = "test-secret-key-for-tests"
 
 sys.path.insert(0, "D:\\Tech\\Nexus\\backend")
 from fastapi.testclient import TestClient

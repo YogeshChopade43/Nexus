@@ -1,15 +1,85 @@
 export type WorkflowId = number | string;
 
+export type WorkflowNodeType = 'trigger' | 'action' | 'llm' | 'condition' | 'transform' | 'delay' | 'output';
+
 export interface WorkflowNode {
   id: string;
-  type: 'trigger' | 'action' | 'condition' | 'transform' | 'output';
+  type: WorkflowNodeType;
   name: string;
-  description: string;
-  position: { x: number; y: number };
+  description?: string;
+  position?: { x: number; y: number };
   config: Record<string, unknown>;
-  inputs: NodePort[];
-  outputs: NodePort[];
+  inputs?: NodePort[];
+  outputs?: NodePort[];
   app_id?: string;
+}
+
+export type TriggerType = 'manual' | 'recurrence' | 'poll' | 'schedule' | 'webhook' | 'app_event';
+export type Frequency = 'minute' | 'hour' | 'day' | 'week' | 'month';
+export type Weekday = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun';
+
+export interface ManualInput {
+  name: string;
+  type: 'text' | 'number' | 'boolean';
+  required: boolean;
+  default?: string | number | boolean | null;
+}
+
+export interface RecurrenceSettings {
+  frequency: Frequency;
+  interval: number;
+  at: string;
+  weekdays: Weekday[];
+  month_day: number | null;
+  timezone: string;
+}
+
+export interface TriggerConfig {
+  type: TriggerType;
+  schedule?: string | null;
+  timezone?: string;
+  app_id?: string | null;
+  event?: string | null;
+  webhook_path?: string;
+  next_run_at?: string | null;
+  inputs?: ManualInput[];
+  frequency?: Frequency | null;
+  interval?: number;
+  at?: string;
+  weekdays?: Weekday[];
+  month_day?: number | null;
+  tool?: string | null;
+  parameters?: Record<string, unknown>;
+  interval_minutes?: number;
+  items_path?: string;
+  id_field?: string;
+}
+
+export interface TriggerStatus {
+  last_checked_at: string | null;
+  last_error: string | null;
+}
+
+export interface TriggerTypeInfo {
+  id: string;
+  label: string;
+  app_id: string | null;
+  events: string[];
+  description: string;
+}
+
+export interface ToolParameterSchema {
+  type: 'object';
+  properties: Record<string, { type?: string; description?: string }>;
+  required?: string[];
+}
+
+export interface ToolDefinition {
+  tool_name: string;
+  app_id: string;
+  description: string;
+  available: boolean;
+  parameters: ToolParameterSchema;
 }
 
 export interface NodePort {
@@ -23,9 +93,9 @@ export interface NodePort {
 export interface WorkflowEdge {
   id: string;
   source: string;
-  sourceHandle: string;
+  sourceHandle?: string;
   target: string;
-  targetHandle: string;
+  targetHandle?: string;
   type?: 'default' | 'conditional';
   condition?: string;
 }
@@ -34,10 +104,19 @@ export interface Workflow {
   id: WorkflowId;
   name: string;
   description: string;
+  steps: Record<string, unknown>[];
   nodes: WorkflowNode[];
   edges: WorkflowEdge[];
   version: number;
   isActive: boolean;
+  enabled: boolean;
+  trigger: string;
+  trigger_config?: TriggerConfig;
+  trigger_status?: TriggerStatus | null;
+  last_status?: ExecutionStatus | null;
+  llm_provider_id?: number | null;
+  warnings?: string[];
+  last_run?: string | null;
   createdAt?: string;
   updatedAt?: string;
   createdBy?: string;
@@ -49,7 +128,9 @@ export interface ExecutionTraceEntry {
   id: string;
   nodeId: string;
   nodeName: string;
-  type: 'start' | 'complete' | 'error' | 'conditional' | 'tool_executed';
+  type: string;
+  reason?: string;
+  attempts?: number;
   timestamp: string;
   input?: Record<string, unknown>;
   output?: Record<string, unknown>;
@@ -93,6 +174,8 @@ export interface WorkflowRunsResponse {
 export interface WorkflowTraceResponse {
   workflow_id: WorkflowId;
   workflowId: WorkflowId;
+  run_id?: string | null;
+  status?: ExecutionStatus | null;
   steps: ExecutionTraceEntry[];
   last_run?: string;
 }
@@ -102,7 +185,11 @@ export interface WorkflowCreateRequest {
   description: string;
   nodes: WorkflowNode[];
   edges: WorkflowEdge[];
+  steps?: Record<string, unknown>[];
   isActive?: boolean;
+  enabled?: boolean;
+  trigger?: string;
+  llm_provider_id?: number | null;
 }
 
 export interface WorkflowUpdateRequest {
@@ -111,7 +198,11 @@ export interface WorkflowUpdateRequest {
   description?: string;
   nodes?: WorkflowNode[];
   edges?: WorkflowEdge[];
+  steps?: Record<string, unknown>[];
   isActive?: boolean;
+  enabled?: boolean;
+  trigger?: string;
+  llm_provider_id?: number | null;
 }
 
 export interface WorkflowRunRequest {

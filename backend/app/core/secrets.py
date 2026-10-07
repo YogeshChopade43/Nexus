@@ -45,7 +45,10 @@ def decrypt_config(value: str) -> dict[str, Any]:
     try:
         payload = _fernet().decrypt(value[len("fernet:"):])
     except InvalidToken as exc:
-        raise ValueError("Connector configuration could not be decrypted") from exc
+        raise ValueError(
+            "This secret was saved with a different NEXUS_SECRET_KEY. Restore the original key, "
+            "or re-enter the secret in Nexus."
+        ) from exc
     parsed = json.loads(payload.decode("utf-8"))
     return parsed if isinstance(parsed, dict) else {}
 
@@ -62,3 +65,46 @@ def redact_config(config: dict[str, Any]) -> dict[str, Any]:
         return value
 
     return redact(config)
+
+
+LLM_KEY_PREFIX = "fernet-llm:"
+
+
+def encrypt_api_key(value: str | None) -> str | None:
+    """Encrypt a plaintext LLM API key for at-rest storage.
+
+    Returns ``None`` for ``None``, an empty string for an empty value, and an
+    already-encrypted value unchanged (idempotent). Raises ``ValueError`` when
+    ``NEXUS_SECRET_KEY`` is not configured.
+    """
+    if value is None:
+        return None
+    if not value:
+        return ""
+    if value.startswith(LLM_KEY_PREFIX):
+        return value
+    payload = value.encode("utf-8")
+    return LLM_KEY_PREFIX + _fernet().encrypt(payload).decode("ascii")
+
+
+def decrypt_api_key(value: str | None) -> str | None:
+    """Reverse :func:`encrypt_api_key`.
+
+    Legacy plaintext values (written before this fix) are returned unchanged so
+    existing databases keep working during the migration window. Raises
+    ``ValueError`` when the value is encrypted but cannot be decrypted.
+    """
+    if value is None:
+        return None
+    if not value:
+        return ""
+    if not value.startswith(LLM_KEY_PREFIX):
+        return value
+    try:
+        payload = _fernet().decrypt(value[len(LLM_KEY_PREFIX):])
+    except InvalidToken as exc:
+        raise ValueError(
+            "This LLM API key was saved with a different NEXUS_SECRET_KEY. Restore the original key, "
+            "or delete this provider in Settings > AI and add it again with your API key."
+        ) from exc
+    return payload.decode("utf-8")

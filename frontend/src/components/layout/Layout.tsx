@@ -29,13 +29,12 @@ export function Layout({ sidebarCollapsed = false, onSidebarToggle, children }: 
           onMenuClick={() => setMobileSidebarOpen(!mobileSidebarOpen)}
           title={null}
         />
-        <main
-          className={cn(
-            'pt-16 min-h-screen transition-all duration-300',
-            sidebarCollapsed ? 'lg:ml-16' : 'lg:ml-64'
-          )}
-          role="main"
-        >
+         <main
+           className={cn(
+             'pt-16 min-h-screen',
+           )}
+           role="main"
+         >
           <div className="p-4 lg:p-6">
             {children}
           </div>

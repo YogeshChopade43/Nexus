@@ -1,3 +1,4 @@
+import { getErrorMessage } from '../lib/utils';
 import { useState, useCallback, useEffect } from 'react';
 import { workflowService } from '../services/workflow';
 import type {
@@ -31,14 +32,6 @@ interface UseWorkflowsReturn {
   selectWorkflow: (workflow: Workflow | null) => void;
   executeWorkflow: (id: WorkflowId, input?: Record<string, unknown>) => Promise<WorkflowExecution>;
   clearExecutions: () => void;
-}
-
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === 'object' && error !== null && 'message' in error) {
-    return String((error as { message: unknown }).message);
-  }
-  return 'Unknown error';
 }
 
 export function useWorkflows(): UseWorkflowsReturn {

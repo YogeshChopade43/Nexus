@@ -20,6 +20,8 @@ class WorkflowCreate(BaseModel):
     enabled: bool = True
     isActive: Optional[bool] = None
     trigger: str = "manual"
+    trigger_config: Optional[Dict[str, Any]] = None
+    llm_provider_id: Optional[int] = None
 
 
 class WorkflowUpdate(BaseModel):
@@ -31,6 +33,8 @@ class WorkflowUpdate(BaseModel):
     enabled: Optional[bool] = None
     isActive: Optional[bool] = None
     trigger: Optional[str] = None
+    trigger_config: Optional[Dict[str, Any]] = None
+    llm_provider_id: Optional[int] = None
 
 
 class WorkflowResponse(BaseModel):
@@ -50,11 +54,21 @@ class WorkflowResponse(BaseModel):
     enabled: bool = True
     isActive: bool = True
     trigger: str = "manual"
+    trigger_config: Dict[str, Any] = Field(default_factory=dict)
+    llm_provider_id: Optional[int] = None
     last_run: Optional[str] = None
+    warnings: List[str] = Field(default_factory=list)
+    trigger_status: Optional[Dict[str, Any]] = None
+    last_status: Optional[str] = None
 
 
 class WorkflowRunRequest(BaseModel):
     input_data: Dict[str, Any] = Field(default_factory=dict)
+    input: Optional[Dict[str, Any]] = None
+
+    def model_post_init(self, __context: Any) -> None:
+        if self.input and not self.input_data:
+            self.input_data = self.input
 
 
 class WorkflowRunResult(BaseModel):
@@ -72,3 +86,4 @@ class WorkflowRunResult(BaseModel):
     error: Optional[str] = None
     events: List[Dict[str, Any]] = Field(default_factory=list)
     trace: List[Dict[str, Any]] = Field(default_factory=list)
+    duration_ms: Optional[int] = None

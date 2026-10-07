@@ -5,6 +5,9 @@ export interface ChatMessage {
   role: MessageRole;
   content: string;
   timestamp: string;
+  events?: AgentEvent[];
+  summary?: string;
+  status?: string;
 }
 
 export interface AgentRunRequest {
@@ -13,6 +16,24 @@ export interface AgentRunRequest {
   context?: Record<string, unknown>;
   available_tools?: string[];
   llm_provider_id?: number;
+  session_id?: string;
+}
+
+export interface StoredMessage {
+  role: MessageRole;
+  content: string;
+  events?: AgentEvent[];
+  status?: string;
+  summary?: string;
+}
+
+export interface AgentSession {
+  id: number;
+  session_id: string;
+  title: string;
+  messages: StoredMessage[];
+  created_at: string;
+  updated_at: string;
 }
 
 export interface AgentEvent {

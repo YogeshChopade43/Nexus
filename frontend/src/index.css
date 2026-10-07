@@ -4,21 +4,41 @@
 
 @layer base {
   :root {
-    --color-bg: #0a0e17;
-    --color-bg-secondary: #111827;
-    --color-bg-tertiary: #1f2937;
-    --color-border: #2d3748;
-    --color-border-hover: #374151;
-    --color-text: #f3f4f6;
-    --color-text-secondary: #9ca3af;
-    --color-text-muted: #6b7280;
-    --color-accent: #00d4aa;
-    --color-accent-hover: #00b894;
-    --color-accent-dim: rgba(0, 212, 170, 0.12);
-    --color-danger: #ef4444;
-    --color-warning: #f59e0b;
-    --color-info: #3b82f6;
+    --nexus-bg: 10 14 23;
+    --nexus-bg-secondary: 17 24 39;
+    --nexus-bg-tertiary: 31 41 55;
+    --nexus-border: 45 55 72;
+    --nexus-border-hover: 55 65 81;
+    --nexus-text: 243 244 246;
+    --nexus-text-secondary: 156 163 175;
+    --nexus-text-muted: 107 114 128;
+    --nexus-accent: 0 212 170;
+    --nexus-accent-hover: 0 184 148;
+    --nexus-danger: 239 68 68;
+    --nexus-danger-hover: 220 38 38;
+    --nexus-warning: 245 158 11;
+    --nexus-info: 59 130 246;
+    color-scheme: dark;
   }
+
+  html.light {
+    --nexus-bg: 248 250 252;
+    --nexus-bg-secondary: 255 255 255;
+    --nexus-bg-tertiary: 241 245 249;
+    --nexus-border: 226 232 240;
+    --nexus-border-hover: 203 213 225;
+    --nexus-text: 15 23 42;
+    --nexus-text-secondary: 71 85 105;
+    --nexus-text-muted: 100 116 139;
+    --nexus-accent: 0 150 120;
+    --nexus-accent-hover: 0 128 102;
+    --nexus-danger: 220 38 38;
+    --nexus-danger-hover: 185 28 28;
+    --nexus-warning: 217 119 6;
+    --nexus-info: 37 99 235;
+    color-scheme: light;
+  }
+
 
   * {
     @apply border-nexus-border;
@@ -152,6 +172,48 @@
 
   .animate-in {
     animation: fadeIn 0.2s ease-out;
+  }
+
+  .animate-slide-up {
+    animation: slideUp 0.3s ease-out;
+  }
+
+  @keyframes slideUp {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .thinking-dots {
+    display: inline-flex;
+  }
+
+  .thinking-dots span {
+    animation: bounce 1.4s ease-in-out infinite both;
+  }
+
+  .thinking-dots span:nth-child(1) {
+    animation-delay: -0.32s;
+  }
+
+  .thinking-dots span:nth-child(2) {
+    animation-delay: -0.16s;
+  }
+
+  @keyframes bounce {
+    0%, 80%, 100% {
+      transform: scale(0);
+      opacity: 0.5;
+    }
+    40% {
+      transform: scale(1);
+      opacity: 1;
+    }
   }
 
   .glass {

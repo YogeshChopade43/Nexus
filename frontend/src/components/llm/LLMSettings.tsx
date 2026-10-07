@@ -33,6 +33,7 @@ export function LLMSettings({
   providerInfo,
   loading,
   onCreate,
+  onUpdate,
   onDelete,
   testChat,
 }: LLMSettingsProps) {
@@ -52,7 +53,7 @@ export function LLMSettings({
   const handleCreate = useCallback(async () => {
     if (!selectedProvider) return null;
     const data: LLMProviderFormData = {
-      provider_name: selectedProvider as any,
+      provider_name: selectedProvider as LLMProviderFormData["provider_name"],
       model: formModel,
       api_key: formApiKey || undefined,
       base_url: formBaseUrl || undefined,
@@ -126,19 +127,20 @@ export function LLMSettings({
 
               <div>
                 <label className="block text-sm font-medium text-nexus-text mb-2">Model</label>
-                <select
+                {/* Free text with suggestions: local and routed providers use model names we can't list. */}
+                <input
+                  list="llm-model-suggestions"
                   value={formModel}
                   onChange={e => setFormModel(e.target.value)}
                   disabled={!selectedProvider}
+                  placeholder="Model name"
                   className="w-full px-3 py-2 rounded-lg bg-nexus-bg-secondary border border-nexus-border text-nexus-text focus:outline-none focus:ring-2 focus:ring-nexus-accent focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <option value="">Select a model...</option>
+                />
+                <datalist id="llm-model-suggestions">
                   {(selectedProviderInfo?.models || []).map(m => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
+                    <option key={m} value={m} />
                   ))}
-                </select>
+                </datalist>
               </div>
 
               <div className="relative">
@@ -172,7 +174,7 @@ export function LLMSettings({
               <Button variant="secondary" onClick={() => setShowForm(false)}>
                 Cancel
               </Button>
-              <Button onClick={handleCreate}>Add Provider</Button>
+              <Button onClick={handleCreate} disabled={!selectedProvider || !formModel.trim()}>Add Provider</Button>
             </div>
           </CardContent>
         </Card>
@@ -227,7 +229,16 @@ export function LLMSettings({
                         </>
                       )}
                     </Button>
-                    <Button variant="ghost" size="sm" className="text-nexus-danger" onClick={() => onDelete(config.id)}>
+                    <Button variant="secondary" size="sm" onClick={() => void onUpdate(config.id, { enabled: !config.enabled })}>
+                      {config.enabled ? "Disable" : "Enable"}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-nexus-danger"
+                      aria-label="Delete provider"
+                      onClick={() => { if (window.confirm(`Delete ${config.provider_name} · ${config.model}?`)) void onDelete(config.id); }}
+                    >
                       <Trash2 className="w-3 h-3" />
                     </Button>
                   </div>

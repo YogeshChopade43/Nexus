@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import importlib
-import json
-import sqlite3
+import inspect
 from typing import Any, Optional
 
 from app.core.database import get_connection
+from app.core.secrets import decrypt_api_key
 from app.llm.base import BaseLLMProvider
 
 PROVIDER_MAP = {
@@ -35,7 +35,7 @@ class LLMRegistry:
         self._configs: dict[int, dict[str, Any]] = {}
 
     def register(self, provider: BaseLLMProvider, config: dict[str, Any]) -> int:
-        provider_id = hash((provider.provider_name, config.get("model", ""))) & 0x7FFFFFFF
+        provider_id = int(config["id"])
         self._providers[provider_id] = provider
         self._configs[provider_id] = config
         return provider_id
@@ -55,11 +55,12 @@ class LLMRegistry:
             if row is None:
                 raise ValueError(f"LLM provider not found: {provider_id}")
             config = dict(row)
+            config["api_key"] = decrypt_api_key(config.get("api_key"))
             provider_class = _load_provider_class(config["provider_name"])
             kwargs = {}
             if config["api_key"]:
                 kwargs["api_key"] = config["api_key"]
-            if config["base_url"]:
+            if config["base_url"] and "base_url" in inspect.signature(provider_class.__init__).parameters:
                 kwargs["base_url"] = config["base_url"]
             if config["model"]:
                 kwargs["model"] = config["model"]
@@ -73,7 +74,13 @@ class LLMRegistry:
         conn = get_connection()
         try:
             rows = conn.execute("SELECT * FROM llm_providers ORDER BY id").fetchall()
-            return [dict(row) for row in rows]
+            results = []
+            for row in rows:
+                config = dict(row)
+                # Never expose the stored key through the API surface.
+                config["api_key"] = "***" if config.get("api_key") else None
+                results.append(config)
+            return results
         finally:
             conn.close()
 
@@ -85,54 +92,20 @@ class LLMRegistry:
                 INSERT INTO llm_providers (provider_name, model, api_key, base_url, enabled)
                 VALUES (?, ?, ?, ?, ?)
                 """,
-                (provider_name, model, api_key, base_url, int(enabled)),
+                (provider_name, model, encrypt_api_key(api_key), base_url, int(enabled)),
             )
             conn.commit()
             return cursor.lastrowid
         finally:
             conn.close()
 
-    def update_config(self, provider_id: int, **kwargs: Any) -> bool:
-        conn = get_connection()
-        try:
-            row = conn.execute("SELECT * FROM llm_providers WHERE id = ?", (provider_id,)).fetchone()
-            if row is None:
-                return False
-
-            updates = []
-            values = []
-            for key, value in kwargs.items():
-                if key in ("model", "api_key", "base_url", "enabled"):
-                    updates.append(f"{key} = ?")
-                    values.append(value)
-
-            if not updates:
-                return False
-
-            values.append(provider_id)
-            conn.execute(f"UPDATE llm_providers SET {', '.join(updates)} WHERE id = ?", values)
-            conn.commit()
-
-            provider_id_in_cache = next((k for k, v in self._configs.items() if v.get("id") == provider_id), None)
-            if provider_id_in_cache is not None:
-                self._configs[provider_id_in_cache].update(kwargs)
-                if "api_key" in kwargs or "base_url" in kwargs or "model" in kwargs:
-                    del self._providers[provider_id_in_cache]
-                    del self._configs[provider_id_in_cache]
-
-            return True
-        finally:
-            conn.close()
-
     def delete_config(self, provider_id: int) -> bool:
         conn = get_connection()
         try:
-            conn.execute("DELETE FROM llm_providers WHERE id = ?", (provider_id,))
+            cursor = conn.execute("DELETE FROM llm_providers WHERE id = ?", (provider_id,))
             conn.commit()
-            for key in list(self._providers.keys()):
-                if self._configs.get(key, {}).get("id") == provider_id:
-                    del self._providers[key]
-                    del self._configs[key]
-            return True
         finally:
             conn.close()
+        self._providers.pop(provider_id, None)
+        self._configs.pop(provider_id, None)
+        return cursor.rowcount > 0

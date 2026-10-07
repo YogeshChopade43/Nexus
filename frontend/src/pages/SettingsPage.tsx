@@ -1,36 +1,55 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { cn } from '../lib/utils';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Separator } from '../components/ui/Separator';
 import { Badge } from '../components/ui/Badge';
-import { User, Bell, Shield, Palette, Database, Globe, LogOut, Moon, Sun, Monitor, Cpu } from 'lucide-react';
-import { Dropdown, DropdownItem } from '../components/ui/Dropdown';
+import { User, Moon, Sun, Monitor, Cpu } from 'lucide-react';
 import { useSettings } from '../hooks/useSettings';
 import { useLLM } from '../hooks/useLLM';
 import { LLMSettings } from '../components/llm/LLMSettings';
+import { settingsService } from '../services/settings';
 
 const tabs = [
   { id: 'general', label: 'General', icon: User },
-  { id: 'notifications', label: 'Notifications', icon: Bell },
-  { id: 'privacy', label: 'Privacy', icon: Shield },
-  { id: 'editor', label: 'Editor', icon: Palette },
-  { id: 'api', label: 'API', icon: Database },
-  { id: 'accounts', label: 'Accounts', icon: Globe },
   { id: 'ai', label: 'AI', icon: Cpu },
-];
+] as const;
+
+type TabId = typeof tabs[number]['id'];
+
+const THEMES = [
+  { id: 'dark', label: 'Dark', icon: Moon },
+  { id: 'light', label: 'Light', icon: Sun },
+  { id: 'system', label: 'System', icon: Monitor },
+] as const;
 
 export function SettingsPage() {
   const { theme, setTheme } = useSettings();
-  const { configs, providerInfo, refreshConfigs, testChat } = useLLM();
-  const [activeTab, setActiveTab] = useState<'general' | 'notifications' | 'privacy' | 'editor' | 'api' | 'accounts' | 'ai'>('general');
+  const { configs, providerInfo, loading, error: llmError, createConfig, updateConfig, deleteConfig, refreshConfigs, testChat } = useLLM();
+  const [activeTab, setActiveTab] = useState<TabId>('general');
+  const [language, setLanguage] = useState('');
+  const [timezone, setTimezone] = useState('');
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
-  const themeOptions: DropdownItem[] = [
-    { label: 'Dark', icon: <Moon className='w-4 h-4' />, onClick: () => setTheme('dark') },
-    { label: 'Light', icon: <Sun className='w-4 h-4' />, onClick: () => setTheme('light') },
-    { label: 'System', icon: <Monitor className='w-4 h-4' />, onClick: () => setTheme('system') },
-  ];
+  useEffect(() => {
+    settingsService.getSettings()
+      .then(s => {
+        setLanguage(s.user.language);
+        setTimezone(s.user.timezone);
+      })
+      .catch(() => {});
+  }, []);
+
+  const saveGeneral = async () => {
+    setSaveState('saving');
+    try {
+      await settingsService.updateUserSettings({ language, timezone, theme });
+      setSaveState('saved');
+    } catch {
+      setSaveState('error');
+    }
+  };
 
   return (
     <div className="space-y-6 max-w-4xl">
@@ -48,14 +67,15 @@ export function SettingsPage() {
                 return (
                   <button
                     key={tab.id}
-                    onClick={() => setActiveTab(tab.id as typeof activeTab)}
+                    onClick={() => setActiveTab(tab.id)}
                     className={cn(
                       'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all duration-150',
-                      'focus:outline-none focus:ring-2 focus:ring-nexus-accent focus:ring-offset-2 focus:ring-offset-nexus-bg',
+                      'focus:outline-none focus:ring-2 focus:ring-nexus-accent',
                       activeTab === tab.id
                         ? 'bg-nexus-accent-dim text-nexus-accent'
                         : 'text-nexus-text-secondary hover:bg-nexus-bg-tertiary hover:text-nexus-text'
                     )}
+                    aria-current={activeTab === tab.id ? 'page' : undefined}
                   >
                     <Icon className="w-5 h-5 flex-shrink-0" />
                     {tab.label}
@@ -75,168 +95,63 @@ export function SettingsPage() {
               </CardHeader>
               <CardContent className="space-y-6">
                 <div>
-                  <label className="block text-sm font-medium text-nexus-text-secondary mb-3">Theme</label>
-                  <Dropdown
-                    trigger={
-                      <Button variant={theme === 'dark' ? 'primary' : 'secondary'} className="w-full justify-between gap-2">
-                        <span className="flex items-center gap-2">
-                          {theme === 'dark' && <Moon className="w-4 h-4" />}
-                          {theme === 'light' && <Sun className="w-4 h-4" />}
-                          {theme === 'system' && <Monitor className="w-4 h-4" />}
-                          <span>{theme.charAt(0).toUpperCase() + theme.slice(1)}</span>
-                        </span>
-                      </Button>
-                    }
-                    items={themeOptions}
-                  />
+                  <span className="block text-sm font-medium text-nexus-text-secondary mb-3">Theme</span>
+                  <div className="flex gap-2" role="radiogroup" aria-label="Theme">
+                    {THEMES.map(t => {
+                      const Icon = t.icon;
+                      return (
+                        <Button
+                          key={t.id}
+                          variant={theme === t.id ? 'primary' : 'secondary'}
+                          size="sm"
+                          className="gap-1.5"
+                          role="radio"
+                          aria-checked={theme === t.id}
+                          onClick={() => setTheme(t.id)}
+                        >
+                          <Icon className="w-4 h-4" /> {t.label}
+                        </Button>
+                      );
+                    })}
+                  </div>
                 </div>
 
                 <Separator />
 
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <Input
-                    label="Language"
-                    placeholder="en-US"
-                    defaultValue="en-US"
-                    className="opacity-50"
-                  />
-                  <Input
-                    label="Timezone"
-                    placeholder="America/New_York"
-                    defaultValue="America/New_York"
-                    className="opacity-50"
-                  />
+                  <Input label="Language" placeholder="en-US" value={language} onChange={(e) => { setLanguage(e.target.value); setSaveState('idle'); }} />
+                  <Input label="Timezone" placeholder="UTC" value={timezone} onChange={(e) => { setTimezone(e.target.value); setSaveState('idle'); }} />
                 </div>
-              </CardContent>
-            </Card>
-          )}
-
-          {activeTab === 'notifications' && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Notifications</CardTitle>
-                <CardDescription>Control how you receive notifications</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="flex flex-col items-center justify-center py-8 text-nexus-text-muted">
-                  <Bell className="w-12 h-12 text-nexus-text-muted/50 mb-3" />
-                  <p>Notification settings will be available in a future release.</p>
-                </div>
-              </CardContent>
-            </Card>
-          )}
-
-          {activeTab === 'privacy' && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Privacy</CardTitle>
-                <CardDescription>Control your data and privacy settings</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="flex flex-col items-center justify-center py-8 text-nexus-text-muted">
-                  <Shield className="w-12 h-12 text-nexus-text-muted/50 mb-3" />
-                  <p>Privacy settings will be available in a future release.</p>
-                </div>
-              </CardContent>
-            </Card>
-          )}
-
-          {activeTab === 'editor' && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Editor</CardTitle>
-                <CardDescription>Configure your code editor preferences</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="flex flex-col items-center justify-center py-8 text-nexus-text-muted">
-                  <Palette className="w-12 h-12 text-nexus-text-muted/50 mb-3" />
-                  <p>Editor settings will be available in a future release.</p>
-                </div>
-              </CardContent>
-            </Card>
-          )}
-
-          {activeTab === 'api' && (
-            <Card>
-              <CardHeader>
-                <CardTitle>API Configuration</CardTitle>
-                <CardDescription>Configure API connection settings</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="flex flex-col items-center justify-center py-8 text-nexus-text-muted">
-                  <Database className="w-12 h-12 text-nexus-text-muted/50 mb-3" />
-                  <p>API settings will be available in a future release.</p>
+                <div className="flex items-center gap-3">
+                  <Button size="sm" onClick={saveGeneral} loading={saveState === 'saving'}>Save</Button>
+                  {saveState === 'saved' && <span className="text-xs text-nexus-accent">Saved</span>}
+                  {saveState === 'error' && <span className="text-xs text-nexus-danger">Could not save settings</span>}
                 </div>
               </CardContent>
             </Card>
           )}
 
           {activeTab === 'ai' && (
-            <LLMSettings
-              configs={configs}
-              providerInfo={providerInfo}
-              loading={false}
-              testChat={testChat}
-              onCreate={async (data) => {
-                const res = await fetch('/api/llm/', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify(data),
-                });
-                const config = await res.json();
-                await refreshConfigs();
-                return config;
-              }}
-              onUpdate={async (id) => {
-                const res = await fetch(`/api/llm/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-                await refreshConfigs();
-                return res.ok;
-              }}
-              onDelete={async (id) => {
-                const res = await fetch(`/api/llm/${id}`, { method: 'DELETE' });
-                await refreshConfigs();
-                return res.ok;
-              }}
-              onRefresh={refreshConfigs}
-            />
+            <>
+              {llmError && <p className="text-sm text-nexus-danger" role="alert">{llmError.message}</p>}
+              <LLMSettings
+                configs={configs}
+                providerInfo={providerInfo}
+                loading={loading && configs.length === 0}
+                testChat={testChat}
+                onCreate={createConfig}
+                onUpdate={updateConfig}
+                onDelete={deleteConfig}
+                onRefresh={refreshConfigs}
+              />
+            </>
           )}
 
-          {activeTab === 'accounts' && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Connected Accounts</CardTitle>
-                <CardDescription>Manage your connected external accounts</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="flex flex-col items-center justify-center py-8 text-nexus-text-muted">
-                  <Globe className="w-12 h-12 text-nexus-text-muted/50 mb-3" />
-                    <p>No connected accounts yet.</p>
-                </div>
-              </CardContent>
-            </Card>
-          )}
         </main>
       </div>
 
-      <Card className="mt-6">
-        <CardContent className="pt-6">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <LogOut className="w-5 h-5 text-nexus-danger" />
-              <div>
-                <p className="font-medium text-nexus-text">Sign out</p>
-                <p className="text-sm text-nexus-text-secondary">Sign out of your Nexus account</p>
-              </div>
-            </div>
-            <Button variant="ghost" size="sm" className="text-nexus-danger hover:text-nexus-danger-hover" disabled>
-              Sign Out
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-
       <div className="text-xs text-nexus-text-muted text-center">
-        <Badge variant="default" size="sm">Nexus v0.1.0</Badge>
+        <Badge variant="default" size="sm">Nexus v0.2.0</Badge>
       </div>
     </div>
   );

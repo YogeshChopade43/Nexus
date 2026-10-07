@@ -28,6 +28,7 @@ export interface LLMProviderFormData {
 export interface LLMChatRequest {
   messages: Array<{ role: string; content: string }>;
   model?: string;
+  provider_id?: number;
   provider_name?: string;
   temperature?: number;
   max_tokens?: number;

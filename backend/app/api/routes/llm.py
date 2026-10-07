@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Query
+
 from app.core.database import get_connection
+from app.core.secrets import encrypt_api_key
 from app.llm.registry import LLMRegistry, _load_provider_class, PROVIDER_MAP
 from app.models.llm import (
     LLMProvider as LLMProviderModel,
@@ -28,9 +30,16 @@ PROVIDER_LABELS = {
 
 
 def _get_registry() -> LLMRegistry:
-    from app.llm import build_llm_registry
-    return build_llm_registry()
+    return LLMRegistry()
 
+
+def _mask_key(value: str | None) -> str | None:
+    """Never return a stored API key through the HTTP API."""
+    if not value:
+        return None
+    if value.startswith("fernet-llm:"):
+        return "***"
+    return "***"
 
 @router.get("/providers")
 def list_providers() -> list[dict[str, Any]]:
@@ -57,20 +66,29 @@ def list_providers() -> list[dict[str, Any]]:
 
 
 @router.get("/")
-def list_llm_providers() -> list[dict[str, Any]]:
+def list_llm_providers(
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+) -> list[dict[str, Any]]:
     registry = _get_registry()
-    configs = []
-    for config in registry.list_configs():
+    configs = registry.list_configs()[offset:offset + limit]
+    results = []
+    for config in configs:
         config_dict = dict(config)
+        config_dict["api_key"] = _mask_key(config_dict.get("api_key"))
         config_dict["label"] = PROVIDER_LABELS.get(config["provider_name"], config["provider_name"])
-        configs.append(config_dict)
-    return configs
+        results.append(config_dict)
+    return results
 
 
 @router.post("/")
 def create_llm_provider(req: LLMCreateRequest) -> dict[str, Any]:
     if req.provider_name not in PROVIDER_MAP:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {req.provider_name}")
+    if not req.model.strip():
+        raise HTTPException(status_code=400, detail="A model is required")
+    if req.provider_name not in ("ollama", "litellm") and not req.api_key:
+        raise HTTPException(status_code=400, detail="An API key is required for this provider")
     conn = get_connection()
     try:
         cursor = conn.execute(
@@ -78,7 +96,7 @@ def create_llm_provider(req: LLMCreateRequest) -> dict[str, Any]:
             INSERT INTO llm_providers (provider_name, model, api_key, base_url, enabled)
             VALUES (?, ?, ?, ?, ?)
             """,
-            (req.provider_name, req.model, req.api_key, req.base_url, int(req.enabled)),
+            (req.provider_name, req.model, encrypt_api_key(req.api_key), req.base_url, int(req.enabled)),
         )
         conn.commit()
         return {"id": cursor.lastrowid, "provider_name": req.provider_name, "model": req.model}
@@ -99,9 +117,9 @@ def update_llm_provider(provider_id: int, req: LLMUpdateRequest) -> dict[str, An
         if req.model is not None:
             updates.append("model = ?")
             values.append(req.model)
-        if req.api_key is not None:
+        if req.api_key:
             updates.append("api_key = ?")
-            values.append(req.api_key)
+            values.append(encrypt_api_key(req.api_key))
         if req.base_url is not None:
             updates.append("base_url = ?")
             values.append(req.base_url)
@@ -112,6 +130,7 @@ def update_llm_provider(provider_id: int, req: LLMUpdateRequest) -> dict[str, An
         if not updates:
             raise HTTPException(status_code=400, detail="No fields to update")
         values.append(provider_id)
+        updates.append("updated_at = datetime('now')")
         conn.execute(f"UPDATE llm_providers SET {', '.join(updates)} WHERE id = ?", values)
         conn.commit()
         return {"id": provider_id, "updated": True}
@@ -135,6 +154,7 @@ def get_llm_provider(provider_id: int) -> dict[str, Any]:
         if row is None:
             raise HTTPException(status_code=404, detail="LLM provider not found")
         config = dict(row)
+        config["api_key"] = _mask_key(config.get("api_key"))
         config["label"] = PROVIDER_LABELS.get(config["provider_name"], config["provider_name"])
         return config
     finally:
@@ -143,34 +163,16 @@ def get_llm_provider(provider_id: int) -> dict[str, Any]:
 
 @router.post("/chat")
 async def chat(req: ChatRequest) -> ChatResponse:
-    from app.llm import build_llm_registry
+    from app.llm.utils import get_active_llm_provider
 
-    registry = build_llm_registry()
-    provider_id = None
+    try:
+        provider, config = get_active_llm_provider(
+            provider_id=req.provider_id,
+            provider_name=req.provider_name,
+        )
+    except HTTPException:
+        raise
 
-    if req.provider_name:
-        conn = get_connection()
-        try:
-            row = conn.execute(
-                "SELECT id FROM llm_providers WHERE provider_name = ? AND enabled = 1 ORDER BY id DESC LIMIT 1",
-                (req.provider_name,),
-            ).fetchone()
-            if row:
-                provider_id = row["id"]
-        finally:
-            conn.close()
-
-    if provider_id is None:
-        configs = registry.list_configs()
-        enabled = [c for c in configs if c.get("enabled", True)]
-        if enabled:
-            provider_id = enabled[0]["id"]
-
-    if provider_id is None:
-        raise HTTPException(status_code=400, detail="No LLM provider configured")
-
-    provider = registry.get_provider(provider_id)
-    config = registry.get_config(provider_id)
     model = req.model or config.get("model", provider.default_model)
 
     try:
@@ -189,3 +191,38 @@ async def chat(req: ChatRequest) -> ChatResponse:
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/chat/stream")
+async def chat_stream(req: ChatRequest):
+    """Stream chat completion tokens as Server-Sent Events."""
+    import json as _json
+
+    from fastapi.responses import StreamingResponse
+    from app.llm.utils import get_active_llm_provider
+
+    try:
+        provider, config = get_active_llm_provider(
+            provider_id=req.provider_id,
+            provider_name=req.provider_name,
+        )
+    except HTTPException:
+        raise
+
+    model = req.model or config.get("model", provider.default_model)
+
+    async def event_generator():
+        try:
+            async for chunk in provider.chat_stream(
+                messages=req.messages,
+                model=model,
+                temperature=req.temperature,
+                max_tokens=req.max_tokens,
+            ):
+                yield f"data: {_json.dumps({'delta': chunk})}\n\n"
+        except Exception as exc:
+            yield f"data: {_json.dumps({'error': str(exc)})}\n\n"
+            return
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")

@@ -62,3 +62,11 @@ export function getInitials(name: string): string {
     .toUpperCase()
     .slice(0, 2);
 }
+/** Message from an Error, an ApiError-shaped object, or anything else. */
+export function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'object' && error !== null && 'message' in error) {
+    return String((error as { message: unknown }).message);
+  }
+  return typeof error === 'string' ? error : 'Unknown error';
+}

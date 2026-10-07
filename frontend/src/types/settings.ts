@@ -37,18 +37,7 @@ export interface ApiSettings {
   retries: number;
 }
 
-export interface ConnectedAccount {
-  id: string;
-  provider: string;
-  email: string;
-  name: string;
-  avatar?: string;
-  connectedAt: string;
-  scopes: string[];
-}
-
 export interface SettingsResponse {
   user: UserSettings;
   api: ApiSettings;
-  accounts: ConnectedAccount[];
 }

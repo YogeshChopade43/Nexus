@@ -1,5 +1,5 @@
 import { api } from './api';
-import type { UserSettings, ApiSettings, ConnectedAccount, SettingsResponse } from '../types/settings';
+import type { UserSettings, ApiSettings, SettingsResponse } from '../types/settings';
 
 export const settingsService = {
   async getSettings(): Promise<SettingsResponse> {
@@ -14,12 +14,5 @@ export const settingsService = {
     return api.patch<ApiSettings>('/api/settings/api', settings);
   },
 
-  async getConnectedAccounts(): Promise<ConnectedAccount[]> {
-    const response = await api.get<{ accounts: ConnectedAccount[] }>('/api/settings/accounts');
-    return response.accounts;
-  },
 
-  async disconnectAccount(accountId: string): Promise<void> {
-    return api.delete<void>(`/api/settings/accounts/${accountId}`);
-  },
 };

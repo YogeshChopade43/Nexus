@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-import json
 from abc import ABC, abstractmethod
 from typing import Any, Optional
 
-from app.core.database import get_connection
-from app.core.exceptions import AppNotConnectedError
 
 
 class Tool(ABC):
@@ -16,21 +13,17 @@ class Tool(ABC):
         self.config = dict(config or {})
         self.enabled = True
 
-    def _get_connection_config(self, app_id: str) -> dict[str, Any]:
-        conn = get_connection()
-        try:
-            row = conn.execute(
-                "SELECT config FROM connections WHERE app_id = ? AND connected = 1 ORDER BY id DESC LIMIT 1",
-                (app_id,),
-            ).fetchone()
-            if row is None:
-                raise AppNotConnectedError(f"{app_id} is not connected")
-            raw = row["config"]
-            if isinstance(raw, str):
-                return json.loads(raw) if raw else {}
-            return raw or {}
-        finally:
-            conn.close()
+    @property
+    def parameters_schema(self) -> dict[str, Any]:
+        return {"type": "object", "properties": {}, "required": []}
+
+    def get_schema(self) -> dict[str, Any]:
+        schema = self.parameters_schema
+        return {
+            "name": self.tool_name,
+            "description": self.description,
+            "parameters": schema,
+        }
 
     @abstractmethod
     async def execute(self, parameters: dict[str, Any]) -> dict[str, Any]:
@@ -42,4 +35,5 @@ class Tool(ABC):
             "app_id": self.app_id,
             "description": self.description,
             "enabled": self.enabled,
+            "parameters": self.parameters_schema,
         }

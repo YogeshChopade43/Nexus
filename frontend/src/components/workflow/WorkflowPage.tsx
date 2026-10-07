@@ -1,160 +1,171 @@
 import { useState, useCallback, useEffect } from 'react';
-import { cn } from '../../lib/utils';
+import { AlertCircle, Copy, Edit3, History, Play, Plus, Zap } from 'lucide-react';
+import { cn, formatRelativeTime, getErrorMessage } from '../../lib/utils';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { WorkflowList } from './WorkflowList';
-import { WorkflowEditor } from './WorkflowEditor';
+import { NODE_ICONS, WorkflowBuilder, type WorkflowSaveData } from './WorkflowBuilder';
+import { RunInputsModal } from './RunInputsModal';
+import { triggerSummary } from './TriggerCard';
 import { ExecutionTrace } from './ExecutionTrace';
 import { useWorkflows } from '../../hooks/useWorkflows';
-import { appService } from '../../services/app';
-import type { App } from '../../types/app';
-import type { Workflow, WorkflowId, WorkflowNode, WorkflowEdge, WorkflowCreateRequest, WorkflowUpdateRequest } from '../../types/workflow';
+import { useLLM } from '../../hooks/useLLM';
+import { workflowService } from '../../services/workflow';
+import { api } from '../../services/api';
+import type { ExecutionTraceEntry, ManualInput, ToolDefinition, Workflow, WorkflowExecution, WorkflowId } from '../../types/workflow';
 
-const NODE_TYPES = [
-  { type: 'trigger', name: 'Trigger', description: 'Start workflow on event', icon: '⚡' },
-  { type: 'action', name: 'Action', description: 'Execute an operation', icon: '⚙️' },
-  { type: 'condition', name: 'Condition', description: 'Branch based on logic', icon: '🔀' },
-  { type: 'transform', name: 'Transform', description: 'Modify data', icon: '🔄' },
-  { type: 'output', name: 'Output', description: 'Return result', icon: '📤' },
-];
+const STATUS_CLASSES: Record<string, string> = {
+  completed: 'bg-green-500/15 text-green-400',
+  running: 'bg-blue-500/15 text-blue-400',
+  failed: 'bg-red-500/15 text-red-400',
+  partial: 'bg-amber-500/15 text-amber-400',
+  skipped: 'bg-gray-500/15 text-gray-400',
+};
 
-interface WorkflowSaveData {
-  name: string;
-  description: string;
-  nodes: WorkflowNode[];
-  edges: WorkflowEdge[];
-  isActive: boolean;
+function describeTrigger(workflow: Workflow): string {
+  const t = workflow.trigger_config;
+  const next = t?.next_run_at ? ` · next ${new Date(t.next_run_at).toLocaleString()}` : workflow.isActive ? '' : ' · paused (inactive)';
+  switch (t?.type) {
+    case 'recurrence':
+    case 'poll':
+      return `${triggerSummary({ ...t, trigger_type: t.type })}${next}`;
+    case 'schedule':
+      return `Schedule: ${t.schedule} (${t.timezone || 'UTC'})${t.next_run_at ? ` · next ${new Date(t.next_run_at).toLocaleString()}` : workflow.isActive ? '' : ' · paused (inactive)'}`;
+    case 'webhook':
+      return 'Webhook';
+    case 'app_event':
+      return `App event: ${t.event || `any ${t.app_id} event`}`;
+    default:
+      return triggerSummary({ ...(t ?? {}), trigger_type: 'manual' });
+  }
+}
+
+function manualInputs(workflow: Workflow): ManualInput[] {
+  const t = workflow.trigger_config;
+  return t?.type === 'manual' ? t.inputs ?? [] : [];
 }
 
 export function WorkflowPage() {
   const {
-    workflows,
-    currentWorkflow,
-    executions,
-    runs,
-    trace,
-    loading,
-    executing,
-    runsLoading,
-    traceLoading,
-    error,
-    createWorkflow,
-    updateWorkflow,
-    deleteWorkflow,
-    selectWorkflow,
-    executeWorkflow,
-    fetchWorkflowRuns,
-    fetchWorkflowTrace,
+    workflows, currentWorkflow, runs, loading, executing, runsLoading, error,
+    createWorkflow, updateWorkflow, deleteWorkflow, selectWorkflow, executeWorkflow, fetchWorkflowRuns, fetchWorkflows,
   } = useWorkflows();
+  const { configs: llmProviders } = useLLM();
 
-  const [connectedApps, setConnectedApps] = useState<App[]>([]);
+  const [tools, setTools] = useState<ToolDefinition[]>([]);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingWorkflow, setEditingWorkflow] = useState<Workflow | null>(null);
-  const [traceWorkflow, setTraceWorkflow] = useState<Workflow | null>(null);
+  const [traceRun, setTraceRun] = useState<WorkflowExecution | null>(null);
+  const [runInputOpen, setRunInputOpen] = useState(false);
+  const [runInput, setRunInput] = useState('{}');
+  const [runError, setRunError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [inputsFor, setInputsFor] = useState<Workflow | null>(null);
 
   useEffect(() => {
-    appService.getApps().then(apps => {
-      setConnectedApps(apps.filter(a => a.connected));
-    }).catch(() => {});
+    // Editor metadata; failures leave the selectors empty rather than breaking the page.
+    workflowService.getTools().then(setTools).catch(() => {});
   }, []);
 
-  const handleCreate = useCallback(() => {
-    setEditingWorkflow(null);
-    setEditorOpen(true);
-  }, []);
-
-  const handleEdit = useCallback((workflow: Workflow) => {
+  const openEditor = useCallback((workflow: Workflow | null) => {
     setEditingWorkflow(workflow);
     setEditorOpen(true);
+    // Refresh tool availability in case apps were connected meanwhile.
+    workflowService.getTools().then(setTools).catch(() => {});
   }, []);
 
-  const handleSave = useCallback(async (data: WorkflowSaveData) => {
+  const handleSave = useCallback(async (data: WorkflowSaveData): Promise<string | null> => {
     try {
-      if (editingWorkflow) {
-        const updateRequest: WorkflowUpdateRequest = {
-          id: editingWorkflow.id,
-          name: data.name,
-          description: data.description,
-          nodes: data.nodes,
-          edges: data.edges,
-          isActive: data.isActive,
-        };
-        await updateWorkflow(updateRequest);
-      } else {
-        const createRequest: WorkflowCreateRequest = {
-          name: data.name,
-          description: data.description,
-          nodes: data.nodes,
-          edges: data.edges,
-        };
-        await createWorkflow(createRequest);
-      }
+      const saved = editingWorkflow
+        ? await updateWorkflow({ id: editingWorkflow.id, ...data, enabled: data.isActive })
+        : await createWorkflow({ ...data, enabled: data.isActive });
+      selectWorkflow(saved);
+      void fetchWorkflowRuns(saved.id);
       setEditorOpen(false);
       setEditingWorkflow(null);
+      return null;
     } catch (err) {
-      console.error('Failed to save workflow:', err);
+      return getErrorMessage(err);
     }
-  }, [editingWorkflow, createWorkflow, updateWorkflow]);
+  }, [editingWorkflow, createWorkflow, updateWorkflow, selectWorkflow, fetchWorkflowRuns]);
 
   const handleDelete = useCallback(async (id: WorkflowId) => {
-    if (window.confirm('Are you sure you want to delete this workflow?')) {
-      await deleteWorkflow(id);
+    if (window.confirm('Delete this workflow and its run history?')) {
+      await deleteWorkflow(id).catch(() => {});
     }
   }, [deleteWorkflow]);
 
   const handleSelect = useCallback((workflow: Workflow) => {
     selectWorkflow(workflow);
-    void Promise.all([
-      fetchWorkflowRuns(workflow.id),
-      fetchWorkflowTrace(workflow.id),
-    ]);
-  }, [selectWorkflow, fetchWorkflowRuns, fetchWorkflowTrace]);
+    void fetchWorkflowRuns(workflow.id);
+  }, [selectWorkflow, fetchWorkflowRuns]);
 
-  const handleExecute = useCallback(async (workflow: Workflow) => {
+  /** Runs the workflow; resolves to an error message, or null when it ran. */
+  const runNow = useCallback(async (workflow: Workflow, input: Record<string, unknown>): Promise<string | null> => {
     try {
-      await executeWorkflow(workflow.id, {});
-      await Promise.all([
-        fetchWorkflowRuns(workflow.id),
-        fetchWorkflowTrace(workflow.id),
-      ]);
+      const run = await executeWorkflow(workflow.id, input);
+      if (currentWorkflow?.id !== workflow.id) selectWorkflow(workflow);
+      await fetchWorkflowRuns(workflow.id);
+      void fetchWorkflows();
+      setTraceRun(run);
+      return null;
     } catch (err) {
-      console.error('Failed to execute workflow:', err);
+      return getErrorMessage(err);
     }
-  }, [executeWorkflow, fetchWorkflowRuns, fetchWorkflowTrace]);
+  }, [executeWorkflow, fetchWorkflowRuns, fetchWorkflows, currentWorkflow, selectWorkflow]);
 
-  const handleViewTrace = useCallback((workflow: Workflow) => {
-    setTraceWorkflow(workflow);
-    void fetchWorkflowTrace(workflow.id);
-  }, [fetchWorkflowTrace]);
+  /** One-click run: asks for the manual trigger's inputs first when it has any. */
+  const handleExecute = useCallback(async (workflow: Workflow, input?: Record<string, unknown>) => {
+    setRunError(null);
+    if (input === undefined && manualInputs(workflow).length > 0) {
+      setInputsFor(workflow);
+      return;
+    }
+    const failure = await runNow(workflow, input ?? {});
+    if (failure) setRunError(failure);
+  }, [runNow]);
 
-  const displayedExecutions = runs.length > 0 ? runs : executions;
+  const handleRunWithInput = useCallback(async () => {
+    if (!currentWorkflow) return;
+    let input: unknown;
+    try {
+      input = JSON.parse(runInput || '{}');
+    } catch {
+      setRunError('Input must be valid JSON');
+      return;
+    }
+    if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+      setRunError('Input must be a JSON object');
+      return;
+    }
+    setRunInputOpen(false);
+    await handleExecute(currentWorkflow, input as Record<string, unknown>);
+  }, [currentWorkflow, runInput, handleExecute]);
+
+  const webhookUrl = currentWorkflow?.trigger_config?.webhook_path
+    ? `${api.getBaseUrl()}${currentWorkflow.trigger_config.webhook_path}`
+    : null;
+
+  const traceEntries: ExecutionTraceEntry[] = traceRun?.trace ?? traceRun?.events ?? [];
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-nexus-text">Workflows</h1>
-          <p className="text-nexus-text-secondary mt-1">Build and manage automated workflows</p>
+          <p className="text-nexus-text-secondary mt-1">Automate multi-step work with tools from your MCP servers</p>
         </div>
-        <Button variant="primary" onClick={handleCreate} className="gap-1.5">
-          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <line x1="12" y1="5" x2="12" y2="19" />
-            <line x1="5" y1="12" x2="19" y2="12" />
-          </svg>
-          New Workflow
+        <Button variant="primary" onClick={() => openEditor(null)} className="gap-1.5">
+          <Plus className="w-4 h-4" /> New Workflow
         </Button>
       </div>
 
-      {error && (
+      {(error || runError) && (
         <Card className="p-4 border-nexus-danger/30 bg-red-500/5">
           <div className="flex items-center gap-2 text-nexus-danger">
-            <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="12" cy="12" r="10" />
-              <line x1="12" y1="8" x2="12" y2="12" />
-              <line x1="12" y1="16" x2="12.01" y2="16" />
-            </svg>
-            <span>{error.message || 'Something went wrong'}</span>
+            <AlertCircle className="w-5 h-5 flex-shrink-0" />
+            <span>{runError || error?.message}</span>
           </div>
         </Card>
       )}
@@ -165,10 +176,10 @@ export function WorkflowPage() {
             workflows={workflows}
             selectedWorkflow={currentWorkflow}
             onSelect={handleSelect}
-            onCreate={handleCreate}
-            onEdit={handleEdit}
+            onCreate={() => openEditor(null)}
+            onEdit={openEditor}
             onDelete={handleDelete}
-            onExecute={handleExecute}
+            onExecute={(wf) => void handleExecute(wf)}
             loading={loading}
           />
         </div>
@@ -176,130 +187,106 @@ export function WorkflowPage() {
         <div className="lg:col-span-2 space-y-6">
           {currentWorkflow ? (
             <>
-              <Card className="flex-1 min-h-[400px]">
-                <div className="p-4 border-b-nexus-border border-b flex items-center justify-between">
-                  <div>
-                    <h3 className="font-semibold text-nexus-text">{currentWorkflow.name}</h3>
-                    <p className="text-sm text-nexus-text-secondary">{currentWorkflow.description}</p>
+              <Card>
+                <div className="p-4 border-b border-nexus-border flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-semibold text-nexus-text truncate">{currentWorkflow.name}</h3>
+                      <span className={cn('px-2 py-0.5 rounded text-xs font-medium', currentWorkflow.isActive ? 'bg-nexus-accent-dim text-nexus-accent' : 'bg-gray-500/15 text-gray-400')}>
+                        {currentWorkflow.isActive ? 'Active' : 'Inactive'}
+                      </span>
+                    </div>
+                    {currentWorkflow.description && <p className="text-sm text-nexus-text-secondary mt-1">{currentWorkflow.description}</p>}
+                    <p className="text-xs text-nexus-text-muted mt-1 flex items-center gap-1"><Zap className="w-3 h-3" />{describeTrigger(currentWorkflow)}</p>
+                    {currentWorkflow.trigger_status && (
+                      <p className={cn('text-xs mt-0.5', currentWorkflow.trigger_status.last_error ? 'text-nexus-danger' : 'text-nexus-text-muted')}>
+                        {currentWorkflow.trigger_status.last_checked_at
+                          ? `Last checked ${formatRelativeTime(currentWorkflow.trigger_status.last_checked_at)}`
+                          : 'Not checked yet'}
+                        {currentWorkflow.trigger_status.last_error && ` · ${currentWorkflow.trigger_status.last_error}`}
+                      </p>
+                    )}
                   </div>
                   <div className="flex items-center gap-2">
-                    {currentWorkflow.isActive && (
-                      <span className="px-2 py-0.5 bg-nexus-accent-dim text-nexus-accent rounded text-xs font-medium">Active</span>
-                    )}
-                    <Button
-                      variant="primary"
-                      size="sm"
-                      onClick={() => handleExecute(currentWorkflow)}
-                      disabled={executing}
-                      className="gap-1.5"
-                    >
-                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <polygon points="5 3 19 12 5 21 5 3" />
-                      </svg>
-                      Execute
+                    <Button variant="primary" size="sm" onClick={() => void handleExecute(currentWorkflow)} disabled={executing} loading={executing} className="gap-1.5">
+                      <Play className="w-4 h-4" /> Run
                     </Button>
-                    <Button variant="secondary" size="sm" onClick={() => handleEdit(currentWorkflow)} className="gap-1.5">
-                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2-2v-7" />
-                        <path d="M18.5 2.5a2.121 2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-                      </svg>
-                      Edit
+                    <Button variant="secondary" size="sm" onClick={() => { setRunError(null); setRunInputOpen(true); }} disabled={executing}>
+                      Run with input
                     </Button>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => handleViewTrace(currentWorkflow)}
-                      disabled={traceLoading}
-                      className="gap-1.5"
-                    >
-                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
-                        <polyline points="22 4 12 14.01 9 11.01" />
-                      </svg>
-                      Trace
+                    <Button variant="secondary" size="sm" onClick={() => openEditor(currentWorkflow)} className="gap-1.5">
+                      <Edit3 className="w-4 h-4" /> Edit
                     </Button>
                   </div>
                 </div>
-                <div className="p-4">
-                  <div className="space-y-4">
+                <div className="p-4 space-y-3">
+                  {webhookUrl && (
                     <div>
-                      <h4 className="font-medium text-nexus-text mb-2">Nodes ({currentWorkflow.nodes.length})</h4>
-                      <div className="flex flex-wrap gap-2">
-                        {currentWorkflow.nodes.map(node => (
-                          <span key={node.id} className="px-3 py-1 bg-nexus-bg-tertiary border-nexus-border border rounded-full text-sm">
-                            {node.type}: {node.name}
-                            {node.type === 'trigger' && node.app_id && (() => {
-                              const app = connectedApps.find(a => (a.app_id ?? a.id) === node.app_id);
-                              return app ? ` · ${app.name}` : '';
-                            })()}
-                          </span>
-                        ))}
+                      <p className="text-xs font-medium text-nexus-text-secondary mb-1">
+                        {currentWorkflow.trigger_config?.type === 'app_event' ? 'Point the app\'s webhook here (requires NEXUS_WEBHOOK_TOKEN or NEXUS_GITHUB_WEBHOOK_SECRET)' : 'POST to this URL to run the workflow (keep it secret)'}
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <code className="flex-1 text-xs bg-nexus-bg-tertiary border border-nexus-border rounded px-2 py-1.5 truncate">{webhookUrl}</code>
+                        <Button variant="ghost" size="sm" aria-label="Copy URL" onClick={() => {
+                          navigator.clipboard.writeText(webhookUrl).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }).catch(() => {});
+                        }}>
+                          <Copy className="w-4 h-4" />{copied && <span className="text-xs ml-1">Copied</span>}
+                        </Button>
                       </div>
                     </div>
-                    <div>
-                      <h4 className="font-medium text-nexus-text mb-2">Connections ({currentWorkflow.edges.length})</h4>
-                      <div className="space-y-1">
-                        {currentWorkflow.edges.map(edge => (
-                          <div key={edge.id} className="text-sm text-nexus-text-secondary font-mono">
-                            {edge.source} → {edge.target}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
+                  )}
+                  {currentWorkflow.warnings && currentWorkflow.warnings.length > 0 && (
+                    <ul className="text-xs text-nexus-warning space-y-1">
+                      {currentWorkflow.warnings.map(w => <li key={w}>⚠ {w}</li>)}
+                    </ul>
+                  )}
+                  <ol className="flex flex-wrap gap-2">
+                    {currentWorkflow.nodes.map(node => (
+                      <li key={node.id} className="px-3 py-1 bg-nexus-bg-tertiary border border-nexus-border rounded-full text-sm">
+                        {NODE_ICONS[node.type] ?? '⚙️'} {node.name}
+                        {node.type === 'action' && typeof node.config?.tool === 'string' && <span className="text-nexus-text-muted"> · {node.config.tool}</span>}
+                      </li>
+                    ))}
+                    {currentWorkflow.nodes.length === 0 && <li className="text-sm text-nexus-text-muted">No steps yet. Edit the workflow to add some.</li>}
+                  </ol>
                 </div>
               </Card>
 
               <Card>
-                <div className="p-4 border-b-nexus-border border-b flex items-center justify-between">
-                  <div>
-                    <h3 className="font-semibold text-nexus-text">Recent Executions</h3>
-                    <p className="text-xs text-nexus-text-secondary mt-1">
-                      {runsLoading ? 'Loading runs...' : `${displayedExecutions.length} run(s) returned by the backend`}
-                    </p>
-                  </div>
+                <div className="p-4 border-b border-nexus-border flex items-center gap-2">
+                  <History className="w-4 h-4 text-nexus-text-secondary" />
+                  <h3 className="font-semibold text-nexus-text">Run history</h3>
+                  <span className="text-xs text-nexus-text-muted">{runsLoading ? 'Loading…' : `${runs.length} run(s)`}</span>
                 </div>
-                {displayedExecutions.length === 0 ? (
-                  <div className="p-6 text-center text-sm text-nexus-text-muted">
-                    No workflow runs have been recorded yet.
-                  </div>
+                {runs.length === 0 ? (
+                  <div className="p-6 text-center text-sm text-nexus-text-muted">No runs yet.</div>
                 ) : (
-                  <div className="p-4 space-y-2">
-                    {displayedExecutions.slice(0, 5).map(execution => (
-                      <div key={execution.id} className="flex items-center justify-between p-3 bg-nexus-bg-tertiary/50 border-nexus-border border rounded-lg">
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono text-sm truncate">{execution.id.slice(0, 8)}...</span>
-                            <span className={cn(
-                              'px-2 py-0.5 rounded text-xs font-medium flex-shrink-0',
-                              execution.status === 'completed' && 'bg-green-500/15 text-green-400',
-                              execution.status === 'running' && 'bg-blue-500/15 text-blue-400',
-                              execution.status === 'failed' && 'bg-red-500/15 text-red-400',
-                              execution.status === 'pending' && 'bg-amber-500/15 text-amber-400',
-                              execution.status === 'cancelled' && 'bg-gray-500/15 text-gray-400',
-                              execution.status === 'partial' && 'bg-amber-500/15 text-amber-400',
-                              execution.status === 'skipped' && 'bg-gray-500/15 text-gray-400',
-                            )}>
-                              {execution.status}
-                            </span>
+                  <ul className="p-4 space-y-2">
+                    {runs.map(run => (
+                      <li key={run.id}>
+                        <button onClick={() => setTraceRun(run)} className="w-full text-left flex items-center justify-between gap-3 p-3 bg-nexus-bg-tertiary/50 border border-nexus-border rounded-lg hover:bg-nexus-bg-tertiary">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className={cn('px-2 py-0.5 rounded text-xs font-medium', STATUS_CLASSES[run.status] ?? 'bg-gray-500/15 text-gray-400')}>{run.status}</span>
+                              <span className="text-xs text-nexus-text-muted">{formatRelativeTime(run.startedAt)}</span>
+                              {typeof run.input_data?.trigger === 'object' && run.input_data?.trigger !== null && (
+                                <span className="text-xs text-nexus-text-muted">· {String((run.input_data.trigger as Record<string, unknown>).type)}</span>
+                              )}
+                            </div>
+                            {run.error && <p className="text-xs text-nexus-danger mt-1 truncate">{run.error}</p>}
                           </div>
-                          <div className="text-xs text-nexus-text-muted mt-1">
-                            Started: {new Date(execution.startedAt).toLocaleString()}
-                            {execution.completedAt && ` • Completed: ${new Date(execution.completedAt).toLocaleString()}`}
-                          </div>
-                        </div>
-                      </div>
+                          <span className="text-xs text-nexus-accent flex-shrink-0">View trace</span>
+                        </button>
+                      </li>
                     ))}
-                  </div>
+                  </ul>
                 )}
               </Card>
             </>
           ) : (
-            <Card className="h-[500px] flex items-center justify-center">
+            <Card className="h-[400px] flex items-center justify-center">
               <div className="text-center text-nexus-text-muted">
-                <svg className="w-16 h-16 mx-auto text-nexus-text-muted/50 mb-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
-                </svg>
+                <Zap className="w-12 h-12 mx-auto text-nexus-text-muted/50 mb-3" />
                 <h3 className="text-lg font-medium text-nexus-text mb-1">Select a workflow</h3>
                 <p className="text-sm">Choose a workflow from the list or create a new one</p>
               </div>
@@ -309,22 +296,50 @@ export function WorkflowPage() {
       </div>
 
       <Modal open={editorOpen} onClose={() => setEditorOpen(false)} title={editingWorkflow ? 'Edit Workflow' : 'Create Workflow'} size="xl">
-        <WorkflowEditor
-          workflow={editingWorkflow}
-          onSave={handleSave}
-          onCancel={() => setEditorOpen(false)}
-          availableNodeTypes={NODE_TYPES}
-          connectedApps={connectedApps}
+        {editorOpen && (
+          <WorkflowBuilder
+            key={editingWorkflow?.id ?? 'new'}
+            workflow={editingWorkflow}
+            onSave={handleSave}
+            onCancel={() => setEditorOpen(false)}
+            tools={tools}
+            llmProviders={llmProviders}
+          />
+        )}
+      </Modal>
+
+      {inputsFor && (
+        <RunInputsModal
+          open
+          title={`Run ${inputsFor.name}`}
+          inputs={manualInputs(inputsFor)}
+          onClose={() => setInputsFor(null)}
+          onSubmit={async (values) => {
+            const failure = await runNow(inputsFor, values);
+            if (!failure) setInputsFor(null);
+            return failure;
+          }}
         />
+      )}
+
+      <Modal open={runInputOpen} onClose={() => setRunInputOpen(false)} title="Run with input" size="md">
+        <div className="space-y-3">
+          <p className="text-sm text-nexus-text-secondary">JSON object available to steps as <code className="text-nexus-accent">{'{{ input.<key> }}'}</code>.</p>
+          <textarea rows={8} value={runInput} onChange={(e) => setRunInput(e.target.value)} className="w-full font-mono text-sm px-3 py-2 rounded-lg bg-nexus-bg-tertiary border border-nexus-border text-nexus-text" />
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" size="sm" onClick={() => setRunInputOpen(false)}>Cancel</Button>
+            <Button variant="primary" size="sm" onClick={() => void handleRunWithInput()} className="gap-1.5"><Play className="w-4 h-4" /> Run</Button>
+          </div>
+        </div>
       </Modal>
 
       <Modal
-        open={traceWorkflow !== null}
-        onClose={() => setTraceWorkflow(null)}
-        title={traceWorkflow ? `Execution Trace: ${traceWorkflow.name}` : 'Execution Trace'}
+        open={traceRun !== null}
+        onClose={() => setTraceRun(null)}
+        title={traceRun ? `Run ${traceRun.status}${traceRun.error ? ` — ${traceRun.error}` : ''}` : 'Run'}
         size="xl"
       >
-        {traceWorkflow && <ExecutionTrace trace={trace.length > 0 ? trace : executions[0]?.trace || executions[0]?.events || []} />}
+        {traceRun && <ExecutionTrace trace={traceEntries} autoScroll={false} />}
       </Modal>
     </div>
   );

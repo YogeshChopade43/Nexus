@@ -1,12 +1,12 @@
-# Nexus V0
+# Nexus
 
-Nexus is a local agent runtime for connecting natural-language requests to application capabilities. The V0 release includes a React and TypeScript client, a FastAPI backend, SQLite-backed app connections, a tool registry, deterministic mock tools, safe execution events, and a basic workflow model.
+Nexus is a local agent runtime that connects natural-language requests and automated workflows to the tools of your apps. Apps are connected through **MCP servers** (Model Context Protocol): add any server and its tools become available to the chat agent and to workflows. Nexus has no per-app code.
 
 ## Requirements
 
-- Node.js 20 or newer
-- Python 3.9 or newer
-- PowerShell on Windows
+- Python 3.10 or newer (3.11 recommended; the MCP SDK requires 3.10+)
+- Node.js 20 or newer (for the frontend, and for `npx`-launched MCP servers)
+- `uv`/`uvx` if you use Python-based MCP servers
 
 ## Backend
 
@@ -14,18 +14,16 @@ From the repository root:
 
 ```powershell
 cd backend
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+py -3.11 -m venv .venv311
+.\.venv311\Scripts\Activate.ps1
 pip install -r requirements.txt
 copy .env.example .env
 uvicorn app.main:app --reload --port 8000
 ```
 
-The API is available at `http://localhost:8000`. The default database is `backend/data/nexus.db`; set `DATABASE_PATH` in `.env` to use another SQLite file.
+If `NEXUS_SECRET_KEY` is not set, a development key is generated in `data/.nexus_secret_key`; set your own in `.env` for anything long-lived. Keep it stable: it encrypts MCP server secrets and LLM API keys. The API listens on `http://localhost:8000`. The default database is `backend/data/nexus.db`; set `DATABASE_PATH` to change it.
 
 ## Frontend
-
-Open a second terminal and run:
 
 ```powershell
 cd frontend
@@ -33,48 +31,58 @@ npm install
 npm run dev
 ```
 
-Open the Vite URL printed by the command. The client calls `http://localhost:8000` by default. Set `VITE_API_URL` in `frontend/.env` to override the API address.
+The client calls `http://localhost:8000` by default; set `VITE_API_URL` in `frontend/.env` to override it.
 
-## V0 workflow
+## Connecting apps with MCP servers
 
-1. Open the Apps drawer.
-2. Turn on the apps whose capabilities Nexus may use.
-3. Ask the agent to perform a task, such as listing GitHub pull requests or checking Grafana logs.
-4. Review the high-level execution events shown with the response.
-5. Use the Workflows view to create and run a basic saved workflow.
+Open **MCP Servers** and click **Add server**:
 
-Connection state is persisted in SQLite. The included connectors are real API clients. Tool implementations are registered separately and can be swapped for production integrations.
+- **Local command (stdio)**: Nexus launches the server as a subprocess. Example: command `npx`, arguments `-y @notionhq/notion-mcp-server`, environment `NOTION_TOKEN=...`.
+- **Remote URL (streamable HTTP)**: Nexus connects to a hosted server. Example: URL `https://api.githubcopilot.com/mcp/`, header `Authorization: Bearer ghp_...`.
+
+Environment values and headers are stored encrypted and never returned by the API. Tools are named `<server>__<tool>`; tool results are available in workflows as `{{ steps.<id>.text }}` and, when the result is JSON, `{{ steps.<id>.data }}`. Nexus reconnects automatically if a server exits or the connection drops.
+
+Security: launching commands is code execution. The backend binds to `127.0.0.1` by default and accepts command-launched servers only from localhost requests. `NEXUS_ALLOW_REMOTE_STDIO=true` disables that check; only set it behind your own authentication.
 
 ## API summary
 
 - `GET /health`
-- `GET /api/apps`
-- `GET /api/apps/{app_id}`
-- `POST /api/apps/{app_id}/connection`
+- `GET|POST /api/mcp/servers`, `GET|PATCH|DELETE /api/mcp/servers/{id}`, `POST /api/mcp/servers/{id}/restart`
 - `POST /api/agent/run`
 - `GET /api/tools`
 - `GET /api/tools/available`
-- `GET /api/tools/app/{app_id}`
+- `GET /api/tools/app/{server_slug}`
 - `GET /api/workflows`
 - `GET /api/workflows/{workflow_id}`
 - `POST /api/workflows`
 - `PATCH /api/workflows/{workflow_id}`
 - `POST /api/workflows/{workflow_id}/run`
 
-## Validation
+## Workflows
 
-With the backend running on port 8000:
+Build workflows the Power Automate way: a **trigger**, then **steps** added with "+". Steps are tools from your connected MCP servers or built-ins: AI prompt, Condition (with "If yes" and "If no" branches), Compose, and Delay. Each field's ⚡ button inserts data from the trigger or earlier steps, such as `{{ trigger.inputs.repo }}`, `{{ steps.action_1.text }}`, or `{{ steps.action_1.data.items | length }}`. Actions can retry and can be set to continue if they fail.
+
+Triggers:
+
+- **Manually**: run with the **Run** button on the workflow list. Optional inputs (text, number, yes/no) are asked for before each run and are available as `{{ trigger.inputs.<name> }}`.
+- **Recurrence**: every N minutes (at least 5) or hours, daily, weekly on chosen weekdays, or monthly on a day, at a time in your timezone. The builder shows the next three runs. A raw cron expression is available under "More".
+- **When something new appears in an app**: Nexus calls an MCP tool on an interval (1–1440 minutes) and starts one run per new item, available as `{{ trigger.item }}`. The first check only records existing items. Each check starts at most 25 runs, and the last check's time and any error are shown on the workflow.
+- **Webhook**: a secret URL, shown on the workflow page after saving, runs the workflow when called.
+- **App event** (under "More"): receives events at `POST /api/webhooks/apps/{app_id}`. Set `NEXUS_WEBHOOK_TOKEN` (pass it as `?token=`) or, for GitHub, `NEXUS_GITHUB_WEBHOOK_SECRET` (signature checked). Without either, app webhooks are refused.
+
+Schedules and app checks only run while the workflow is **Active**.
+
+## Configuration notes
+
+- If `NEXUS_SECRET_KEY` is unset outside production, a key is generated in `data/.nexus_secret_key`. Back it up; losing it makes stored credentials unreadable.
+- `RATE_LIMIT` (default `300/minute`) sets the per-client API rate limit.
+
+## Tests
 
 ```powershell
 cd backend
-python smoke_test.py
+.\.venv311\Scripts\python -m pytest tests
+.\.venv311\Scripts\python smoke_test.py
 ```
 
-The smoke test uses the configured database, so use a temporary `DATABASE_PATH` when you want an isolated run:
-
-```powershell
-$env:DATABASE_PATH="$env:TEMP\nexus-validation.db"
-python smoke_test.py
-```
-
-The test covers health, app discovery, connection persistence, capability filtering, GitHub/Slack/Grafana behavior, workflow execution, and tool discovery.
+The tests launch a small fixture MCP server (`tests/fixtures/echo_mcp_server.py`) over both stdio and HTTP.
