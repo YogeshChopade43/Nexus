@@ -7,6 +7,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Response
 
+from app.api.routes.settings import user_timezone
 from app.core.database import get_connection, log_activity
 from app.mcp import server_availability
 from app.models.workflow import (
@@ -119,6 +120,8 @@ def _trigger_from_nodes(nodes: list[dict[str, Any]], fallback: Any, previous: Op
     else:
         data = {"type": "manual"}
 
+    if not data.get("timezone"):
+        data["timezone"] = user_timezone()
     allowed = set(TriggerConfig.model_fields)
     try:
         config = TriggerConfig(**{k: v for k, v in data.items() if k in allowed})
@@ -189,6 +192,7 @@ def preview_recurrence(payload: dict[str, Any]) -> dict[str, Any]:
     """Next three run times for a recurrence config, so the builder can show them."""
     allowed = {"frequency", "interval", "at", "weekdays", "month_day", "timezone"}
     try:
+        payload = {**payload, "timezone": payload.get("timezone") or user_timezone()}
         config = TriggerConfig(type="recurrence", **{k: v for k, v in payload.items() if k in allowed})
         runs = recurrence.next_runs(config)
     except (ValueError, TypeError) as exc:

@@ -73,13 +73,23 @@ def get_session(session_id: str) -> Optional[dict[str, Any]]:
         conn.close()
 
 
-def list_sessions(limit: int = 50) -> list[dict[str, Any]]:
-    """Session summaries (no message bodies) for the conversation list."""
+def list_sessions(limit: int = 50, query: str = "") -> list[dict[str, Any]]:
+    """Session summaries (no message bodies) for the conversation list; ``query`` matches title or messages."""
     conn = get_connection()
     try:
-        rows = conn.execute(
-            "SELECT * FROM agent_sessions ORDER BY updated_at DESC LIMIT ?", (limit,)
-        ).fetchall()
+        if query:
+            # Escape LIKE wildcards; search decoded message text (the column is JSON with \u escapes).
+            pattern = "%" + query.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%"
+            rows = conn.execute(
+                "SELECT * FROM agent_sessions WHERE title LIKE :p ESCAPE '!' OR EXISTS ("
+                "  SELECT 1 FROM json_each(agent_sessions.messages) WHERE json_extract(value, '$.content') LIKE :p ESCAPE '!'"
+                ") ORDER BY updated_at DESC LIMIT :limit",
+                {"p": pattern, "limit": limit},
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM agent_sessions ORDER BY updated_at DESC LIMIT ?", (limit,)
+            ).fetchall()
         return [
             {
                 "id": row["id"],
@@ -97,13 +107,20 @@ def list_sessions(limit: int = 50) -> list[dict[str, Any]]:
 
 
 def delete_session(session_id: str) -> bool:
+    """Delete a conversation and the documents attached to it."""
+    from app.rag import store
+
     conn = get_connection()
     try:
         cursor = conn.execute("DELETE FROM agent_sessions WHERE session_id = ?", (session_id,))
         conn.commit()
-        return cursor.rowcount > 0
+        deleted = cursor.rowcount > 0
+        chat = conn.execute("SELECT id FROM collections WHERE kind = 'chat' AND session_id = ?", (session_id,)).fetchone()
     finally:
         conn.close()
+    if chat:
+        store.delete_collection(chat[0])
+    return deleted
 
 
 def append_message(session_id: str, message: dict[str, Any]) -> dict[str, Any]:
@@ -141,6 +158,18 @@ def append_message(session_id: str, message: dict[str, Any]) -> dict[str, Any]:
     session["title"] = title
     session["updated_at"] = _now()
     return session
+
+
+def replace_messages(session_id: str, messages: list[dict[str, Any]]) -> None:
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE agent_sessions SET messages = ?, updated_at = ? WHERE session_id = ?",
+            (json.dumps(messages, default=str), _now(), session_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def set_metadata(session_id: str, metadata: dict[str, Any]) -> None:

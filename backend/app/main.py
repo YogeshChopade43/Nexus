@@ -16,6 +16,8 @@ from app.api.routes import (
     activity_router,
     agent_router,
     dashboard_router,
+    knowledge_router,
+    rag_router,
     mcp_router,
     health_router,
     llm_router,
@@ -51,6 +53,11 @@ def validate_environment() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    _ensure_rag_tables()
+    from app.rag.ingest import worker as rag_worker
+
+    rag_worker.start()
+    _import_legacy_documents()
     migrate_llm_api_keys()
     interrupted = mark_interrupted_runs()
     # Servers connect in the background; startup doesn't wait for slow npx/uvx launches.
@@ -64,8 +71,28 @@ async def lifespan(app: FastAPI):
     finally:
         if resuming:
             resuming.cancel()
+        await rag_worker.stop()
         stop_scheduler()
         await mcp_manager.stop_all()
+
+
+def _ensure_rag_tables() -> None:
+    from app.rag import store
+
+    conn = store.connect()
+    try:
+        store.ensure_vector_table(conn)
+    finally:
+        conn.close()
+
+
+def _import_legacy_documents() -> None:
+    from app.rag.legacy import import_legacy_documents
+
+    try:
+        import_legacy_documents()
+    except Exception:  # never block startup; the legacy tables stay for the next attempt
+        logger.exception("Importing documents from the old knowledge base failed")
 
 
 async def _resume(runs: list) -> None:
@@ -91,6 +118,8 @@ def create_app() -> FastAPI:
     for router in (
         health_router,
         dashboard_router,
+        knowledge_router,
+        rag_router,
         mcp_router,
         agent_router,
         workflows_router,

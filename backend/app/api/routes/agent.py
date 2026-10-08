@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import logging
 import asyncio
 from typing import Any, AsyncIterator, Optional
@@ -15,10 +16,18 @@ from app.agent.sessions import (
     get_history,
     get_session,
     list_sessions,
+    replace_messages,
     set_metadata,
 )
 from app.agent.abstract import BaseAgent, clean_history
+from app import knowledge
 from app.core.database import log_activity
+from app.knowledge import APP_ID as BUILTIN_APP
+from app.rag.answer import sources_block
+from app.rag.models import DEFAULT_WORKSPACE
+from app.rag.retrieve import retrieve
+from app.rag.tool import has_readable_documents, rag_turn, readable_document_names
+from app.llm.metering import usage_scope, usage_total
 from app.mcp import server_states
 from app.llm.utils import get_active_llm_provider, get_default_llm_provider
 from app.models.agent import (
@@ -27,6 +36,7 @@ from app.models.agent import (
     AgentSessionCreate,
     AgentSession,
     ApprovalRequest,
+    ChatSettings,
 )
 from app.tools import get_tool_registry
 
@@ -138,8 +148,9 @@ def create_agent_session(req: AgentSessionCreate) -> AgentSession:
 
 
 @router.get("/sessions")
-def list_agent_sessions(limit: int = Query(50, ge=1, le=200)) -> list[AgentSession]:
-    sessions = list_sessions(limit=limit)
+def list_agent_sessions(limit: int = Query(50, ge=1, le=200), q: str = "") -> list[AgentSession]:
+    """Conversations, newest first; ``q`` searches titles and message text."""
+    sessions = list_sessions(limit=limit, query=q.strip())
     return [AgentSession(**s) for s in sessions]
 
 
@@ -163,6 +174,8 @@ def delete_agent_session(session_id: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 MAX_ATTACHMENT_CHARS = 100_000
+HISTORY_KEEP = 20  # recent messages sent as-is; older ones are summarized
+SUMMARY_EVERY = 10  # re-summarize once this many more messages have scrolled out of the window
 
 
 def _task_with_attachments(req: AgentRunRequest) -> str:
@@ -175,6 +188,17 @@ def _task_with_attachments(req: AgentRunRequest) -> str:
     return task
 
 
+def _chat_settings(session: dict[str, Any], req: AgentRunRequest) -> ChatSettings:
+    """The request's settings (saved to the session), else what the session saved earlier."""
+    if req.chat_settings is not None and req.session_id is not None:
+        metadata = dict(session.get("metadata") or {})
+        metadata["settings"] = req.chat_settings.model_dump()
+        set_metadata(req.session_id, metadata)
+    if req.chat_settings is not None:
+        return req.chat_settings
+    return ChatSettings(**((session.get("metadata") or {}).get("settings") or {}))
+
+
 class _Prepared:
     """Everything one agent turn needs, shared by /run, /run/stream and /approval."""
 
@@ -184,18 +208,88 @@ class _Prepared:
             raise HTTPException(status_code=400, detail="task or message is required")
         self.req = req
         self.session_id = session_id
+        self.session = (get_session(session_id) if session_id else None) or {}
+        self.settings = _chat_settings(self.session, req)
         self.states = server_states()
         self.llm = _resolve_llm_provider(req)
+        if self.settings.temperature is not None and hasattr(self.llm, "defaults"):  # Metered providers
+            self.llm.defaults["temperature"] = self.settings.temperature
         self.registry = get_tool_registry()
         self.available, self.unavailable, self.tools_by_name, _ = _build_available_tools(req, self.registry, self.states)
-        self.history = _session_history(session_id, req)
+        if self.settings.servers is not None:  # this chat uses only the chosen servers (plus Nexus's own tools)
+            allowed = set(self.settings.servers) | {BUILTIN_APP}
+            self.available = [n for n in self.available if self.tools_by_name[n].app_id in allowed]
+        self.document_names = readable_document_names(DEFAULT_WORKSPACE, session_id)
+        if not self.document_names:
+            self.available = [n for n in self.available if n != f"{BUILTIN_APP}__search_documents"]
+        # Memory tools only when asked: offering tools sends the reply down the tool-calling path,
+        # which can't stream, so plain chats without servers would lose word-by-word streaming.
+        self.available = [n for n in self.available if n != f"{BUILTIN_APP}__notify"]  # a workflow step, not for chat
+        if not re.search(r"remember|forget|memor", self.task, re.IGNORECASE):
+            self.available = [n for n in self.available if n not in (f"{BUILTIN_APP}__remember", f"{BUILTIN_APP}__forget")]
+        self.history: list[dict[str, Any]] = []
+        self.summary = ""
+
+    async def load_history(self) -> None:
+        """Recent messages, plus a running summary of older ones so long chats don't forget."""
+        if not self.session_id:
+            self.history = clean_history(self.req.context.get("previousMessages", []))[-HISTORY_KEEP:]
+            return
+        messages = clean_history(self.session.get("messages") or [])
+        self.history = messages[-HISTORY_KEEP:]
+        older = messages[:-HISTORY_KEEP]
+        metadata = dict(self.session.get("metadata") or {})
+        self.summary = metadata.get("summary", "")
+        done = int(metadata.get("summary_upto") or 0)
+        if not older or self.llm is None or (self.summary and len(older) - done < SUMMARY_EVERY):
+            return
+        transcript = "\n".join(f"{m['role']}: {m['content'][:2000]}" for m in older[done:])
+        try:
+            reply = await self.llm.chat(messages=[
+                {"role": "system", "content": "Summarize this conversation for your own memory in under 250 words. "
+                 "Keep names, IDs, numbers, decisions and open questions. Plain text."},
+                {"role": "user", "content": (f"Summary so far:\n{self.summary}\n\n" if self.summary else "")
+                 + f"Conversation to add:\n{transcript}"},
+            ])
+            self.summary = (reply.get("content") or "").strip() or self.summary
+        except Exception as exc:  # keep the old summary; the chat itself still works
+            logger.warning("Could not summarize older messages: %s", exc)
+            return
+        metadata.update(summary=self.summary, summary_upto=len(older))
+        set_metadata(self.session_id, metadata)
+
+    def system_extra(self) -> str:
+        parts = [knowledge.memory_prompt()]
+        if self.document_names:
+            names = ", ".join(self.document_names)
+            parts.append(
+                f"## The user's documents\nThe user has uploaded these documents: {names}. Use "
+                f"{BUILTIN_APP}__search_documents before answering questions about the user (their name, job, "
+                "experience, plans) or anything these documents may cover. Search with a full question or several "
+                "keywords and synonyms, and search again with different words if the first results don't answer "
+                "the question. Cite the numbered sources you use like [1].")
+        if self.settings.instructions.strip():
+            parts.append(f"## Instructions for this conversation\n{self.settings.instructions.strip()}")
+        if self.summary:
+            parts.append(f"## Summary of earlier messages in this conversation\n{self.summary}")
+        return "\n\n".join(p for p in parts if p)
 
     def agent(self, on_event=None) -> BaseAgent:
         connections = {app_id: state["available"] for app_id, state in self.states.items()}
         return BaseAgent(self.registry, connections, on_event=on_event)
 
 
-def _finish(session_id: Optional[str], user_text: Optional[str], result: dict[str, Any], llm_provider_id: Optional[int]) -> AgentRunResponse:
+def _cite(result: dict[str, Any], turn) -> dict[str, Any]:
+    """Turn [n] markers in the final answer into citations of the sources gathered this turn."""
+    if result["status"] == "needs_approval" or not turn.sources:
+        return result
+    text, citations = turn.cite(result.get("response") or result.get("message", ""))
+    result.update(response=text, message=text, citations=citations)
+    return result
+
+
+def _finish(session_id: Optional[str], user_text: Optional[str], result: dict[str, Any], llm_provider_id: Optional[int],
+            usage: Optional[dict[str, Any]] = None) -> AgentRunResponse:
     """Persist the turn to the session (or the pending approval) and build the response."""
     if session_id:
         session = get_session(session_id) or {}
@@ -208,7 +302,8 @@ def _finish(session_id: Optional[str], user_text: Optional[str], result: dict[st
             metadata.pop("pending", None)
             append_message(session_id, {
                 "role": "assistant", "content": result.get("response") or result.get("message", ""),
-                "events": result["events"], "status": result["status"], "summary": result["summary"],
+                "events": result["events"], "status": result["status"], "summary": result["summary"], "usage": usage,
+                "citations": result.get("citations"),
             })
             tools_used = [e.get("tool_name") for e in result["events"] if e.get("type") == "tool_executed"]
             log_activity("message_received", f"Agent: {(user_text or 'approved action')[:80]}", result.get("summary", ""),
@@ -218,18 +313,33 @@ def _finish(session_id: Optional[str], user_text: Optional[str], result: dict[st
     return AgentRunResponse(
         status=result["status"], events=result["events"], summary=result["summary"],
         message=result.get("message", ""), response=result.get("response", result.get("message", "")),
-        session_id=session_id, pending_action=result.get("pending_action"),
+        session_id=session_id, pending_action=result.get("pending_action"), usage=usage,
+        citations=result.get("citations"),
     )
 
 
 async def _run(prepared: _Prepared, on_event=None) -> dict[str, Any]:
-    result = await prepared.agent(on_event).run(
-        task=prepared.task, context=prepared.req.context, available_tools=prepared.available,
-        llm_provider=prepared.llm, history=prepared.history,
-    )
-    if result["status"] != "needs_approval":
-        result = _augment_with_unavailable_apps(result, prepared.task, prepared.unavailable, prepared.tools_by_name, prepared.states)
-    return result
+    await prepared.load_history()
+    with rag_turn(DEFAULT_WORKSPACE, prepared.session_id) as turn:
+        system_extra = prepared.system_extra()
+        if prepared.settings.library_id:
+            # "Answer from this library": search it for every message and hand the model the sources.
+            found = await asyncio.to_thread(retrieve, prepared.task, session_id=prepared.session_id,
+                                            collection_ids=[prepared.settings.library_id])
+            turn.add(found)
+            system_extra += "\n\n## Sources from the attached library\n" + turn.block(found)
+        result = await prepared.agent(on_event).run(
+            task=prepared.task, context={**prepared.req.context, "system_extra": system_extra},
+            available_tools=prepared.available, llm_provider=prepared.llm, history=prepared.history,
+        )
+        if result["status"] != "needs_approval":
+            result = _augment_with_unavailable_apps(result, prepared.task, prepared.unavailable, prepared.tools_by_name, prepared.states)
+        return _cite(result, turn)
+
+
+async def _resume(prepared: _Prepared, state: dict[str, Any], approved: bool, on_event=None) -> dict[str, Any]:
+    with rag_turn(DEFAULT_WORKSPACE, prepared.session_id) as turn:
+        return _cite(await prepared.agent(on_event).resume(state, approved, prepared.llm), turn)
 
 
 def _ensure_session(req: AgentRunRequest) -> Optional[str]:
@@ -237,17 +347,7 @@ def _ensure_session(req: AgentRunRequest) -> Optional[str]:
     return req.session_id or create_session(title=(req.message or req.task)[:80])
 
 
-@router.post("/run", response_model=AgentRunResponse)
-async def run_agent(req: AgentRunRequest) -> AgentRunResponse:
-    session_id = _ensure_session(req)
-    prepared = _Prepared(req, session_id)
-    result = await _run(prepared)
-    return _finish(session_id, prepared.task, result, req.llm_provider_id)
-
-
-@router.post("/sessions/{session_id}/approval", response_model=AgentRunResponse)
-async def answer_approval(session_id: str, body: ApprovalRequest) -> AgentRunResponse:
-    """Approve or deny the tool call a paused run is waiting on, then continue the run."""
+def _pending(session_id: str) -> tuple[dict[str, Any], _Prepared]:
     session = get_session(session_id)
     pending = (session or {}).get("metadata", {}).get("pending")
     if not pending:
@@ -256,31 +356,59 @@ async def answer_approval(session_id: str, body: ApprovalRequest) -> AgentRunRes
     prepared = _Prepared(req, session_id)
     if prepared.llm is None:
         raise HTTPException(status_code=400, detail="No LLM provider configured")
-    agent = prepared.agent()
-    schemas = agent._build_tool_schemas(prepared.available)
-    result = await agent.resume(pending["state"], body.approved, prepared.llm, schemas)
-    return _finish(session_id, None, result, req.llm_provider_id)
+    return pending, prepared
 
 
-@router.post("/run/stream")
-async def run_agent_stream(req: AgentRunRequest):
-    """Server-sent events: tool_call, tool_result, approval_needed and delta while working, then done."""
-    session_id = _ensure_session(req)
-    prepared = _Prepared(req, session_id)
-    if prepared.llm is None:
-        raise HTTPException(status_code=400, detail="An LLM provider is required")
+@router.post("/run", response_model=AgentRunResponse)
+async def run_agent(req: AgentRunRequest) -> AgentRunResponse:
+    req.session_id = _ensure_session(req)
+    prepared = _Prepared(req, req.session_id)
+    with usage_scope() as calls:
+        result = await _run(prepared)
+    return _finish(req.session_id, prepared.task, result, req.llm_provider_id, usage_total(calls))
+
+
+@router.post("/sessions/{session_id}/approval", response_model=AgentRunResponse)
+async def answer_approval(session_id: str, body: ApprovalRequest) -> AgentRunResponse:
+    """Approve or deny the tool call a paused run is waiting on, then continue the run."""
+    pending, prepared = _pending(session_id)
+    with usage_scope() as calls:
+        result = await _resume(prepared, pending["state"], body.approved)
+    return _finish(session_id, None, result, prepared.req.llm_provider_id, usage_total(calls))
+
+
+def _stream(session_id: str, user_text: Optional[str], llm_provider_id: Optional[int], work) -> StreamingResponse:
+    """Run ``work(on_event)`` as server-sent events: progress events, then ``done`` (or ``error``).
+
+    If the client disconnects (the Stop button), the run is cancelled and what was said so far is
+    saved with status ``cancelled``.
+    """
     queue: asyncio.Queue = asyncio.Queue()
+    partial: list[str] = []
+
+    async def on_event(event: dict[str, Any]) -> None:
+        if event.get("type") == "delta":
+            partial.append(event.get("text", ""))
+        await queue.put(event)
 
     async def worker() -> None:
-        try:
-            result = await _run(prepared, on_event=queue.put)
-            final = _finish(session_id, prepared.task, result, req.llm_provider_id)
-            await queue.put({"type": "done", **final.model_dump()})
-        except Exception as exc:
-            logger.warning("Stream error: %s", exc)
-            await queue.put({"type": "error", "error": str(exc)})
-        finally:
-            await queue.put(None)
+        with usage_scope() as calls:
+            try:
+                result = await work(on_event)
+                final = _finish(session_id, user_text, result, llm_provider_id, usage_total(calls))
+                await queue.put({"type": "done", **final.model_dump()})
+            except asyncio.CancelledError:
+                text = "".join(partial).strip()
+                _finish(session_id, user_text, {
+                    "status": "cancelled", "events": [], "summary": "Stopped by the user",
+                    "response": f"{text}\n\n_(stopped)_" if text else "_(stopped before answering)_",
+                }, llm_provider_id, usage_total(calls))
+                raise
+            except Exception as exc:
+                logger.warning("Stream error: %s", exc)
+                await queue.put({"type": "error", "error": str(exc)})
+            finally:
+                await queue.put(None)
 
     async def event_generator() -> AsyncIterator[str]:
         task = asyncio.create_task(worker())
@@ -290,8 +418,55 @@ async def run_agent_stream(req: AgentRunRequest):
         finally:
             if not task.done():
                 task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@router.post("/run/stream")
+async def run_agent_stream(req: AgentRunRequest):
+    """Server-sent events: tool_call, tool_result, approval_needed and delta while working, then done."""
+    req.session_id = _ensure_session(req)
+    prepared = _Prepared(req, req.session_id)
+    if prepared.llm is None:
+        raise HTTPException(status_code=400, detail="An LLM provider is required")
+    return _stream(req.session_id, prepared.task, req.llm_provider_id, lambda on_event: _run(prepared, on_event))
+
+
+@router.post("/sessions/{session_id}/approval/stream")
+async def answer_approval_stream(session_id: str, body: ApprovalRequest):
+    """Like /approval, but streams the rest of the reply."""
+    pending, prepared = _pending(session_id)
+    return _stream(session_id, None, prepared.req.llm_provider_id,
+                   lambda on_event: _resume(prepared, pending["state"], body.approved, on_event))
+
+
+@router.post("/sessions/{session_id}/rewind")
+def rewind_session(session_id: str) -> dict[str, Any]:
+    """Remove the last user message and everything after it (for Retry and Edit); returns that message."""
+    session = get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    messages = session["messages"]
+    last_user = next((i for i in range(len(messages) - 1, -1, -1) if messages[i].get("role") == "user"), None)
+    if last_user is None:
+        raise HTTPException(status_code=409, detail="There is no message to retry")
+    replace_messages(session_id, messages[:last_user])
+    metadata = dict(session.get("metadata") or {})
+    metadata.pop("pending", None)
+    set_metadata(session_id, metadata)
+    return {"message": messages[last_user].get("content", "")}
+
+
+@router.put("/sessions/{session_id}/settings")
+def save_chat_settings(session_id: str, settings: ChatSettings) -> dict[str, Any]:
+    session = get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    metadata = dict(session.get("metadata") or {})
+    metadata["settings"] = settings.model_dump()
+    set_metadata(session_id, metadata)
+    return metadata["settings"]
 
 
 @router.post("/sessions/{session_id}/workflow")

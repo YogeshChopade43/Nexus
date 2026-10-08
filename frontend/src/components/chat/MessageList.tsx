@@ -8,6 +8,8 @@ export interface MessageListProps {
   messages: ChatMessage[];
   onCopy?: (text: string) => void;
   onApprove?: (approved: boolean) => void;
+  onRetry?: () => void;
+  onEdit?: (text: string) => void;
   autoScroll?: boolean;
 }
 
@@ -17,7 +19,9 @@ export interface MessageListRef {
 }
 
 export const MessageList = forwardRef<MessageListRef, MessageListProps>(
-  ({ messages, onCopy, onApprove, autoScroll = true }, ref) => {
+  ({ messages, onCopy, onApprove, onRetry, onEdit, autoScroll = true }, ref) => {
+    const lastUser = messages.map(m => m.role).lastIndexOf('user');
+    const lastAssistant = messages.map(m => m.role).lastIndexOf('assistant');
     const scrollAreaRef = useRef<HTMLDivElement>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -59,6 +63,8 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(
               message={message}
               onCopy={onCopy}
               onApprove={index === messages.length - 1 ? onApprove : undefined}
+              onRetry={index === lastAssistant && index > lastUser && messages[index].status !== 'needs_approval' ? onRetry : undefined}
+              onEdit={index === lastUser ? onEdit : undefined}
             />
           ))}
           <div ref={messagesEndRef} />

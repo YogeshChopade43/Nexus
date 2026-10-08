@@ -1,0 +1,50 @@
+{
+  "real": {
+    "keyword": {
+      "hit@8": 1.0,
+      "recall@8": 0.971,
+      "mrr": 0.847
+    },
+    "vector": {
+      "hit@8": 1.0,
+      "recall@8": 1.0,
+      "mrr": 0.967
+    },
+    "hybrid": {
+      "hit@8": 1.0,
+      "recall@8": 0.971,
+      "mrr": 0.957
+    },
+    "hybrid+rerank": {
+      "hit@8": 1.0,
+      "recall@8": 0.971,
+      "mrr": 0.938,
+      "no_answer": 1.0,
+      "false_no_answer": 0.229
+    }
+  },
+  "fake": {
+    "keyword": {
+      "hit@8": 1.0,
+      "recall@8": 0.971,
+      "mrr": 0.847
+    },
+    "vector": {
+      "hit@8": 0.914,
+      "recall@8": 0.857,
+      "mrr": 0.582
+    },
+    "hybrid": {
+      "hit@8": 0.971,
+      "recall@8": 0.943,
+      "mrr": 0.777
+    },
+    "hybrid+rerank": {
+      "hit@8": 0.971,
+      "recall@8": 0.943,
+      "mrr": 0.805,
+      "no_answer": 0.2,
+      "false_no_answer": 0.057
+    }
+  }
+}

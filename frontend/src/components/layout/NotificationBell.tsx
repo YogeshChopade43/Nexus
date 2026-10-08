@@ -1,22 +1,43 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertCircle, Bell, RotateCcw } from 'lucide-react';
+import { AlarmClock, AlertCircle, Bell, RotateCcw } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { cn, formatRelativeTime } from '../../lib/utils';
 import { activityService, type Notifications } from '../../services/activity';
 
 const POLL_MS = 30_000;
 
-/** Failed runs, disconnected servers and resumed runs, with an unread count. */
+const canNotify = () => typeof window !== 'undefined' && 'Notification' in window;
+
+/** Failed runs, disconnected servers, resumed runs and reminders, with an unread count.
+ *  New reminders open an on-screen pop-up and, when allowed, a desktop notification (while Nexus is open). */
 export function NotificationBell() {
   const [data, setData] = useState<Notifications>({ unread: 0, items: [] });
   const [open, setOpen] = useState(false);
+  const [permission, setPermission] = useState(() => (canNotify() ? Notification.permission : 'denied'));
+  const [popups, setPopups] = useState<Notifications['items']>([]); // reminders shown on screen until dismissed
+  const newestSeen = useRef<number | null>(null); // items up to this id were already there or already shown
   const containerRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
 
   const refresh = useCallback(() => {
-    activityService.getNotifications().then(setData).catch(() => {});
+    activityService.getNotifications().then(next => {
+      const seen = newestSeen.current;
+      const fresh = seen === null ? [] : next.items.filter(i => i.type === 'reminder' && Number(i.id) > seen);
+      if (fresh.length) {
+        setPopups(list => [...list, ...fresh]);
+        if (canNotify() && Notification.permission === 'granted') {
+          fresh.forEach(i => new Notification(i.title, { body: i.description || undefined }));
+        }
+      }
+      newestSeen.current = Math.max(seen ?? 0, ...next.items.map(i => Number(i.id) || 0));
+      setData(next);
+    }).catch(() => {});
   }, []);
+
+  const allowAlerts = () => {
+    void Notification.requestPermission().then(setPermission);
+  };
 
   useEffect(() => {
     refresh();
@@ -46,7 +67,8 @@ export function NotificationBell() {
 
   const go = (type: string) => {
     setOpen(false);
-    navigate(type === 'server_error' ? '/servers' : '/workflows');
+    if (type === 'reminder') return;
+    navigate(type === 'server_error' ? '/servers' : type === 'document_failed' ? '/knowledge' : '/workflows');
   };
 
   return (
@@ -69,6 +91,12 @@ export function NotificationBell() {
       {open && (
         <div className="absolute right-0 mt-2 w-80 max-w-[calc(100vw-2rem)] rounded-xl border border-nexus-border bg-nexus-bg-secondary shadow-lg z-50" role="dialog" aria-label="Notifications">
           <div className="px-4 py-3 border-b border-nexus-border text-sm font-medium text-nexus-text">Notifications</div>
+          {permission === 'default' && (
+            <div className="px-4 py-2 border-b border-nexus-border text-xs text-nexus-text-secondary flex items-center gap-2">
+              <span className="flex-1">Get reminders as desktop pop-ups while Nexus is open.</span>
+              <Button size="sm" variant="secondary" onClick={allowAlerts}>Turn on desktop alerts</Button>
+            </div>
+          )}
           {data.items.length === 0 ? (
             <p className="px-4 py-6 text-sm text-nexus-text-muted text-center">Nothing needs your attention.</p>
           ) : (
@@ -80,9 +108,11 @@ export function NotificationBell() {
                     onClick={() => go(item.type)}
                     className={cn('w-full text-left px-4 py-3 flex gap-2.5 hover:bg-nexus-bg-tertiary', item.unread && 'bg-nexus-accent/5')}
                   >
-                    {item.type === 'workflow_resumed'
-                      ? <RotateCcw className="w-4 h-4 mt-0.5 text-nexus-accent flex-shrink-0" />
-                      : <AlertCircle className="w-4 h-4 mt-0.5 text-red-400 flex-shrink-0" />}
+                    {item.type === 'reminder'
+                      ? <AlarmClock className="w-4 h-4 mt-0.5 text-nexus-accent flex-shrink-0" />
+                      : item.type === 'workflow_resumed'
+                        ? <RotateCcw className="w-4 h-4 mt-0.5 text-nexus-accent flex-shrink-0" />
+                        : <AlertCircle className="w-4 h-4 mt-0.5 text-red-400 flex-shrink-0" />}
                     <span className="min-w-0">
                       <span className="block text-sm text-nexus-text">{item.title}</span>
                       {item.description && <span className="block text-xs text-nexus-text-secondary truncate">{item.description}</span>}
@@ -93,6 +123,21 @@ export function NotificationBell() {
               ))}
             </ul>
           )}
+        </div>
+      )}
+      {popups.length > 0 && (
+        <div className="fixed bottom-4 right-4 left-4 sm:left-auto sm:w-80 z-[60] space-y-2">
+          {popups.map(p => (
+            <div key={p.id} role="alertdialog" aria-labelledby={`reminder-${p.id}`}
+              className="rounded-xl border border-nexus-accent bg-nexus-bg-secondary shadow-xl p-4 flex gap-3">
+              <AlarmClock className="w-5 h-5 text-nexus-accent flex-shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <p id={`reminder-${p.id}`} className="text-sm font-semibold text-nexus-text">{p.title}</p>
+                {p.description && <p className="text-sm text-nexus-text-secondary mt-0.5">{p.description}</p>}
+                <Button size="sm" className="mt-3" onClick={() => setPopups(list => list.filter(x => x.id !== p.id))}>Dismiss</Button>
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </div>

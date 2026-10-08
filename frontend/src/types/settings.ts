@@ -12,6 +12,8 @@ export interface UserSettings {
   dailyTokenLimit: number;
   /** US$ per million tokens, by model name. */
   llmPrices: Record<string, { input: number; output: number }>;
+  /** Re-score document search results with the local reranker. */
+  ragRerank: boolean;
 }
 
 export interface NotificationSettings {

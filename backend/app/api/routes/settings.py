@@ -11,6 +11,7 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
+from zoneinfo import available_timezones
 
 from fastapi import APIRouter, HTTPException, Request, Response
 
@@ -53,10 +54,11 @@ DEFAULT_USER_SETTINGS = {
     "theme": "dark",
     "retentionDays": 30,  # runs and activity older than this are deleted daily; 0 keeps everything
     "notificationsReadAt": None,  # notifications up to this time have been seen
+    "ragRerank": True,  # rerank document search results with the local cross-encoder
     "dailyTokenLimit": 0,  # AI tokens per day (UTC) across chat and workflows; 0 = no limit
     "llmPrices": {},  # model -> {"input": $, "output": $} per million tokens, for cost estimates
     "language": "en-US",
-    "timezone": "America/New_York",
+    "timezone": "UTC",  # IANA name; schedules without their own timezone use it
     "notifications": {
         "email": True,
         "push": True,
@@ -97,11 +99,21 @@ def _get_user_settings_row(conn) -> Optional[dict[str, Any]]:
     return dict(row)
 
 
+def normalize_timezone(name: Any) -> str:
+    """A valid IANA timezone: the name itself, the zone it is the city of ("Kolkata"), or UTC."""
+    zones = available_timezones()
+    name = str(name or "").strip()
+    if name in zones:
+        return name
+    return next((z for z in sorted(zones) if z.lower().endswith("/" + name.lower().replace(" ", "_"))), "UTC") if name else "UTC"
+
+
 def _read_user_settings(conn) -> dict[str, Any]:
     merged = copy.deepcopy(DEFAULT_USER_SETTINGS)
     row = _get_user_settings_row(conn)
     if row:
         _deep_merge(merged, _load_json(row.get("settings"), {}))
+    merged["timezone"] = normalize_timezone(merged.get("timezone"))
     return merged
 
 
@@ -132,6 +144,8 @@ def get_user_settings() -> dict[str, Any]:
 
 @router.patch("/user")
 def update_user_settings(settings: dict[str, Any]) -> dict[str, Any]:
+    if "timezone" in settings and settings["timezone"] not in available_timezones():
+        raise HTTPException(status_code=422, detail=f"Unknown timezone '{settings['timezone']}'. Choose one like Asia/Kolkata.")
     conn = _conn()
     try:
         row = _get_user_settings_row(conn)
@@ -199,6 +213,10 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> None:
             _deep_merge(base[key], value)
         else:
             base[key] = value
+
+def user_timezone() -> str:
+    return load_user_settings()["timezone"]
+
 
 def load_user_settings() -> dict[str, Any]:
     conn = _conn()

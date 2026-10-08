@@ -5,6 +5,7 @@ import path from 'node:path';
 // A fresh backend (temporary database) and frontend just for the browser tests.
 const API_PORT = 8765;
 const WEB_PORT = 5765;
+export const LLM_PORT = 8766;
 const database = path.join(os.tmpdir(), `nexus-e2e-${Date.now()}`, 'nexus.db');
 const python = process.env.NEXUS_PYTHON
   ?? (process.platform === 'win32' ? '../backend/.venv311/Scripts/python.exe' : '../backend/.venv311/bin/python');
@@ -22,12 +23,21 @@ export default defineConfig({
   },
   webServer: [
     {
+      // Stands in for an AI provider, so chat can be tested without a real model.
+      command: `"${python}" e2e/fake_llm.py ${LLM_PORT}`,
+      url: `http://127.0.0.1:${LLM_PORT}/`,
+      reuseExistingServer: false,
+      timeout: 30_000,
+    },
+    {
       command: `"${python}" -m uvicorn app.main:app --host 127.0.0.1 --port ${API_PORT}`,
       cwd: '../backend',
       url: `http://127.0.0.1:${API_PORT}/health`,
       env: {
         DATABASE_PATH: database,
         NEXUS_SECRET_KEY: 'e2e-secret',
+        NEXUS_RAG_EMBEDDER: 'fake', // deterministic stand-in models: no 220 MB download in tests
+        NEXUS_RAG_RERANKER: 'fake',
         CORS_ORIGINS: `http://localhost:${WEB_PORT}`,
       },
       reuseExistingServer: false,

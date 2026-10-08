@@ -188,12 +188,12 @@ def clear_activities() -> dict[str, Any]:
     finally:
         conn.close()
 
-NOTIFY_TYPES = ("workflow_failed", "server_error", "workflow_resumed")
+NOTIFY_TYPES = ("workflow_failed", "server_error", "workflow_resumed", "document_failed", "reminder")
 
 
 @router.get("/notifications")
 def get_notifications(limit: int = Query(20, ge=1, le=100)) -> dict[str, Any]:
-    """Things that need attention (failed runs, disconnected servers) and how many are unread."""
+    """Things that need attention (failed runs, disconnected servers), reminders, and how many are unread."""
     from app.api.routes.settings import load_user_settings
 
     settings = load_user_settings()

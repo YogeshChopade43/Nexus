@@ -10,10 +10,19 @@ class Attachment(BaseModel):
     content: str = Field(max_length=1_000_000)
 
 
+class ChatSettings(BaseModel):
+    """Per-conversation options, saved with the session."""
+    servers: Optional[List[str]] = None  # MCP server slugs this chat may use; None = all
+    instructions: str = Field(default="", max_length=4000)
+    temperature: Optional[float] = Field(default=None, ge=0, le=2)
+    library_id: Optional[int] = None  # answer from this library: retrieve before every message
+
+
 class AgentRunRequest(BaseModel):
     task: str = ""
     message: str = ""
-    attachments: List[Attachment] = Field(default_factory=list, max_length=5)
+    attachments: List[Attachment] = Field(default_factory=list, max_length=10)
+    chat_settings: Optional[ChatSettings] = None
     context: dict[str, Any] = Field(default_factory=dict)
     available_tools: List[str] = Field(default_factory=list)
     llm_provider_id: Optional[int] = None
@@ -29,6 +38,8 @@ class AgentRunResponse(BaseModel):
     response: str = ""
     session_id: Optional[str] = None
     pending_action: Optional[dict[str, Any]] = None
+    usage: Optional[dict[str, Any]] = None  # tokens (and cost, when prices are set) for this reply
+    citations: Optional[List[dict[str, Any]]] = None  # sources cited as [n] in the reply
 
 
 class ApprovalRequest(BaseModel):

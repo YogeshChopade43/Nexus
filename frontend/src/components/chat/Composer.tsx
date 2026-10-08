@@ -1,36 +1,44 @@
 import { useState, useRef, useEffect, KeyboardEvent } from 'react';
 import { Button } from '../ui/Button';
-import { Paperclip, Send, Sparkles, X } from 'lucide-react';
+import { Paperclip, Send, Sparkles, Square, X } from 'lucide-react';
 import { Textarea } from '../ui/Input';
 import type { ChatAttachment } from '../../types/chat';
 
-const MAX_FILES = 5;
-const MAX_FILE_BYTES = 1_000_000;
+const MAX_FILES = 10;
+const MAX_FILE_BYTES = 20_000_000;
+/** Text files up to this size go straight into the message; bigger ones and PDFs into the knowledge base. */
+export const INLINE_CHARS = 20_000;
+
+type Picked = { name: string; inline: ChatAttachment } | { name: string; upload: File };
 
 interface ComposerProps {
-  onSend: (content: string, attachments: ChatAttachment[]) => void;
+  onSend: (content: string, attachments: ChatAttachment[], uploads: File[]) => void;
   disabled?: boolean;
   placeholder?: string;
   maxLength?: number;
+  /** While a reply is being written: show Stop instead of Send. */
+  running?: boolean;
+  onStop?: () => void;
 }
 
-export function Composer({ onSend, disabled, placeholder = 'Message Agent...', maxLength = 4000 }: ComposerProps) {
+export function Composer({ onSend, disabled, placeholder = 'Message Agent...', maxLength = 4000, running, onStop }: ComposerProps) {
   const [value, setValue] = useState('');
-  const [files, setFiles] = useState<ChatAttachment[]>([]);
+  const [files, setFiles] = useState<Picked[]>([]);
   const [fileError, setFileError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const addFiles = async (picked: FileList | null) => {
     setFileError(null);
-    const added: ChatAttachment[] = [];
+    const added: Picked[] = [];
     for (const file of Array.from(picked ?? [])) {
       if (files.length + added.length >= MAX_FILES) { setFileError(`Up to ${MAX_FILES} files per message`); break; }
-      if (file.size > MAX_FILE_BYTES) { setFileError(`${file.name} is larger than 1 MB`); continue; }
+      if (file.size > MAX_FILE_BYTES) { setFileError(`${file.name} is larger than 20 MB`); continue; }
+      if (file.name.toLowerCase().endsWith('.pdf')) { added.push({ name: file.name, upload: file }); continue; }
       const content = await file.text();
-      // Text only: the agent reads file contents as text, so binary files would just be noise.
-      if (content.includes('\u0000')) { setFileError(`${file.name} isn't a text file`); continue; }
-      added.push({ name: file.name, content });
+      // Text and PDF only: other binary files would just be noise to the agent.
+      if (content.includes('\u0000')) { setFileError(`${file.name} isn't a text file or PDF`); continue; }
+      added.push(content.length > INLINE_CHARS ? { name: file.name, upload: file } : { name: file.name, inline: { name: file.name, content } });
     }
     setFiles(prev => [...prev, ...added]);
     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -48,7 +56,7 @@ export function Composer({ onSend, disabled, placeholder = 'Message Agent...', m
     if (!trimmed && files.length === 0) return;
     if (disabled) return;
 
-    onSend(trimmed, files);
+    onSend(trimmed, files.flatMap(f => ('inline' in f ? [f.inline] : [])), files.flatMap(f => ('upload' in f ? [f.upload] : [])));
     setValue('');
     setFiles([]);
     setFileError(null);
@@ -68,7 +76,7 @@ export function Composer({ onSend, disabled, placeholder = 'Message Agent...', m
           {files.map((file, i) => (
             <span key={i} className="inline-flex items-center gap-1 px-2 py-1 rounded bg-nexus-bg-tertiary text-xs text-nexus-text-secondary">
               <Paperclip className="w-3 h-3" />
-              {file.name}
+              {file.name}{'upload' in file && <span className="text-nexus-text-muted"> → knowledge</span>}
               <button type="button" onClick={() => setFiles(prev => prev.filter((_, j) => j !== i))} aria-label={`Remove ${file.name}`} className="hover:text-nexus-text">
                 <X className="w-3 h-3" />
               </button>
@@ -78,14 +86,16 @@ export function Composer({ onSend, disabled, placeholder = 'Message Agent...', m
         </div>
       )}
       <div className="flex items-end gap-2">
-        <input ref={fileInputRef} type="file" multiple hidden onChange={(e) => void addFiles(e.target.files)} />
+        <input ref={fileInputRef} type="file" multiple hidden accept=".pdf,.txt,.md,.csv,.json,.log,.yaml,.yml,.xml,.html,.py,.ts,.tsx,.js,.sql,text/*,application/pdf"
+          onChange={(e) => void addFiles(e.target.files)} />
         <Button
           variant="ghost"
           size="sm"
           className="h-10 w-10 p-0 flex-shrink-0"
           onClick={() => fileInputRef.current?.click()}
           disabled={disabled || files.length >= MAX_FILES}
-          aria-label="Attach text files"
+          aria-label="Attach files"
+          title="Attach text files or PDFs (big ones go to the knowledge base)"
         >
           <Paperclip className="w-5 h-5" />
         </Button>
@@ -109,15 +119,21 @@ export function Composer({ onSend, disabled, placeholder = 'Message Agent...', m
           )}
         </div>
 
-        <Button
-          onClick={handleSubmit}
-          disabled={disabled || (!value.trim() && files.length === 0)}
-          size="sm"
-          className="h-10 w-10 p-0 flex-shrink-0"
-          aria-label="Send message"
-        >
-          <Send className="w-5 h-5" />
-        </Button>
+        {running && onStop ? (
+          <Button onClick={onStop} size="sm" variant="secondary" className="h-10 w-10 p-0 flex-shrink-0" aria-label="Stop" title="Stop">
+            <Square className="w-4 h-4 fill-current" />
+          </Button>
+        ) : (
+          <Button
+            onClick={handleSubmit}
+            disabled={disabled || (!value.trim() && files.length === 0)}
+            size="sm"
+            className="h-10 w-10 p-0 flex-shrink-0"
+            aria-label="Send message"
+          >
+            <Send className="w-5 h-5" />
+          </Button>
+        )}
       </div>
 
       <div className="flex items-center justify-between mt-2 text-xs text-nexus-text-muted">

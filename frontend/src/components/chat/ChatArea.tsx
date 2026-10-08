@@ -3,7 +3,9 @@ import { cn } from '../../lib/utils';
 import { MessageList, MessageListRef } from './MessageList';
 import { Composer } from './Composer';
 import { Button } from '../ui/Button';
-import { Bot, Plus, Settings, Sparkles, AlertCircle, Trash2, Workflow } from 'lucide-react';
+import { Bot, Plus, Settings, Sparkles, AlertCircle, Workflow, History, SlidersHorizontal } from 'lucide-react';
+import { ChatSettingsModal } from './ChatSettingsModal';
+import { ConversationPanel } from './ConversationPanel';
 import { useChatContext } from '../../hooks/useChatContext';
 import { api } from '../../services/api';
 import { Link, useNavigate } from 'react-router-dom';
@@ -19,22 +21,26 @@ export function ChatArea({ className }: ChatAreaProps) {
   const [toolCount, setToolCount] = useState<number | null>(null);
   const [converting, setConverting] = useState(false);
   const [convertError, setConvertError] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const navigate = useNavigate();
   const {
-    messages, sending, error, sendMessage, answerApproval, clearMessages, hasLLM,
-    providers, providerId, setProviderId, sessionId, sessions, openSession, deleteSession,
+    messages, sending, error, sendMessage, answerApproval, stop, retry, clearMessages, hasLLM,
+    providers, providerId, setProviderId, sessionId, sessions, openSession, deleteSession, refreshSessions,
+    settings, saveSettings,
   } = useChatContext();
+  const customized = settings.servers !== null || settings.instructions.trim() !== '' || settings.temperature !== null || settings.library_id !== null;
   const messageListRef = useRef<MessageListRef>(null);
 
   useEffect(() => {
     api.get<{ tools: string[] }>('/api/tools/available')
-      .then(r => setToolCount(r.tools.length))
+      .then(r => setToolCount(r.tools.filter(name => !name.startsWith('nexus__')).length)) // built-ins aren't from servers
       .catch(() => setToolCount(null));
   }, []);
 
-  const handleSend = useCallback(async (content: string, attachments: ChatAttachment[]) => {
-    // No explicit tool list: the backend offers every tool from connected MCP servers.
-    await sendMessage(content, attachments);
+  const handleSend = useCallback(async (content: string, attachments: ChatAttachment[], uploads: File[]) => {
+    // No explicit tool list: the backend offers the tools of connected MCP servers (see chat settings).
+    await sendMessage(content, attachments, uploads);
     messageListRef.current?.scrollToBottom();
   }, [sendMessage]);
 
@@ -59,7 +65,7 @@ export function ChatArea({ className }: ChatAreaProps) {
   };
 
   return (
-    <div className={cn('flex flex-col h-full bg-nexus-bg-secondary border-nexus-border rounded-xl overflow-hidden', className)}>
+    <div className={cn('relative flex flex-col h-full bg-nexus-bg-secondary border-nexus-border rounded-xl overflow-hidden', className)}>
       <div className="p-4 border-b-nexus-border border-b flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg bg-nexus-accent-dim flex items-center justify-center">
@@ -87,29 +93,13 @@ export function ChatArea({ className }: ChatAreaProps) {
               ))}
             </select>
           )}
-          {sessions.length > 0 && (
-            <select
-              value={sessionId ?? ''}
-              onChange={(e) => { if (e.target.value) void openSession(e.target.value); else clearMessages(); }}
-              aria-label="Conversation"
-              className="max-w-[12rem] px-2 py-1.5 rounded-lg bg-nexus-bg-tertiary border border-nexus-border text-xs text-nexus-text focus:outline-none focus:ring-2 focus:ring-nexus-accent"
-            >
-              <option value="">New conversation</option>
-              {sessions.map(s => (
-                <option key={s.session_id} value={s.session_id}>{s.title || 'Untitled conversation'}</option>
-              ))}
-            </select>
-          )}
-          {sessionId && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => { if (window.confirm('Delete this conversation?')) void deleteSession(sessionId); }}
-              aria-label="Delete conversation"
-            >
-              <Trash2 className="w-4 h-4" />
-            </Button>
-          )}
+          <Button variant="ghost" size="sm" onClick={() => setHistoryOpen(o => !o)} aria-label="Conversations" title="Past conversations" aria-expanded={historyOpen}>
+            <History className="w-4 h-4" />
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => setSettingsOpen(true)} aria-label="Chat settings" title="Settings for this chat"
+            className={cn(customized && 'text-nexus-accent')}>
+            <SlidersHorizontal className="w-4 h-4" />
+          </Button>
           {sessionId && usedTools && (
             <Button
               variant="secondary"
@@ -136,6 +126,18 @@ export function ChatArea({ className }: ChatAreaProps) {
         </div>
       </div>
 
+      {historyOpen && (
+        <ConversationPanel
+          sessions={sessions}
+          currentId={sessionId}
+          onSearch={(q) => void refreshSessions(q)}
+          onOpen={(id) => { void openSession(id); setHistoryOpen(false); }}
+          onDelete={(id) => void deleteSession(id)}
+          onClose={() => setHistoryOpen(false)}
+        />
+      )}
+      <ChatSettingsModal open={settingsOpen} settings={settings} onSave={saveSettings} onClose={() => setSettingsOpen(false)} />
+
       {convertError && (
         <div className="p-3 border-b-nexus-danger/30 border-b bg-red-500/5 text-sm text-nexus-danger">{convertError}</div>
       )}
@@ -153,6 +155,8 @@ export function ChatArea({ className }: ChatAreaProps) {
         messages={messages}
         onCopy={handleCopy}
         onApprove={sending ? undefined : (approved) => void answerApproval(approved)}
+        onRetry={sending || !sessionId ? undefined : () => void retry()}
+        onEdit={sending || !sessionId ? undefined : (text) => void retry(text)}
         autoScroll={true}
       />
       {!hasLLM && messages.length === 0 && (
@@ -177,6 +181,8 @@ export function ChatArea({ className }: ChatAreaProps) {
       <Composer
         onSend={handleSend}
         disabled={sending || !hasLLM || awaiting}
+        running={sending}
+        onStop={stop}
         placeholder={!hasLLM ? 'Configure an LLM provider in Settings to start chatting...' : awaiting ? 'Approve or deny the action above to continue...' : messages.length === 0 ? 'Start a conversation...' : 'Message Agent...'}
       />
     </div>

@@ -44,3 +44,4 @@ backend/server_log.txt
 backend/data/mcp-logs/
 frontend/test-results/
 frontend/playwright-report/
+backend/data/models/

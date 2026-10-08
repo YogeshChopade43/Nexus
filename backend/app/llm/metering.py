@@ -7,14 +7,44 @@ Streamed replies report no usage, so those are estimated at ~4 characters per to
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator, Iterator, Optional
 
 from app.core.database import get_connection
 
 
 class DailyLimitReached(RuntimeError):
     pass
+
+
+# Calls made while handling one chat reply, so the reply can show what it cost.
+_scope: ContextVar[Optional[list[dict[str, Any]]]] = ContextVar("llm_usage_scope", default=None)
+
+
+@contextmanager
+def usage_scope() -> Iterator[list[dict[str, Any]]]:
+    records: list[dict[str, Any]] = []
+    token = _scope.set(records)
+    try:
+        yield records
+    finally:
+        _scope.reset(token)
+
+
+def usage_total(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Tokens for a set of calls, and the cost when the user entered prices for every model used."""
+    from app.api.routes.settings import load_user_settings
+
+    prices = load_user_settings().get("llmPrices") or {}
+    total = {"input_tokens": sum(r["input"] for r in records), "output_tokens": sum(r["output"] for r in records),
+             "estimated": any(r["estimated"] for r in records), "cost": None}
+    if records and all(isinstance(prices.get(r["model"]), dict) for r in records):
+        total["cost"] = round(sum(
+            (r["input"] * float(prices[r["model"]].get("input") or 0) + r["output"] * float(prices[r["model"]].get("output") or 0))
+            / 1_000_000 for r in records), 6)
+    return total
 
 
 def _today() -> str:
@@ -52,6 +82,9 @@ def check_budget() -> None:
 
 def record_usage(provider_id: Optional[int], provider: str, model: str, input_tokens: int, output_tokens: int,
                  estimated: bool = False) -> None:
+    scope = _scope.get()
+    if scope is not None:
+        scope.append({"model": model or "", "input": int(input_tokens or 0), "output": int(output_tokens or 0), "estimated": estimated})
     conn = get_connection()
     try:
         conn.execute(
@@ -85,6 +118,7 @@ class Metered:
         self._provider_id = provider_id
         self._name = config.get("provider_name") or getattr(provider, "provider_name", "")
         self._model = config.get("model") or getattr(provider, "default_model", "")
+        self.defaults: dict[str, Any] = {}  # per-chat options such as temperature, applied to every call
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._provider, name)
@@ -98,13 +132,13 @@ class Metered:
 
     async def chat(self, messages: Any, **kwargs: Any) -> Any:
         check_budget()
-        result = await self._provider.chat(messages=messages, **kwargs)
+        result = await self._provider.chat(messages=messages, **{**self.defaults, **kwargs})
         self._record(result, kwargs.get("model", ""))
         return result
 
     async def chat_with_tools(self, messages: Any, tools: Any, **kwargs: Any) -> Any:
         check_budget()
-        result = await self._provider.chat_with_tools(messages=messages, tools=tools, **kwargs)
+        result = await self._provider.chat_with_tools(messages=messages, tools=tools, **{**self.defaults, **kwargs})
         self._record(result, kwargs.get("model", ""))
         return result
 
@@ -112,7 +146,7 @@ class Metered:
         check_budget()
         parts: list[str] = []
         try:
-            async for chunk in self._provider.chat_stream(messages=messages, **kwargs):
+            async for chunk in self._provider.chat_stream(messages=messages, **{**self.defaults, **kwargs}):
                 parts.append(chunk)
                 yield chunk
         finally:

@@ -5,6 +5,7 @@ import json
 import re
 from typing import Any
 
+from app.api.routes.settings import user_timezone
 from app.llm.utils import get_default_llm_provider
 from app.tools import get_tool_registry
 from app.workflows.engine import validate_workflow
@@ -58,7 +59,10 @@ async def draft_workflow(description: str) -> dict[str, Any]:
     if provider is None:
         raise ValueError("No LLM provider configured. Add one in Settings > AI.")
     messages = [
-        {"role": "system", "content": f"You design automation workflows for Nexus.\n{FORMAT}\n\nAvailable tools:\n{_tool_list()}"},
+        {"role": "system", "content": f"You design automation workflows for Nexus.\n{FORMAT}\n\n"
+                                      f"The user's timezone is {user_timezone()}: use it for schedules unless they name another. "
+                                      "To remind or alert the user, use the nexus__notify tool.\n\n"
+                                      f"Available tools:\n{_tool_list()}"},
         {"role": "user", "content": description},
     ]
     problem = ""

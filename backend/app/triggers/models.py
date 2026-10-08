@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 def _utc_now() -> str:
@@ -49,6 +49,12 @@ class TriggerConfig(BaseModel):
     interval_minutes: int = 5
     items_path: str = ""
     id_field: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _null_means_default(cls, data: Any) -> Any:
+        # AI drafts and the editor send null for settings left unset ("timezone": null); use the defaults.
+        return {k: v for k, v in data.items() if v is not None} if isinstance(data, dict) else data
 
 
 class TriggerEvent(BaseModel):

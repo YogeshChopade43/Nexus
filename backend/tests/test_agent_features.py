@@ -160,5 +160,12 @@ def test_attachments_reach_the_model(client, llm):
     assert r.status_code == 200
     user_message = llm.calls[-1][-1]["content"]
     assert "notes.txt" in user_message and "mango season starts in April" in user_message
-    too_many = [{"name": f"f{i}.txt", "content": "x"} for i in range(6)]
+    too_many = [{"name": f"f{i}.txt", "content": "x"} for i in range(11)]  # the limit is 10
     assert client.post("/api/agent/run", json={"message": "x", "attachments": too_many}).status_code == 422
+
+
+def test_read_verbs_in_descriptions_beat_destructive_hints():
+    # Notion's server marks its search (an HTTP POST) as destructive.
+    assert default_policy("API-post-search", {"destructive_hint": True}, "Notion | Search by title\nError Responses: ...") == "allow"
+    assert default_policy("API-post-page", {"destructive_hint": True}, "Notion | Create a page") == "ask"
+    assert default_policy("API-query-data-source", {"destructive_hint": True}, "Query a data source") == "allow"

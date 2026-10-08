@@ -105,10 +105,12 @@ class ApiService {
     data: unknown,
     onChunk: (chunk: T) => void,
     onError?: (error: Error) => void,
-    onComplete?: () => void
+    onComplete?: () => void,
+    signal?: AbortSignal,
   ): Promise<void> {
     const url = `${this.baseUrl}${endpoint}`;
     const response = await fetch(url, {
+      signal,
       method: 'POST',
       headers: this.defaultHeaders,
       body: JSON.stringify(data),

@@ -1,5 +1,8 @@
 import { cn, formatRelativeTime } from '../../lib/utils';
-import { Copy, Bot, AlertCircle, CheckCircle2, Info, Ban, Loader2, ShieldQuestion } from 'lucide-react';
+import { useState } from 'react';
+import { Copy, Bot, AlertCircle, CheckCircle2, Info, Ban, Loader2, ShieldQuestion, RotateCcw, Pencil, Gauge } from 'lucide-react';
+import { Markdown } from './Markdown';
+import { Sources } from './Sources';
 import { Button } from '../ui/Button';
 import { Tooltip } from '../ui/Tooltip';
 import type { ChatMessage, AgentEvent } from '../../types/chat';
@@ -12,6 +15,7 @@ const EVENT_ICONS: Record<string, React.ElementType> = {
   intent_no_match: Bot,
   llm_error: AlertCircle,
   tool_declined: Ban,
+  step_limit: Gauge,
 };
 
 const EVENT_COLORS: Record<string, string> = {
@@ -21,6 +25,7 @@ const EVENT_COLORS: Record<string, string> = {
   intent_no_match: 'text-nexus-text-muted',
   llm_error: 'text-red-400',
   tool_declined: 'text-amber-400',
+  step_limit: 'text-amber-400',
 };
 
 function renderEvent(event: AgentEvent): ReactNode {
@@ -82,6 +87,13 @@ function renderEvent(event: AgentEvent): ReactNode {
           </div>
         </div>
       );
+    case 'step_limit':
+      return (
+        <div className="flex items-start gap-2.5">
+          <Icon className={`w-4 h-4 mt-0.5 ${colorClass}`} />
+          <span className="text-sm text-nexus-text-secondary">Stopped after {String(event.steps ?? '')} rounds of tool calls</span>
+        </div>
+      );
     case 'llm_error':
       return (
         <div className="flex items-start gap-2.5">
@@ -102,9 +114,24 @@ interface MessageProps {
   onCopy?: (text: string) => void;
   /** Set only on the message whose approval is still current. */
   onApprove?: (approved: boolean) => void;
+  /** Set on the last reply: ask the same question again. */
+  onRetry?: () => void;
+  /** Set on the last question: change it and ask again. */
+  onEdit?: (text: string) => void;
 }
 
-export function Message({ message, onCopy, onApprove }: MessageProps) {
+const numberFormat = new Intl.NumberFormat();
+
+function usageText(usage: NonNullable<ChatMessage['usage']>): string {
+  const tokens = usage.input_tokens + usage.output_tokens;
+  const parts = [`${usage.estimated ? '~' : ''}${numberFormat.format(tokens)} tokens`];
+  if (usage.cost !== null && usage.cost !== undefined) parts.push(usage.cost < 0.01 ? '<$0.01' : `$${usage.cost.toFixed(2)}`);
+  return parts.join(' · ');
+}
+
+export function Message({ message, onCopy, onApprove, onRetry, onEdit }: MessageProps) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
   const isUser = message.role === 'user';
   const running = message.status === 'running';
   const pending = message.status === 'needs_approval' ? message.pendingAction : undefined;
@@ -130,13 +157,13 @@ export function Message({ message, onCopy, onApprove }: MessageProps) {
 
       <div
         className={cn(
-          'flex-1 max-w-[85%] min-w-0',
-          isUser && 'text-right'
+          // Your messages hug the right edge next to your avatar; replies take the width they need.
+          isUser ? 'max-w-[85%] min-w-0 text-right' : 'flex-1 max-w-[85%] min-w-0'
         )}
       >
         <div
           className={cn(
-            'inline-block px-4 py-2.5 rounded-2xl',
+            'inline-block max-w-full px-4 py-2.5 rounded-2xl text-left',
             isUser
               ? 'bg-nexus-accent text-nexus-bg rounded-tr-none'
               : 'bg-nexus-bg-secondary border-nexus-border rounded-tl-none'
@@ -160,10 +187,22 @@ export function Message({ message, onCopy, onApprove }: MessageProps) {
               <span>Nexus is thinking</span>
               <span className="thinking-dots text-nexus-text-secondary/50"><span>.</span><span>.</span><span>.</span></span>
             </div>
-          ) : !pending && (
-            <div className="whitespace-pre-wrap break-words text-sm">
-              {message.content}
-            </div>
+          ) : !pending && (editing ? (
+            <form className="space-y-2 min-w-[16rem]" onSubmit={(e) => { e.preventDefault(); setEditing(false); onEdit?.(draft); }}>
+              <textarea value={draft} onChange={(e) => setDraft(e.target.value)} rows={3} aria-label="Edit message" autoFocus
+                className="w-full rounded-lg p-2 text-sm text-nexus-text bg-nexus-bg-secondary border border-nexus-border focus:outline-none focus:ring-2 focus:ring-nexus-accent" />
+              <div className="flex justify-end gap-2">
+                <Button type="button" size="sm" variant="ghost" onClick={() => setEditing(false)}>Cancel</Button>
+                <Button type="submit" size="sm" variant="secondary" disabled={!draft.trim()}>Send</Button>
+              </div>
+            </form>
+          ) : isUser ? (
+            <div className="whitespace-pre-wrap break-words text-sm">{message.content}</div>
+          ) : (
+            <Markdown text={message.content} />
+          ))}
+          {!isUser && !running && message.citations && message.citations.length > 0 && (
+            <Sources citations={message.citations} />
           )}
           {pending && (
             <div className="text-sm space-y-2" role="group" aria-label="Approval needed">
@@ -189,9 +228,27 @@ export function Message({ message, onCopy, onApprove }: MessageProps) {
         </div>
 
         <div className="flex items-center gap-2 mt-1.5 text-xs text-nexus-text-muted">
-          <time dateTime={message.timestamp}>
+          <time dateTime={message.timestamp} className={cn(isUser && 'ml-auto')}>
             {formatRelativeTime(message.timestamp)}
           </time>
+          {!isUser && message.usage && (message.usage.input_tokens + message.usage.output_tokens > 0) && (
+            <span title="Tokens this reply used (input + output)">{usageText(message.usage)}</span>
+          )}
+          {onRetry && (
+            <Tooltip content="Ask again">
+              <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={onRetry} aria-label="Retry">
+                <RotateCcw className="w-4 h-4" />
+              </Button>
+            </Tooltip>
+          )}
+          {onEdit && !editing && (
+            <Tooltip content="Edit and ask again">
+              <Button variant="ghost" size="sm" className="h-6 w-6 p-0" aria-label="Edit message"
+                onClick={() => { setDraft(message.content.replace(/\n\n📎 .*$/s, '')); setEditing(true); }}>
+                <Pencil className="w-4 h-4" />
+              </Button>
+            </Tooltip>
+          )}
           {!isUser && message.content && (
             <Tooltip content="Copy message">
               <Button

@@ -61,6 +61,28 @@ Environment values and headers are stored encrypted and never returned by the AP
 
 Security: launching commands is code execution. The backend binds to `127.0.0.1` by default and accepts command-launched servers only from localhost requests. `NEXUS_ALLOW_REMOTE_STDIO=true` disables that check; only set it behind your own authentication.
 
+## Chat
+
+- Replies are Markdown (tables with Copy / CSV, code blocks with Copy) and stream as they are written. **Stop** cuts a reply short and keeps what was said; **Retry** asks again; **Edit** changes your last question and asks again. Each reply shows its tokens, and its cost once prices are entered on the Dashboard.
+- **Tool choice**: with more than 24 tools connected, each message is offered the most relevant ones plus a `nexus_find_tools` tool to fetch others. The agent takes up to 10 rounds of tool calls per message. Large tool results aren't cut off: the agent reads the rest with `nexus_read_result`.
+- **Long chats** keep the last 20 messages verbatim and a running summary of earlier ones.
+- **Chat settings** (sliders icon): which MCP servers this chat may use, standing instructions, and temperature. Saved with the conversation.
+- **Conversations** (clock icon): search past chats by title or message text.
+- Tools whose description starts with a read verb ("Search…", "List…", "Get…") default to *Allow* even if the server marks them destructive.
+
+## Knowledge: document search (RAG) and memory
+
+Design: `docs/superpowers/specs/2026-10-08-production-rag-design.md`. Code: `backend/app/rag/`.
+
+- **Libraries** (Knowledge page): group documents by topic. Accepted: PDF with selectable text, Word (.docx), Excel (.xlsx), Markdown, HTML, CSV, JSON and other text files, up to 25 MB and 5 million characters each, 500 documents per library. The same file twice is ignored; a changed file with the same name becomes a new version and replaces the old one.
+- **Processing** runs in the background: files are split along their headings into sections (~1,200 tokens) and overlapping passages (~350 tokens) with page numbers, embedded with a local model and indexed. Status shows queued / processing N% / ready / failed (with the reason and a Retry button). Jobs survive restarts and retry 3 times (30 s, 2 min, 10 min).
+- **Search** is hybrid: keyword search (BM25 with English stemming) and vector search run together, are merged with Reciprocal Rank Fusion, re-scored by a local reranker (switch on the Knowledge page), limited to 3 passages per section, and expanded to whole sections within a 3,000-token budget. When the reranker isn't confident, the model is told the passages may not answer the question.
+- **In chat** the agent searches with `nexus__search_documents` (offered when the chat can read ready documents) and cites passages like `[1]`; answers show **Sources** chips that open the passage in context. Chat settings > **Answer from library** searches a chosen library for every message. Files attached in a chat that are PDFs or longer than 20,000 characters go into that chat's private collection (deleted with the chat); smaller text files are inlined.
+- **Local models, no API cost**: `BAAI/bge-small-en-v1.5` (embeddings) and `Xenova/ms-marco-MiniLM-L-6-v2` (reranking) via fastembed, downloaded once (~220 MB) into `backend/data/models` (or `NEXUS_MODELS_DIR`). Nothing leaves the machine. Vectors live in SQLite via `sqlite-vec` (with a pure-Python fallback).
+- **Quality**: `python -m app.rag.eval --real` scores keyword, vector, hybrid and hybrid+rerank retrieval on a golden set (`backend/tests/rag_golden/`); CI runs it with deterministic stand-in models and fails on a regression.
+- Documents from the earlier keyword-only knowledge base are imported into a library named "Imported" on first start.
+- **Memory**: facts the agent keeps in mind in every chat. Say "remember …" in chat (`nexus__remember`), or add them on the page. `nexus__forget` removes one.
+
 ## Security
 
 - Nexus has no login yet: keep it on your own machine. The backend binds to `127.0.0.1` by default.
@@ -86,6 +108,9 @@ Security: launching commands is code execution. The backend binds to `127.0.0.1`
 
 - `GET /health`
 - `GET|POST /api/mcp/servers`, `GET|PATCH|DELETE /api/mcp/servers/{id}`, `POST /api/mcp/servers/{id}/restart`, `GET /api/mcp/servers/{id}/logs`, `POST /api/mcp/servers/{id}/sign-out`, `GET /api/mcp/servers/oauth/callback`
+- `POST /api/agent/run/stream`, `POST /api/agent/sessions/{id}/approval/stream`, `POST /api/agent/sessions/{id}/rewind`, `PUT /api/agent/sessions/{id}/settings`, `GET /api/agent/sessions?q=`
+- `GET|POST /api/rag/collections`, `PATCH|DELETE /api/rag/collections/{id}`, `GET|POST /api/rag/collections/{id}/documents` (multipart `file`), `POST /api/rag/chats/{session_id}/documents`, `GET|DELETE /api/rag/documents/{id}`, `POST /api/rag/documents/{id}/retry`, `POST /api/rag/documents/{id}/move`, `GET /api/rag/documents/{id}/chunks/{chunk_id}`, `POST /api/rag/search`, `GET /api/rag/status`
+- `GET|POST /api/knowledge/memories`, `DELETE /api/knowledge/memories/{id}`
 - `GET /api/activity/notifications`, `POST /api/activity/notifications/read`, `GET /api/settings/backup`
 - `POST /api/agent/run`
 - `GET /api/tools`

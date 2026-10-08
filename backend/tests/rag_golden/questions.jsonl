@@ -1,0 +1,40 @@
+{"q": "What does error E-4012 mean?", "doc": "product-r2.md", "contains": "battery is overheating"}
+{"q": "What is E-2207?", "doc": "product-r2.md", "contains": "lidar sensor fault"}
+{"q": "Which expense code is used for travel?", "doc": "expenses.md", "contains": "EXP-114"}
+{"q": "What is SEC-9001?", "doc": "security.md", "contains": "SEC-9001"}
+{"q": "What is the IT-REQ queue for?", "doc": "it-setup.md", "contains": "IT-REQ"}
+{"q": "What is the Tunnelix client?", "doc": "it-setup.md", "contains": "Tunnelix"}
+{"q": "What is the Harbor portal used for?", "doc": "leave-policy.md", "contains": "Harbor HR portal"}
+{"q": "How many days of annual leave do employees get?", "doc": "leave-policy.md", "contains": "24 days of annual leave"}
+{"q": "How many unused leave days can be carried over?", "doc": "leave-policy.md", "contains": "Up to 5 unused days"}
+{"q": "How long is parental leave for primary caregivers?", "doc": "leave-policy.md", "contains": "16 weeks"}
+{"q": "What is the daily meal allowance during travel?", "doc": "expenses.md", "contains": "1,500 rupees"}
+{"q": "How much is mileage reimbursed per kilometre?", "doc": "expenses.md", "contains": "12 rupees per kilometre"}
+{"q": "How long must passwords be?", "doc": "security.md", "contains": "at least 14 characters"}
+{"q": "When does orientation start?", "doc": "onboarding.md", "contains": "Monday at 10:00"}
+{"q": "How long does the R2 battery last?", "doc": "product-r2.md", "contains": "8 hours"}
+{"q": "What payload can the R2 carry?", "doc": "product-r2.md", "contains": "12 kg"}
+{"q": "How long does international delivery take?", "doc": "shipping.md", "contains": "10 to 14 business days"}
+{"q": "Is shipping free?", "doc": "shipping.md", "contains": "free for orders over 5,000 rupees"}
+{"q": "What is the restocking fee for opened items?", "doc": "returns.md", "contains": "10 percent restocking fee"}
+{"q": "Where is the Bengaluru office?", "doc": "offices.md", "contains": "Koramangala"}
+{"q": "How much is the learning budget?", "doc": "benefits.md", "contains": "50,000 rupees per year"}
+{"q": "How much gym membership is reimbursed?", "doc": "benefits.md", "contains": "2,000 rupees per month"}
+{"q": "How quickly will a parcel reach Pune?", "doc": "shipping.md", "contains": "Pune arrive in 2 business days"}
+{"q": "My laptop got stolen, what should I do?", "doc": "security.md", "contains": "within 2 hours"}
+{"q": "Can I come into the office on Saturday?", "doc": "security.md", "contains": "Weekend access needs approval"}
+{"q": "How long until I get my money back after sending something back?", "doc": "returns.md", "contains": "within 7 business days"}
+{"q": "Who signs off my holiday request?", "doc": "leave-policy.md", "contains": "line manager approves or declines"}
+{"q": "What happens if the robot is too hot?", "doc": "product-r2.md", "contains": "let it cool for 20 minutes"}
+{"q": "How long does it take to recharge the robot?", "doc": "product-r2.md", "contains": "90 minutes"}
+{"q": "Which network should I join with my work account?", "doc": "it-setup.md", "contains": "Acme-Corp network"}
+{"q": "Is my family covered by the medical plan?", "doc": "benefits.md", "contains": "employees, spouses and children"}
+{"q": "Who helps new hires settle in?", "doc": "onboarding.md", "contains": "buddy from another team"}
+{"q": "When is the trial period over for a new employee?", "doc": "onboarding.md", "contains": "probation period lasts six months"}
+{"q": "Where do we sell to European customers from?", "doc": "offices.md", "contains": "Berlin"}
+{"q": "Will a beer at a client dinner be paid back?", "doc": "expenses.md", "contains": "Alcohol is never reimbursed"}
+{"q": "What is the CEO's favourite colour?", "doc": null, "contains": null}
+{"q": "How many moons does Jupiter have?", "doc": null, "contains": null}
+{"q": "What is the current share price?", "doc": null, "contains": null}
+{"q": "Which programming language is the R2 firmware written in?", "doc": null, "contains": null}
+{"q": "What does parking cost at the Berlin office?", "doc": null, "contains": null}

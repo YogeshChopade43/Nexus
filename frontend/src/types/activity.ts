@@ -11,6 +11,8 @@ export type ActivityType =
   | 'workflow_failed'
   | 'workflow_resumed'
   | 'server_error'
+  | 'document_failed'
+  | 'reminder'
   | 'settings_changed';
 
 export interface Activity {

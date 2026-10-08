@@ -5,13 +5,32 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any, Awaitable, Callable, List, Optional
 
+from app.agent.tool_selection import rank_tools
 from app.core.exceptions import AppNotConnectedError
 from app.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
-MAX_TOOL_ITERATIONS = 5
-MAX_TOOL_RESULT_CHARS = 8000
+MAX_TOOL_ITERATIONS = 10
+MAX_TOOL_RESULT_CHARS = 8000  # what the model sees of one result at a time
+MAX_STORED_RESULT_CHARS = 200_000  # the rest stays readable through nexus_read_result
+MAX_TOOLS_PER_TURN = 24  # most app tools sent per message (only ones matching the request), plus nexus_find_tools
+
+FIND_TOOLS = "nexus_find_tools"
+READ_RESULT = "nexus_read_result"
+FIND_TOOLS_SCHEMA = {
+    "name": FIND_TOOLS,
+    "description": "Look for more tools when none of the offered tools fits the request. "
+                   "Returns matching tools, which become callable.",
+    "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "What you need to do"}},
+                   "required": ["query"]},
+}
+READ_RESULT_SCHEMA = {
+    "name": READ_RESULT,
+    "description": "Read more of a tool result that was cut off. Use the result id and offset given in the cut-off note.",
+    "parameters": {"type": "object", "properties": {"result_id": {"type": "string"}, "offset": {"type": "integer"}},
+                   "required": ["result_id", "offset"]},
+}
 
 
 class Agent(ABC):
@@ -40,6 +59,7 @@ class BaseAgent(Agent):
         self._tool_registry = tool_registry
         self._app_connections = app_connections or {}
         self._on_event = on_event  # live progress for streaming: tool_call, tool_result, delta, approval_needed
+        self._extra_system = ""  # memories, chat instructions, earlier-conversation summary (see run)
 
     async def _emit(self, event: dict[str, Any]) -> None:
         if self._on_event:
@@ -77,11 +97,62 @@ class BaseAgent(Agent):
     def _supports_llm_tool_calling(self, llm_provider: Any) -> bool:
         return hasattr(llm_provider, "chat_with_tools") and callable(getattr(llm_provider, "chat_with_tools"))
 
+    def _schemas_for(self, state: dict[str, Any]) -> List[dict[str, Any]]:
+        """The tools offered this turn: the selected ones, plus the helpers that apply."""
+        schemas = self._build_tool_schemas(state["offered"])
+        if len(state["offered"]) < len(state["all_tools"]):
+            schemas.append(FIND_TOOLS_SCHEMA)
+        if state.get("results"):
+            schemas.append(READ_RESULT_SCHEMA)
+        return schemas
+
+    def _select_tools(self, task: str, history: list[dict[str, Any]], names: list[str]) -> list[str]:
+        """Nexus's own tools, plus app tools sharing a word with the request or recent user messages.
+
+        A request matching nothing ("hi") gets no app tools: each can cost hundreds of tokens per
+        message, and nexus_find_tools recovers a miss."""
+        builtin = [n for n in names if self._app_of(n) == "nexus"]
+        others = [n for n in names if n not in builtin]
+        recent = " ".join(m["content"] for m in (history or [])[-4:] if m.get("role") == "user")
+        return builtin + rank_tools(f"{task} {recent}", [(n, self._description(n)) for n in others],
+                                    MAX_TOOLS_PER_TURN, min_score=1)
+
+    def _app_of(self, name: str) -> str:
+        try:
+            return self._tool_registry.get_tool(name).app_id
+        except Exception:
+            return ""
+
+    def _description(self, name: str) -> str:
+        try:
+            return self._tool_registry.get_tool(name).description
+        except Exception:
+            return ""
+
+    def _find_tools(self, state: dict[str, Any], query: str) -> str:
+        others = [n for n in state["all_tools"] if n not in state["offered"]]
+        found = rank_tools(query, [(n, self._description(n)) for n in others], 8)
+        state["offered"].extend(found)
+        if not found:
+            return "No other tools are available."
+        return "These tools are now available:\n" + "\n".join(f"- {n}: {self._description(n)[:150]}" for n in found)
+
+    @staticmethod
+    def _read_result(state: dict[str, Any], arguments: dict[str, Any]) -> str:
+        full = (state.get("results") or {}).get(str(arguments.get("result_id", "")))
+        if full is None:
+            return "Error: unknown result id."
+        offset = max(0, int(arguments.get("offset") or 0))
+        part = full[offset:offset + MAX_TOOL_RESULT_CHARS]
+        end = offset + len(part)
+        more = f" Call {READ_RESULT} with offset {end} for more." if end < len(full) else " This is the end."
+        return f"[characters {offset}-{end} of {len(full)}.{more}]\n{part}"
+
     async def _resolve_tools_via_llm(
         self,
         task: str,
         llm_provider: Any,
-        tool_schemas: List[dict[str, Any]],
+        tool_names: List[str],
         events: list[dict[str, Any]],
         history: list[dict[str, Any]] = None,
     ) -> dict[str, Any]:
@@ -123,22 +194,32 @@ class BaseAgent(Agent):
             "## AVAILABLE TOOLS\n"
             "Tools are provided by the connected MCP servers. Only call tools that appear in the "
             "available tools list.\n\n"
-            "Respond with tool calls only when the above criteria are met. Otherwise, respond conversationally."
+            "Respond with tool calls only when the above criteria are met. Otherwise, respond conversationally.\n\n"
+            "Format answers with Markdown (lists, tables, code blocks) when it helps readability."
         )
+        if self._extra_system:
+            system_msg += "\n\n" + self._extra_system
 
         messages: list[dict[str, Any]] = [{"role": "system", "content": system_msg}]
         messages.extend(history or [])
         messages.append({"role": "user", "content": task})
         state = {"task": task, "history": history or [], "messages": messages, "summaries": [], "queue": [],
-                 "iteration": 0, "events": events}
-        return await self._tool_loop(state, llm_provider, tool_schemas)
+                 "iteration": 0, "events": events, "all_tools": list(tool_names),
+                 "offered": self._select_tools(task, history or [], tool_names), "results": {},
+                 "extra_system": self._extra_system}
+        return await self._tool_loop(state, llm_provider)
 
-    async def resume(self, state: dict[str, Any], approved: bool, llm_provider: Any, tool_schemas: List[dict[str, Any]]) -> dict[str, Any]:
+    async def resume(self, state: dict[str, Any], approved: bool, llm_provider: Any) -> dict[str, Any]:
         """Continue a run that paused for approval of ``state['queue'][0]``."""
-        return await self._tool_loop(state, llm_provider, tool_schemas, approval=approved)
+        names = self._tool_registry.list_tool_names()
+        state.setdefault("all_tools", names)  # runs paused before tool selection existed
+        state.setdefault("offered", names)
+        state.setdefault("results", {})
+        self._extra_system = state.get("extra_system", "")
+        return await self._tool_loop(state, llm_provider, approval=approved)
 
     async def _tool_loop(
-        self, state: dict[str, Any], llm_provider: Any, tool_schemas: List[dict[str, Any]], approval: Optional[bool] = None,
+        self, state: dict[str, Any], llm_provider: Any, approval: Optional[bool] = None,
     ) -> dict[str, Any]:
         """Call tools until the model answers. Pauses (returns needs_approval) before any tool whose policy is 'ask'.
 
@@ -164,9 +245,14 @@ class BaseAgent(Agent):
                     events.append({"type": "tool_declined", "tool_name": call["name"], "arguments": call["arguments"]})
                     await self._emit({"type": "tool_result", "tool": call["name"], "ok": False, "summary": "Declined by you"})
                     output = DECLINED
+                elif call["name"] == FIND_TOOLS:
+                    output = self._find_tools(state, str(call["arguments"].get("query", "")))
+                elif call["name"] == READ_RESULT:
+                    output = self._read_result(state, call["arguments"])
                 else:
                     await self._emit({"type": "tool_call", "tool": call["name"], "arguments": call["arguments"]})
-                    output = await self._execute_tool_call(call["name"], call["arguments"], events, summaries)
+                    output = await self._execute_tool_call(call["name"], call["arguments"], events, summaries,
+                                                           state["results"], call["id"])
                     ok = events[-1]["type"] == "tool_executed"
                     await self._emit({"type": "tool_result", "tool": call["name"], "ok": ok,
                                       "summary": events[-1].get("summary") or events[-1].get("error", "")})
@@ -175,10 +261,11 @@ class BaseAgent(Agent):
                 messages.append({"role": "tool", "tool_call_id": call["id"], "content": output})
 
             if state["iteration"] >= MAX_TOOL_ITERATIONS:
+                events.append({"type": "step_limit", "steps": MAX_TOOL_ITERATIONS})
                 content = ""
                 break
             state["iteration"] += 1
-            result = await llm_provider.chat_with_tools(messages=messages, tools=tool_schemas)
+            result = await llm_provider.chat_with_tools(messages=messages, tools=self._schemas_for(state))
             content = result.get("content") or ""
             tool_calls = result.get("tool_calls") or []
             if not tool_calls:
@@ -219,6 +306,9 @@ class BaseAgent(Agent):
                 tool_results=[m["content"] for m in messages if m.get("role") == "tool"],
             )
         final_content = final_content or "Completed without a text response."
+        if any(e.get("type") == "step_limit" for e in events):
+            final_content += (f"\n\n_I stopped after {MAX_TOOL_ITERATIONS} rounds of tool calls. "
+                              "Say \"continue\" if you want me to keep going._")
         return {
             "status": "completed",
             "events": events,
@@ -233,6 +323,8 @@ class BaseAgent(Agent):
         arguments: dict[str, Any],
         events: list[dict[str, Any]],
         summaries: List[str],
+        results: Optional[dict[str, str]] = None,
+        call_id: str = "",
     ) -> str:
         """Run one tool call, record the event, and return the text the LLM sees."""
         try:
@@ -266,7 +358,14 @@ class BaseAgent(Agent):
         # The model needs the actual data to answer follow-ups, not just the one-line summary.
         payload = json.dumps(data, default=str)
         if len(payload) > MAX_TOOL_RESULT_CHARS:
-            payload = payload[:MAX_TOOL_RESULT_CHARS] + "... [truncated]"
+            if results is not None and call_id:
+                # Keep the rest so the model can page through it instead of silently losing it.
+                results[call_id] = payload[:MAX_STORED_RESULT_CHARS]
+                note = (f"[Showing {MAX_TOOL_RESULT_CHARS} of {len(payload)} characters. Call {READ_RESULT} "
+                        f"with result_id \"{call_id}\" and offset {MAX_TOOL_RESULT_CHARS} to read more.]")
+            else:
+                note = "[truncated]"
+            payload = payload[:MAX_TOOL_RESULT_CHARS] + "... " + note
         return f"{tool_summary}\n\nData: {payload}"
 
     async def run(
@@ -279,10 +378,12 @@ class BaseAgent(Agent):
     ) -> dict[str, Any]:
         events: list[dict[str, Any]] = []
         ctx = context or {}
+        self._extra_system = str(ctx.get("system_extra") or "")
         if history is None:
             history = clean_history(ctx.get("previousMessages", []))
-        requested_tools = available_tools or self._tool_registry.list_tool_names()
-        tool_schemas = self._build_tool_schemas(requested_tools)
+        # None = every tool; an empty list means none (e.g. a chat set to use no servers).
+        requested_tools = self._tool_registry.list_tool_names() if available_tools is None else available_tools
+        tool_names = [schema["name"] for schema in self._build_tool_schemas(requested_tools)]
 
         if not llm_provider:
             message = "No LLM provider configured. Add one in Settings > AI."
@@ -294,16 +395,16 @@ class BaseAgent(Agent):
                 "response": message,
             }
 
-        if tool_schemas and self._supports_llm_tool_calling(llm_provider):
+        if tool_names and self._supports_llm_tool_calling(llm_provider):
             try:
-                return await self._resolve_tools_via_llm(task, llm_provider, tool_schemas, events, history)
+                return await self._resolve_tools_via_llm(task, llm_provider, tool_names, events, history)
             except NotImplementedError:
                 pass
             except Exception as exc:
                 logger.warning("LLM tool calling failed: %s", exc)
                 events.append({"type": "llm_error", "task": task, "error": str(exc)})
 
-        if not tool_schemas:
+        if not tool_names:
             events.append({"type": "intent_no_match", "task": task, "reason": "No tools available for this request"})
         response = await self._generate_llm_response(task, llm_provider, "", events, history)
         failed = any(event["type"] == "llm_error" for event in events)
@@ -328,8 +429,11 @@ class BaseAgent(Agent):
             return context_summary
         system_msg = (
             "You are Nexus, a helpful AI assistant that connects natural-language requests "
-            "to tools provided by the user's MCP servers. Be concise and helpful."
+            "to tools provided by the user's MCP servers. Be concise and helpful. "
+            "Format answers with Markdown (lists, tables, code blocks) when it helps readability."
         )
+        if self._extra_system:
+            system_msg += "\n\n" + self._extra_system
         if context_summary:
             system_msg += f"\n\nResults from tools run for this request: {context_summary}"
         if tool_results:

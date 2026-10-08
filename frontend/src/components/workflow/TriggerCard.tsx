@@ -4,6 +4,7 @@ import { cn, getErrorMessage } from '../../lib/utils';
 import { workflowService } from '../../services/workflow';
 import { api } from '../../services/api';
 import { ActionPicker } from './ActionPicker';
+import { TimezoneSelect } from '../ui/TimezoneSelect';
 import { toolLabel } from './toolInfo';
 import { FieldLabel, ParameterForm, fieldClass } from './StepConfig';
 import type { McpServer } from '../../types/mcp';
@@ -136,7 +137,7 @@ function RecurrenceForm({ config, onConfig }: { config: Record<string, unknown>;
       )}
       <label className="block sm:w-1/2">
         <FieldLabel>Timezone</FieldLabel>
-        <input value={String(config.timezone ?? browserZone)} onChange={(e) => onConfig({ timezone: e.target.value })} className={fieldClass} />
+        <TimezoneSelect value={String(config.timezone ?? '')} onChange={(tz) => onConfig({ timezone: tz || null })} emptyLabel="Your timezone (from Settings)" className={fieldClass} />
       </label>
       <div className="text-xs">
         {preview.error ? (
@@ -372,7 +373,7 @@ export function TriggerCard({ trigger, onChange, servers, tools, triggerTypes, w
           </label>
           <label className="block">
             <FieldLabel>Timezone</FieldLabel>
-            <input value={String(config.timezone ?? browserZone)} onChange={(e) => onConfig({ timezone: e.target.value })} className={fieldClass} />
+            <TimezoneSelect value={String(config.timezone ?? '')} onChange={(tz) => onConfig({ timezone: tz || null })} emptyLabel="Your timezone (from Settings)" className={fieldClass} />
           </label>
         </div>
       )}

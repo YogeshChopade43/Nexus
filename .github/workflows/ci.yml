@@ -21,6 +21,13 @@ jobs:
         working-directory: backend
       - run: python -m app.workflows.engine
         working-directory: backend
+      - name: Retrieval quality gate (golden set, deterministic fake models)
+        run: python -m app.rag.eval
+        working-directory: backend
+        env:
+          NEXUS_SECRET_KEY: ci
+          NEXUS_RAG_EMBEDDER: fake
+          NEXUS_RAG_RERANKER: fake
 
   frontend:
     runs-on: ubuntu-latest

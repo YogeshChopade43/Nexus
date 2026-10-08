@@ -10,3 +10,5 @@ from app.api.routes.settings import router as settings_router
 from app.api.routes.activity import router as activity_router
 from app.api.routes.webhooks import router as webhooks_router
 from app.api.routes.dashboard import router as dashboard_router
+from app.api.routes.knowledge import router as knowledge_router
+from app.api.routes.rag import router as rag_router

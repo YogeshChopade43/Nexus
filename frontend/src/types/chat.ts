@@ -1,3 +1,5 @@
+import type { Citation } from './rag';
+
 export type MessageRole = 'user' | 'assistant';
 
 export interface ChatMessage {
@@ -11,7 +13,30 @@ export interface ChatMessage {
   /** Live tool activity while a streamed reply is still running. */
   activity?: ToolActivity[];
   pendingAction?: PendingAction;
+  usage?: ReplyUsage | null;
+  /** Document passages the reply cited as [n]. */
+  citations?: Citation[] | null;
 }
+
+/** Tokens one reply used, and its cost when prices are set on the Dashboard. */
+export interface ReplyUsage {
+  input_tokens: number;
+  output_tokens: number;
+  estimated: boolean;
+  cost: number | null;
+}
+
+/** Per-conversation options, saved with the conversation. */
+export interface ChatSettings {
+  /** MCP server slugs this chat may use; null = all servers. */
+  servers: string[] | null;
+  instructions: string;
+  temperature: number | null;
+  /** Answer from this library: searched automatically for every message. */
+  library_id: number | null;
+}
+
+export const DEFAULT_CHAT_SETTINGS: ChatSettings = { servers: null, instructions: '', temperature: null, library_id: null };
 
 export interface ToolActivity {
   tool: string;
@@ -37,6 +62,7 @@ export interface AgentRunRequest {
   llm_provider_id?: number;
   session_id?: string;
   attachments?: ChatAttachment[];
+  chat_settings?: ChatSettings;
 }
 
 export interface StoredMessage {
@@ -45,6 +71,8 @@ export interface StoredMessage {
   events?: AgentEvent[];
   status?: string;
   summary?: string;
+  usage?: ReplyUsage | null;
+  citations?: Citation[] | null;
 }
 
 export interface AgentSession {
@@ -52,7 +80,10 @@ export interface AgentSession {
   session_id: string;
   title: string;
   messages: StoredMessage[];
-  metadata?: { pending?: { state?: { queue?: { name: string; arguments: Record<string, unknown> }[] } } };
+  metadata?: {
+    pending?: { state?: { queue?: { name: string; arguments: Record<string, unknown> }[] } };
+    settings?: ChatSettings;
+  };
   created_at: string;
   updated_at: string;
 }
@@ -76,6 +107,8 @@ export interface AgentRunResponse {
   response?: string;
   session_id?: string | null;
   pending_action?: PendingAction | null;
+  usage?: ReplyUsage | null;
+  citations?: Citation[] | null;
 }
 
 export type AgentStreamEvent =

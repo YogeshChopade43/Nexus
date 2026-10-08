@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { Composer } from './Composer';
+import { Composer, INLINE_CHARS } from './Composer';
 import { Message } from './Message';
 import type { ChatMessage } from '../../types/chat';
 
@@ -11,7 +11,7 @@ describe('Composer', () => {
     const input = screen.getByLabelText('Message input');
     fireEvent.change(input, { target: { value: 'hello there' } });
     fireEvent.keyDown(input, { key: 'Enter' });
-    expect(onSend).toHaveBeenCalledWith('hello there', []);
+    expect(onSend).toHaveBeenCalledWith('hello there', [], []);
     expect(input).toHaveValue('');
   });
 
@@ -24,17 +24,28 @@ describe('Composer', () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
-  test('text files are attached; binary files are refused', async () => {
+  test('small text files go inline, PDFs and big files to the knowledge base, other binaries are refused', async () => {
     const onSend = vi.fn();
     const { container } = render(<Composer onSend={onSend} />);
     const fileInput = container.querySelector('input[type=file]') as HTMLInputElement;
     const good = new File(['secret word'], 'notes.txt', { type: 'text/plain' });
     const bad = new File([new Uint8Array([0x89, 0x00, 0x01])], 'image.png', { type: 'image/png' });
-    fireEvent.change(fileInput, { target: { files: [good, bad] } });
+    const pdf = new File(['%PDF-1.4'], 'report.pdf', { type: 'application/pdf' });
+    const big = new File(['x'.repeat(INLINE_CHARS + 1)], 'huge.log', { type: 'text/plain' });
+    fireEvent.change(fileInput, { target: { files: [good, bad, pdf, big] } });
     await screen.findByText('notes.txt');
-    expect(screen.getByText("image.png isn't a text file")).toBeInTheDocument();
+    expect(screen.getByText("image.png isn't a text file or PDF")).toBeInTheDocument();
+    expect(screen.getAllByText('→ knowledge')).toHaveLength(2);
     fireEvent.click(screen.getByLabelText('Send message'));
-    expect(onSend).toHaveBeenCalledWith('', [{ name: 'notes.txt', content: 'secret word' }]);
+    expect(onSend).toHaveBeenCalledWith('', [{ name: 'notes.txt', content: 'secret word' }], [pdf, big]);
+  });
+
+  test('while a reply is written, Stop replaces Send', () => {
+    const onStop = vi.fn();
+    render(<Composer onSend={() => {}} running onStop={onStop} disabled />);
+    expect(screen.queryByLabelText('Send message')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Stop'));
+    expect(onStop).toHaveBeenCalled();
   });
 });
 

@@ -28,6 +28,12 @@ def cfg(**kwargs) -> TriggerConfig:
 
 # ---- schedules ---------------------------------------------------------------------
 
+def test_null_settings_fall_back_to_defaults():
+    """AI drafts and older clients send null for unset fields, e.g. "timezone": null."""
+    config = cfg(frequency="day", timezone=None, interval=None, at=None, weekdays=None)
+    assert (config.timezone, config.interval, config.at, config.weekdays) == ("UTC", 1, "00:00", [])
+
+
 def test_every_two_weeks_on_monday():
     runs = recurrence.next_runs(cfg(frequency="week", interval=2, weekdays=["mon"], at="10:00", anchor="2026-10-05"), now=NOW)
     assert [r.date().isoformat() for r in runs] == ["2026-10-19", "2026-11-02", "2026-11-16"]

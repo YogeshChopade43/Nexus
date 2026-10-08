@@ -77,6 +77,136 @@ MIGRATIONS: list[str] = [
     """,
     # 4: drop the login tables migration 2 used to create
     "DROP TABLE IF EXISTS user_sessions; DROP TABLE IF EXISTS audit_log; DROP TABLE IF EXISTS users",
+    # 5: documents the agent can search (full-text index) and facts it remembers
+    """
+    CREATE TABLE documents (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        chars INTEGER NOT NULL,
+        chunks INTEGER NOT NULL,
+        session_id TEXT,
+        created_at TEXT NOT NULL
+    );
+    CREATE VIRTUAL TABLE document_chunks USING fts5(doc_id UNINDEXED, name UNINDEXED, position UNINDEXED, content);
+    CREATE TABLE memories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        content TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    )
+    """,
+    # 6: production RAG (docs/superpowers/specs/2026-10-08-production-rag-design.md section 2).
+    # The migration-5 document tables are kept as legacy_* until their contents are imported.
+    """
+    ALTER TABLE documents RENAME TO legacy_documents;
+    ALTER TABLE document_chunks RENAME TO legacy_document_chunks;
+    CREATE TABLE workspaces (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    );
+    INSERT INTO workspaces (id, name) VALUES (1, 'Default');
+    CREATE TABLE collections (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('library', 'chat')),
+        session_id TEXT,
+        created_at TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX idx_collections_library_name ON collections(workspace_id, name) WHERE kind = 'library';
+    CREATE UNIQUE INDEX idx_collections_chat ON collections(session_id) WHERE kind = 'chat';
+    CREATE TABLE documents (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        mime TEXT NOT NULL,
+        size_bytes INTEGER NOT NULL,
+        content_hash TEXT NOT NULL,
+        version INTEGER NOT NULL DEFAULT 1,
+        status TEXT NOT NULL CHECK (status IN ('queued', 'processing', 'ready', 'failed')),
+        error TEXT,
+        progress INTEGER NOT NULL DEFAULT 0,
+        pages INTEGER,
+        chars INTEGER NOT NULL DEFAULT 0,
+        chunk_count INTEGER NOT NULL DEFAULT 0,
+        embed_model TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (collection_id, content_hash)
+    );
+    CREATE INDEX idx_documents_collection ON documents(collection_id, status);
+    CREATE TABLE document_files (
+        document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+        data BLOB NOT NULL
+    );
+    CREATE TABLE chunks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        workspace_id INTEGER NOT NULL,
+        parent_id INTEGER REFERENCES chunks(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK (kind IN ('parent', 'child')),
+        position INTEGER NOT NULL,
+        text TEXT NOT NULL,
+        heading_path TEXT NOT NULL DEFAULT '',
+        page_start INTEGER,
+        page_end INTEGER,
+        char_start INTEGER NOT NULL DEFAULT 0,
+        char_end INTEGER NOT NULL DEFAULT 0,
+        tokens INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX idx_chunks_document ON chunks(document_id, kind, position);
+    CREATE VIRTUAL TABLE chunk_fts USING fts5(text, heading_path, document_name);
+    CREATE TABLE ingestion_jobs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        workspace_id INTEGER NOT NULL,
+        document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'retry', 'done', 'failed')),
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at TEXT NOT NULL,
+        last_error TEXT,
+        progress INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE INDEX idx_jobs_due ON ingestion_jobs(status, next_attempt_at);
+    CREATE TABLE retrieval_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        workspace_id INTEGER NOT NULL,
+        session_id TEXT,
+        query TEXT NOT NULL,
+        rewritten_query TEXT,
+        filters_json TEXT NOT NULL DEFAULT '{}',
+        candidates_json TEXT NOT NULL DEFAULT '[]',
+        selected_json TEXT NOT NULL DEFAULT '[]',
+        latency_ms_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL
+    );
+    CREATE TABLE answer_feedback (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        retrieval_log_id INTEGER REFERENCES retrieval_logs(id) ON DELETE SET NULL,
+        message_ref TEXT,
+        rating INTEGER NOT NULL CHECK (rating IN (-1, 1)),
+        comment TEXT,
+        created_at TEXT NOT NULL
+    );
+    CREATE TABLE embedding_cache (
+        key TEXT PRIMARY KEY,
+        vector BLOB NOT NULL
+    )
+    """,
+    # 7: English stemming in the keyword index ("refund" finds "refunds"), rebuilt from existing chunks
+    """
+    DROP TABLE chunk_fts;
+    CREATE VIRTUAL TABLE chunk_fts USING fts5(text, heading_path, document_name, tokenize = 'porter unicode61');
+    INSERT INTO chunk_fts (rowid, text, heading_path, document_name)
+        SELECT c.id,
+               d.name || CASE WHEN c.heading_path != '' THEN ' › ' || c.heading_path ELSE '' END || char(10, 10) || c.text,
+               c.heading_path, d.name
+        FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.kind = 'child'
+    """,
+    # 8: answer feedback (thumbs up/down) removed
+    "DROP TABLE IF EXISTS answer_feedback",
 ]
 
 

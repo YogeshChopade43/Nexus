@@ -10,6 +10,7 @@ const ServersPage = lazy(() => import('./components/servers/ServersPage').then(m
 const WorkflowPage = lazy(() => import('./components/workflow').then(m => ({ default: m.WorkflowPage })))
 const ActivityPage = lazy(() => import('./components/activity').then(m => ({ default: m.ActivityPage })))
 const DashboardPage = lazy(() => import('./components/dashboard/DashboardPage').then(m => ({ default: m.DashboardPage })))
+const KnowledgePage = lazy(() => import('./components/knowledge/KnowledgePage').then(m => ({ default: m.KnowledgePage })))
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then(m => ({ default: m.SettingsPage })))
 
 function App() {
@@ -27,6 +28,7 @@ function App() {
               <Route path="/workflows" element={<WorkflowPage />} />
               <Route path="/activity" element={<ActivityPage />} />
               <Route path="/dashboard" element={<DashboardPage />} />
+              <Route path="/knowledge" element={<KnowledgePage />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>

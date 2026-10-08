@@ -3,6 +3,7 @@ import { cn } from '../lib/utils';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
+import { TimezoneSelect } from '../components/ui/TimezoneSelect';
 import { Separator } from '../components/ui/Separator';
 import { Badge } from '../components/ui/Badge';
 import { User, Moon, Sun, Monitor, Cpu, Download } from 'lucide-react';
@@ -132,7 +133,16 @@ export function SettingsPage() {
 
                 <div className="grid gap-4 sm:grid-cols-2">
                   <Input label="Language" placeholder="en-US" value={language} onChange={(e) => { setLanguage(e.target.value); setSaveState('idle'); }} />
-                  <Input label="Timezone" placeholder="UTC" value={timezone} onChange={(e) => { setTimezone(e.target.value); setSaveState('idle'); }} />
+                  <div className="w-full">
+                    <label htmlFor="timezone" className="block text-sm font-medium text-nexus-text-secondary mb-1.5">Timezone</label>
+                    <TimezoneSelect
+                      id="timezone"
+                      value={timezone}
+                      onChange={(tz) => { setTimezone(tz); setSaveState('idle'); }}
+                      className="w-full px-3 py-2 rounded-lg bg-nexus-bg-secondary border border-nexus-border hover:border-nexus-border-hover text-nexus-text focus:outline-none focus:ring-2 focus:ring-nexus-accent"
+                    />
+                    <p className="mt-1.5 text-xs text-nexus-text-muted">Schedules without their own timezone run in this one.</p>
+                  </div>
                 </div>
                 <div className="grid gap-4 sm:grid-cols-2">
                 <Input

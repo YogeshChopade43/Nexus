@@ -14,6 +14,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm \
 WORKDIR /app/backend
 COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
+# Bake the local search models into the image (outside the data volume) so containers never download them.
+ENV NEXUS_MODELS_DIR=/app/models
+RUN python -c "from fastembed import TextEmbedding; from fastembed.rerank.cross_encoder import TextCrossEncoder; \
+TextEmbedding('BAAI/bge-small-en-v1.5', cache_dir='/app/models'); \
+TextCrossEncoder('Xenova/ms-marco-MiniLM-L-6-v2', cache_dir='/app/models')"
 COPY backend/ ./
 COPY --from=frontend /app/frontend/dist /app/frontend-dist
 

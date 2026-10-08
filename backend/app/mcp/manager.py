@@ -140,8 +140,24 @@ _RISKY_VERBS = re.compile(
 POLICIES = ("allow", "ask", "block")
 
 
-def default_policy(tool_name: str, annotations: Any) -> str:
-    """'ask' for tools that change things, 'allow' for read-only ones. MCP hints win over the name."""
+_READ_LABEL = re.compile(r"^(search|query|list|get|retrieve|find|fetch|read|look up|show|count|check)" + r"\b", re.IGNORECASE)
+
+
+def _label(description: str) -> str:
+    """First line of a description without an "App | " prefix (e.g. Notion's "Notion | Search by title")."""
+    first = (description or "").strip().split("\n")[0]
+    head, sep, rest = first.partition(" | ")
+    return rest if sep and len(head) <= 30 else first
+
+
+def default_policy(tool_name: str, annotations: Any, description: str = "") -> str:
+    """'ask' for tools that change things, 'allow' for read-only ones.
+
+    A description starting with a read verb ("Search by title") wins: servers that wrap HTTP APIs
+    often mark every POST as destructive. Then MCP hints, then verbs in the name.
+    """
+    if _READ_LABEL.match(_label(description)):
+        return "allow"
     hint = (lambda key: annotations.get(key)) if isinstance(annotations, dict) else (lambda key: getattr(annotations, key, None))
     if annotations is not None:
         if hint("destructive_hint"):
@@ -149,6 +165,25 @@ def default_policy(tool_name: str, annotations: Any) -> str:
         if hint("read_only_hint"):
             return "allow"
     return "ask" if _RISKY_VERBS.search(tool_name) else "allow"
+
+
+def prune_unused_defs(schema: dict[str, Any]) -> dict[str, Any]:
+    """Drop shared definitions the tool never references. Some servers (Notion) attach the same
+    ~650-token block to every tool, and the model is sent each tool's schema with every message."""
+    for key in ("$defs", "definitions"):
+        defs = schema.get(key)
+        if not isinstance(defs, dict):
+            continue
+        rest = {k: v for k, v in schema.items() if k != key}
+        keep: set[str] = set()
+        todo: list[Any] = [rest]
+        while todo:
+            for name in re.findall(re.escape(f"#/{key}/") + r'([^"/]+)', json.dumps(todo.pop())):
+                if name in defs and name not in keep:
+                    keep.add(name)
+                    todo.append(defs[name])
+        schema = {**rest, key: {k: v for k, v in defs.items() if k in keep}} if keep else rest
+    return schema
 
 
 class MCPTool(Tool):
@@ -160,9 +195,9 @@ class MCPTool(Tool):
         schema = dict(tool.input_schema or {})
         schema.setdefault("type", "object")
         schema.setdefault("properties", {})
-        self._schema = schema
+        self._schema = prune_unused_defs(schema)
         annotations = getattr(tool, "annotations", None)
-        self.policy = server.tool_policies.get(tool.name) or default_policy(tool.name, annotations)
+        self.policy = server.tool_policies.get(tool.name) or default_policy(tool.name, annotations, tool.description or "")
         # Display hints for the workflow builder: the server's own title and whether the tool changes data.
         self.title = getattr(tool, "title", None) or getattr(annotations, "title", None)
         self.read_only = getattr(annotations, "read_only_hint", None)

@@ -26,6 +26,32 @@ test('run a workflow and use the server catalog', async ({ page }) => {
   await page.getByRole('button', { name: /^Time/ }).click();
   await expect(page.getByLabel('Arguments')).toHaveValue('mcp-server-time');
   await page.getByRole('button', { name: 'Cancel' }).click();
+
+  // Knowledge: create a library, add a document, wait until it's ready, find a passage.
+  await page.getByRole('link', { name: 'Knowledge' }).click();
+  await page.getByLabel('New library name').fill('Policies');
+  await page.getByRole('button', { name: 'Create library' }).click();
+  await expect(page.getByRole('heading', { name: 'Policies' })).toBeVisible();
+  await page.locator('input[type=file]').setInputFiles({
+    name: 'policy.md', mimeType: 'text/markdown',
+    buffer: Buffer.from('# Policy\n\n## Refunds\n\nRefunds are accepted within 30 days.\n\n## Shipping\n\nShipping to Pune takes 5 business days.'),
+  });
+  await expect(page.getByText('policy.md')).toBeVisible();
+  await expect(page.getByText('Ready', { exact: true })).toBeVisible({ timeout: 15_000 });
+  await page.getByLabel('Search this library').fill('shipping Pune');
+  await page.getByLabel('Search this library').press('Enter');
+  await expect(page.getByText(/Shipping to Pune takes 5 business days/)).toBeVisible();
+  await page.getByLabel('New memory').fill('Our team is called Atlas');
+  await page.getByRole('button', { name: 'Add', exact: true }).click();
+  await expect(page.getByText('Our team is called Atlas')).toBeVisible();
+
+  // Chat: per-chat settings and the conversation list open and close.
+  await page.getByRole('link', { name: 'Agent' }).click();
+  await page.getByRole('button', { name: 'Chat settings' }).click();
+  await expect(page.getByText('Apps this chat can use')).toBeVisible();
+  await page.getByRole('button', { name: 'Cancel' }).click();
+  await page.getByRole('button', { name: 'Conversations' }).click();
+  await expect(page.getByLabel('Search conversations')).toBeVisible();
 });
 
 test('phone-sized screens: no sideways scrolling, every button has a name', async ({ page }) => {
@@ -40,7 +66,7 @@ test('phone-sized screens: no sideways scrolling, every button has a name', asyn
     return { overflow, unnamed };
   });
 
-  for (const path of ['/', '/workflows', '/servers', '/dashboard', '/activity', '/settings']) {
+  for (const path of ['/', '/workflows', '/servers', '/knowledge', '/dashboard', '/activity', '/settings']) {
     await page.goto(path);
     await page.waitForLoadState('networkidle');
     expect(await problems(), path).toEqual({ overflow: false, unnamed: [] });
@@ -50,4 +76,54 @@ test('phone-sized screens: no sideways scrolling, every button has a name', asyn
   await page.getByRole('button', { name: 'New Workflow' }).click();
   await page.getByRole('button', { name: 'Add a step' }).click();
   expect(await problems(), 'builder').toEqual({ overflow: false, unnamed: [] });
+});
+
+test('chat: Markdown replies, cost, retry, edit, stop and search', async ({ page }) => {
+  const api = 'http://localhost:8765';
+  const provider = await page.request.post(`${api}/api/llm/`, {
+    data: { provider_name: 'openai', model: 'fake-gpt', api_key: 'test', base_url: 'http://127.0.0.1:8766/v1' },
+  });
+  expect(provider.ok()).toBeTruthy();
+  await page.request.patch(`${api}/api/settings/user`, { data: { llmPrices: { 'fake-gpt': { input: 10, output: 30 } } } });
+
+  await page.goto('/');
+  const input = page.getByLabel('Message input');
+  await input.fill('hello there');
+  await input.press('Enter');
+  const log = page.getByRole('log', { name: 'Chat messages' });
+  await expect(log.getByRole('table')).toContainText('Apples');
+  await expect(log.getByText('Answer').first()).toHaveJSProperty('tagName', 'STRONG');
+  await expect(log.getByLabel('Copy code')).toBeVisible();
+  await expect(log.getByText(/120 tokens · <\$0\.01/)).toBeVisible();
+
+  // Retry asks the same question again; Edit replaces it.
+  await log.getByRole('button', { name: 'Retry' }).click();
+  await expect(log.getByText('Answer to: hello there')).toHaveCount(1);
+  await log.getByRole('button', { name: 'Edit message' }).click();
+  await log.getByRole('textbox', { name: 'Edit message' }).fill('hello again');
+  await log.getByRole('button', { name: 'Send' }).click();
+  await expect(log.getByText('Answer to: hello again')).toBeVisible();
+  await expect(log.getByText('Answer to: hello there')).toHaveCount(0);
+
+  // Stop: a slow reply is cut off and marked.
+  await input.fill('a slow question');
+  await input.press('Enter');
+  await page.getByRole('button', { name: 'Stop' }).click();
+  await expect(log.getByText('(stopped before answering)')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Send message' })).toBeVisible();
+
+  // Documents: answer from the "Policies" library with a cited, clickable source.
+  await page.getByRole('button', { name: 'Chat settings' }).click();
+  await page.getByLabel('Answer from library').selectOption({ label: 'Policies (1 documents)' });
+  await page.getByRole('button', { name: 'Save' }).click();
+  await input.fill('How long does shipping to Pune take?');
+  await input.press('Enter');
+  await expect(log.getByText(/From your documents: Shipping to Pune takes 5 business days/)).toBeVisible();
+  await log.getByRole('button', { name: /\[1\] policy\.md/ }).click();
+  await expect(log.getByRole('dialog', { name: 'Source' })).toContainText('Shipping to Pune');
+
+  // Search past conversations by message text.
+  await page.getByRole('button', { name: 'Conversations' }).click();
+  await page.getByLabel('Search conversations').fill('hello again');
+  await expect(page.getByRole('dialog', { name: 'Conversations' }).getByRole('button').filter({ hasText: 'hello' })).toHaveCount(1);
 });

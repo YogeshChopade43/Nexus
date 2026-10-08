@@ -14,6 +14,7 @@ import {
   Settings,
   MessageCircle,
   CheckCircle,
+  AlarmClock,
 } from 'lucide-react';
 import { useActivity } from '../../hooks/useActivity';
 import { formatRelativeTime } from '../../lib/utils';
@@ -34,6 +35,8 @@ const typeLabels: Record<ActivityType, string> = {
   workflow_failed: 'Workflow failed',
   workflow_resumed: 'Workflow resumed',
   server_error: 'Server not connected',
+  document_failed: 'Document failed',
+  reminder: 'Reminder',
   settings_changed: 'Settings changed',
 };
 
@@ -50,6 +53,8 @@ const typeIcons: Record<ActivityType, typeof ActivityIcon> = {
   workflow_failed: AlertCircle,
   workflow_resumed: CheckCircle,
   server_error: AlertCircle,
+  document_failed: AlertCircle,
+  reminder: AlarmClock,
   settings_changed: Settings,
 };
 
@@ -63,7 +68,8 @@ function activityGroup(type: ActivityType): ActivityGroup {
     type === 'workflow_executed' ||
     type === 'workflow_completed' ||
     type === 'workflow_failed' ||
-    type === 'workflow_resumed'
+    type === 'workflow_resumed' ||
+    type === 'reminder'
   ) return 'workflows';
   return 'settings';
 }
