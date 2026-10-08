@@ -39,3 +39,8 @@ plans/
 backend/server_log.txt
 .playwright-mcp/
 .superpowers/
+.docs/
+.venv*/
+backend/data/mcp-logs/
+frontend/test-results/
+frontend/playwright-report/

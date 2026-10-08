@@ -30,3 +30,5 @@ urllib3==2.6.3
 uvicorn==0.39.0
 slowapi==0.1.10
 mcp==2.3.0
+quickjs==1.19.4
+keyring==25.7.0

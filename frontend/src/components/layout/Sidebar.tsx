@@ -5,6 +5,7 @@ import {
   GitBranch,
   Server,
   Activity,
+  BarChart3,
   Settings,
   ChevronLeft,
   ChevronRight,
@@ -23,6 +24,7 @@ export function Sidebar({ collapsed = false, onToggleCollapse }: SidebarProps) {
     { path: '/', label: 'Agent', icon: Bot, exact: true },
     { path: '/workflows', label: 'Workflows', icon: GitBranch },
     { path: '/servers', label: 'MCP Servers', icon: Server },
+    { path: '/dashboard', label: 'Dashboard', icon: BarChart3 },
     { path: '/activity', label: 'Activity', icon: Activity },
     { path: '/settings', label: 'Settings', icon: Settings },
   ];

@@ -1,5 +1,5 @@
 import { cn, formatRelativeTime } from '../../lib/utils';
-import { Copy, Bot, AlertCircle, CheckCircle2, Info } from 'lucide-react';
+import { Copy, Bot, AlertCircle, CheckCircle2, Info, Ban, Loader2, ShieldQuestion } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Tooltip } from '../ui/Tooltip';
 import type { ChatMessage, AgentEvent } from '../../types/chat';
@@ -11,6 +11,7 @@ const EVENT_ICONS: Record<string, React.ElementType> = {
   app_unavailable: Info,
   intent_no_match: Bot,
   llm_error: AlertCircle,
+  tool_declined: Ban,
 };
 
 const EVENT_COLORS: Record<string, string> = {
@@ -19,6 +20,7 @@ const EVENT_COLORS: Record<string, string> = {
   app_unavailable: 'text-amber-400',
   intent_no_match: 'text-nexus-text-muted',
   llm_error: 'text-red-400',
+  tool_declined: 'text-amber-400',
 };
 
 function renderEvent(event: AgentEvent): ReactNode {
@@ -70,6 +72,16 @@ function renderEvent(event: AgentEvent): ReactNode {
           </div>
         </div>
       );
+    case 'tool_declined':
+      return (
+        <div className="flex items-start gap-2.5">
+          <Icon className={`w-4 h-4 mt-0.5 ${colorClass}`} />
+          <div className="flex-1">
+            <span className="font-medium text-nexus-text">{toolName}</span>
+            <span className="text-sm text-nexus-text-secondary ml-2">— declined by you</span>
+          </div>
+        </div>
+      );
     case 'llm_error':
       return (
         <div className="flex items-start gap-2.5">
@@ -88,10 +100,14 @@ function renderEvent(event: AgentEvent): ReactNode {
 interface MessageProps {
   message: ChatMessage;
   onCopy?: (text: string) => void;
+  /** Set only on the message whose approval is still current. */
+  onApprove?: (approved: boolean) => void;
 }
 
-export function Message({ message, onCopy }: MessageProps) {
+export function Message({ message, onCopy, onApprove }: MessageProps) {
   const isUser = message.role === 'user';
+  const running = message.status === 'running';
+  const pending = message.status === 'needs_approval' ? message.pendingAction : undefined;
   const visibleEvents = (message.events ?? []).filter(e => e.type !== 'intent_no_match');
 
   return (
@@ -126,9 +142,50 @@ export function Message({ message, onCopy }: MessageProps) {
               : 'bg-nexus-bg-secondary border-nexus-border rounded-tl-none'
           )}
         >
-          <div className="whitespace-pre-wrap break-words text-sm">
-            {message.content}
-          </div>
+          {message.activity && message.activity.length > 0 && (
+            <ul className="mb-1.5 space-y-1 text-xs" aria-label="Tool activity">
+              {message.activity.map((a, i) => (
+                <li key={i} className="flex items-center gap-1.5 text-nexus-text-secondary">
+                  {a.state === 'running' && <Loader2 className="w-3.5 h-3.5 animate-spin text-nexus-accent" />}
+                  {a.state === 'ok' && <CheckCircle2 className="w-3.5 h-3.5 text-green-400" />}
+                  {a.state === 'failed' && <AlertCircle className="w-3.5 h-3.5 text-red-400" />}
+                  <code>{a.tool}</code>
+                  {a.summary && <span className="truncate text-nexus-text-muted">— {a.summary}</span>}
+                </li>
+              ))}
+            </ul>
+          )}
+          {running && !message.content ? (
+            <div className="flex items-center gap-2 text-sm text-nexus-text-secondary">
+              <span>Nexus is thinking</span>
+              <span className="thinking-dots text-nexus-text-secondary/50"><span>.</span><span>.</span><span>.</span></span>
+            </div>
+          ) : !pending && (
+            <div className="whitespace-pre-wrap break-words text-sm">
+              {message.content}
+            </div>
+          )}
+          {pending && (
+            <div className="text-sm space-y-2" role="group" aria-label="Approval needed">
+              <div className="flex items-center gap-2 font-medium text-nexus-text">
+                <ShieldQuestion className="w-4 h-4 text-amber-400" />
+                Nexus wants to run <code className="text-nexus-accent">{pending.tool}</code>
+              </div>
+              {Object.keys(pending.arguments ?? {}).length > 0 && (
+                <pre className="text-xs text-nexus-text-secondary bg-nexus-bg-tertiary/50 rounded p-2 overflow-x-auto max-h-48">
+                  {JSON.stringify(pending.arguments, null, 2)}
+                </pre>
+              )}
+              {onApprove ? (
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={() => onApprove(true)}>Approve</Button>
+                  <Button size="sm" variant="secondary" onClick={() => onApprove(false)}>Deny</Button>
+                </div>
+              ) : (
+                <p className="text-xs text-nexus-text-muted">This request is no longer waiting.</p>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="flex items-center gap-2 mt-1.5 text-xs text-nexus-text-muted">

@@ -38,6 +38,7 @@ def _has_encrypted_data(database_path: str) -> bool:
         checks = (
             "SELECT 1 FROM llm_providers WHERE api_key LIKE 'fernet-llm:%' LIMIT 1",
             "SELECT 1 FROM mcp_servers WHERE env LIKE 'fernet:%' OR headers LIKE 'fernet:%' LIMIT 1",
+            "SELECT 1 FROM mcp_servers WHERE oauth LIKE 'fernet:%' LIMIT 1",
             "SELECT 1 FROM connections WHERE config LIKE 'fernet:%' LIMIT 1",
         )
         for query in checks:
@@ -61,7 +62,20 @@ def ensure_secret_key(database_path: str = DATABASE_PATH, environ=os.environ) ->
     if environ.get("NEXUS_SECRET_KEY") or ENVIRONMENT == "production":
         return
     key_file = Path(database_path).parent / ".nexus_secret_key"
-    if key_file.exists():
+    use_keychain = environ.get("NEXUS_KEYCHAIN", "").lower() == "true"
+    if use_keychain:
+        stored = _keychain("get")
+        if stored:
+            environ["NEXUS_SECRET_KEY"] = stored
+            return
+        if key_file.exists():  # move an existing key file into the keychain
+            key = key_file.read_text(encoding="utf-8").strip()
+            _keychain("set", key)
+            key_file.unlink()
+            environ["NEXUS_SECRET_KEY"] = key
+            logging.getLogger(__name__).warning("Moved NEXUS_SECRET_KEY from %s into the OS keychain", key_file)
+            return
+    elif key_file.exists():
         environ["NEXUS_SECRET_KEY"] = key_file.read_text(encoding="utf-8").strip()
         return
     if _has_encrypted_data(database_path):
@@ -70,13 +84,29 @@ def ensure_secret_key(database_path: str = DATABASE_PATH, environ=os.environ) ->
             "Set the original key in backend/.env (NEXUS_SECRET_KEY=...). If it is lost, set any new key "
             "and re-enter your LLM API keys in Settings > AI and MCP server secrets on the MCP Servers page."
         )
-    key_file.parent.mkdir(parents=True, exist_ok=True)
     key = secrets.token_urlsafe(32)
-    key_file.write_text(key, encoding="utf-8")
-    logging.getLogger(__name__).warning(
-        "NEXUS_SECRET_KEY not set; generated one at %s. Back it up or set it in .env.", key_file
-    )
+    if use_keychain:
+        _keychain("set", key)
+        where = "the OS keychain"
+    else:
+        key_file.parent.mkdir(parents=True, exist_ok=True)
+        key_file.write_text(key, encoding="utf-8")
+        where = str(key_file)
+    logging.getLogger(__name__).warning("NEXUS_SECRET_KEY not set; generated one in %s. Back it up.", where)
     environ["NEXUS_SECRET_KEY"] = key
+
+
+KEYCHAIN_SERVICE = "nexus"
+
+
+def _keychain(action: str, value: str = "") -> str | None:
+    """Read or store the secret key in the OS keychain (Windows Credential Manager, macOS Keychain, Secret Service)."""
+    import keyring
+
+    if action == "set":
+        keyring.set_password(KEYCHAIN_SERVICE, "NEXUS_SECRET_KEY", value)
+        return None
+    return keyring.get_password(KEYCHAIN_SERVICE, "NEXUS_SECRET_KEY")
 
 
 ensure_secret_key()

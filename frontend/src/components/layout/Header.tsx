@@ -1,8 +1,9 @@
 import { cn } from '../../lib/utils';
-import { Menu, Sun, Moon, Monitor, Bell, User, Settings, LogOut, ChevronDown } from 'lucide-react';
+import { Menu, Sun, Moon, Monitor } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Dropdown, DropdownItem } from '../ui/Dropdown';
 import { useSettings } from '../../hooks/useSettings';
+import { NotificationBell } from './NotificationBell';
 
 interface HeaderProps {
   onMenuClick?: () => void;
@@ -16,13 +17,6 @@ export function Header({ onMenuClick, title }: HeaderProps) {
     { label: 'Dark', icon: <Moon className="w-4 h-4" />, onClick: () => setTheme('dark') },
     { label: 'Light', icon: <Sun className="w-4 h-4" />, onClick: () => setTheme('light') },
     { label: 'System', icon: <Monitor className="w-4 h-4" />, onClick: () => setTheme('system') },
-  ];
-
-  const userMenuItems: DropdownItem[] = [
-    { label: 'Profile', icon: <User className="w-4 h-4" />, onClick: () => {} },
-    { label: 'Settings', icon: <Settings className="w-4 h-4" />, onClick: () => {} },
-    { divider: true, label: '', onClick: () => {} },
-    { label: 'Sign out', icon: <LogOut className="w-4 h-4" />, onClick: () => {}, danger: true },
   ];
 
   return (
@@ -63,29 +57,8 @@ export function Header({ onMenuClick, title }: HeaderProps) {
           items={themeOptions}
         />
 
-        <Dropdown
-          trigger={
-            <Button variant="ghost" size="sm" aria-label="Notifications">
-              <Bell className="w-5 h-5" />
-            </Button>
-          }
-          items={[
-            { label: 'No new notifications', onClick: () => {}, disabled: true },
-          ]}
-        />
+        <NotificationBell />
 
-        <Dropdown
-          trigger={
-            <Button variant="ghost" size="sm" className="gap-1">
-              <div className="w-8 h-8 rounded-full bg-nexus-accent flex items-center justify-center">
-                <User className="w-5 h-5 text-nexus-bg" />
-              </div>
-              <ChevronDown className="w-4 h-4 hidden sm:block" />
-            </Button>
-          }
-          items={userMenuItems}
-          align="right"
-        />
       </div>
     </header>
   );

@@ -5,11 +5,13 @@ import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Separator } from '../components/ui/Separator';
 import { Badge } from '../components/ui/Badge';
-import { User, Moon, Sun, Monitor, Cpu } from 'lucide-react';
+import { User, Moon, Sun, Monitor, Cpu, Download } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
 import { useSettings } from '../hooks/useSettings';
 import { useLLM } from '../hooks/useLLM';
 import { LLMSettings } from '../components/llm/LLMSettings';
 import { settingsService } from '../services/settings';
+import { api } from '../services/api';
 
 const tabs = [
   { id: 'general', label: 'General', icon: User },
@@ -27,9 +29,13 @@ const THEMES = [
 export function SettingsPage() {
   const { theme, setTheme } = useSettings();
   const { configs, providerInfo, loading, error: llmError, createConfig, updateConfig, deleteConfig, refreshConfigs, testChat } = useLLM();
-  const [activeTab, setActiveTab] = useState<TabId>('general');
+  const [searchParams] = useSearchParams();
+  const requested = tabs.find(t => t.id === searchParams.get('tab'))?.id;
+  const [activeTab, setActiveTab] = useState<TabId>(requested ?? 'general');
   const [language, setLanguage] = useState('');
   const [timezone, setTimezone] = useState('');
+  const [retentionDays, setRetentionDays] = useState('30');
+  const [tokenLimit, setTokenLimit] = useState('0');
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
   useEffect(() => {
@@ -37,6 +43,8 @@ export function SettingsPage() {
       .then(s => {
         setLanguage(s.user.language);
         setTimezone(s.user.timezone);
+        setRetentionDays(String(s.user.retentionDays ?? 30));
+        setTokenLimit(String(s.user.dailyTokenLimit ?? 0));
       })
       .catch(() => {});
   }, []);
@@ -44,7 +52,11 @@ export function SettingsPage() {
   const saveGeneral = async () => {
     setSaveState('saving');
     try {
-      await settingsService.updateUserSettings({ language, timezone, theme });
+      await settingsService.updateUserSettings({
+        language, timezone, theme,
+        retentionDays: Math.max(0, Number(retentionDays) || 0),
+        dailyTokenLimit: Math.max(0, Number(tokenLimit) || 0),
+      });
       setSaveState('saved');
     } catch {
       setSaveState('error');
@@ -122,11 +134,54 @@ export function SettingsPage() {
                   <Input label="Language" placeholder="en-US" value={language} onChange={(e) => { setLanguage(e.target.value); setSaveState('idle'); }} />
                   <Input label="Timezone" placeholder="UTC" value={timezone} onChange={(e) => { setTimezone(e.target.value); setSaveState('idle'); }} />
                 </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                <Input
+                  label="Keep run history and activity for (days)"
+                  type="number"
+                  min={0}
+                  value={retentionDays}
+                  onChange={(e) => { setRetentionDays(e.target.value); setSaveState('idle'); }}
+                  hint="Older runs and activity are deleted once a day. 0 keeps everything."
+                />
+                <Input
+                  label="Daily AI token limit"
+                  type="number"
+                  min={0}
+                  step={1000}
+                  value={tokenLimit}
+                  onChange={(e) => { setTokenLimit(e.target.value); setSaveState('idle'); }}
+                  hint="Chat and workflows stop calling the AI once today's (UTC) usage reaches this. 0 = no limit."
+                />
+                </div>
                 <div className="flex items-center gap-3">
                   <Button size="sm" onClick={saveGeneral} loading={saveState === 'saving'}>Save</Button>
                   {saveState === 'saved' && <span className="text-xs text-nexus-accent">Saved</span>}
                   {saveState === 'error' && <span className="text-xs text-nexus-danger">Could not save settings</span>}
                 </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {activeTab === 'general' && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Backup</CardTitle>
+                <CardDescription>
+                  One file with your workflows, servers, chats, settings and the key that unlocks their stored secrets.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <a
+                  href={`${api.getBaseUrl()}/api/settings/backup`}
+                  download
+                  className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-nexus-accent text-nexus-bg text-sm font-medium hover:opacity-90"
+                >
+                  <Download className="w-4 h-4" /> Download backup
+                </a>
+                <p className="text-xs text-nexus-text-muted">
+                  Works only on the computer running Nexus. Keep the file private: it contains every stored token and API key.
+                  Restore steps are inside the zip.
+                </p>
               </CardContent>
             </Card>
           )}

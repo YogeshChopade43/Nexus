@@ -2,10 +2,12 @@ import { useEffect, useState } from 'react';
 import { Plus, X } from 'lucide-react';
 import { cn, getErrorMessage } from '../../lib/utils';
 import { workflowService } from '../../services/workflow';
+import { api } from '../../services/api';
 import { ActionPicker } from './ActionPicker';
+import { toolLabel } from './toolInfo';
 import { FieldLabel, ParameterForm, fieldClass } from './StepConfig';
 import type { McpServer } from '../../types/mcp';
-import type { Frequency, ManualInput, ToolDefinition, TriggerTypeInfo, Weekday, WorkflowNode } from '../../types/workflow';
+import type { AppWebhookSetup, Frequency, ManualInput, ToolDefinition, TriggerTypeInfo, Weekday, WorkflowNode } from '../../types/workflow';
 
 const TYPES = [
   { id: 'manual', label: 'Manually', icon: '👆', help: 'Run with the Run button, optionally asking for inputs' },
@@ -43,7 +45,7 @@ export function triggerSummary(config: Record<string, unknown>): string {
       const f = config.frequency as Frequency;
       const every = Number(config.interval ?? 1) > 1 ? `Every ${config.interval} ${f}s` : `Every ${f}`;
       if (f === 'week') return `${every} on ${(config.weekdays as string[] ?? []).join(', ')} at ${config.at}`;
-      if (f === 'month') return `Monthly on day ${config.month_day} at ${config.at}`;
+      if (f === 'month') return `${every} on ${Number(config.month_day) === -1 ? 'the last day' : `day ${config.month_day}`} at ${config.at}`;
       if (f === 'day') return `${every} at ${config.at}`;
       return every;
     }
@@ -92,9 +94,9 @@ function RecurrenceForm({ config, onConfig }: { config: Record<string, unknown>;
             <option value="month">Monthly</option>
           </select>
         </label>
-        {(frequency === 'minute' || frequency === 'hour' || frequency === 'day') && (
+        {(['minute', 'hour', 'day', 'week', 'month'] as Frequency[]).includes(frequency) && (
           <label className="block">
-            <FieldLabel>{frequency === 'day' ? 'Every N days' : `Every N ${frequency}s`}</FieldLabel>
+            <FieldLabel>{`Every N ${frequency}s`}</FieldLabel>
             <input type="number" min={frequency === 'minute' ? 5 : 1} max={1000} value={Number(config.interval ?? 1)}
               onChange={(e) => onConfig({ interval: Number(e.target.value) })} className={fieldClass} />
           </label>
@@ -108,7 +110,10 @@ function RecurrenceForm({ config, onConfig }: { config: Record<string, unknown>;
         {frequency === 'month' && (
           <label className="block">
             <FieldLabel>Day of month</FieldLabel>
-            <input type="number" min={1} max={31} value={Number(config.month_day ?? 1)} onChange={(e) => onConfig({ month_day: Number(e.target.value) })} className={fieldClass} />
+            <select value={String(config.month_day ?? 1)} onChange={(e) => onConfig({ month_day: Number(e.target.value) })} className={fieldClass}>
+              {Array.from({ length: 31 }, (_, i) => <option key={i + 1} value={i + 1}>{i + 1}</option>)}
+              <option value={-1}>Last day of the month</option>
+            </select>
           </label>
         )}
       </div>
@@ -179,6 +184,7 @@ function PollForm({ config, onConfig, servers, tools }: {
 }) {
   const [picking, setPicking] = useState(false);
   const tool = tools.get(String(config.tool ?? ''));
+  const picked = servers.flatMap(s => s.tools.map(t => ({ server: s, tool: t }))).find(p => p.tool.name === config.tool);
   return (
     <div className="space-y-3">
       <div>
@@ -187,8 +193,8 @@ function PollForm({ config, onConfig, servers, tools }: {
           <ActionPicker servers={servers} toolsOnly onClose={() => setPicking(false)}
             onPick={(picked) => { if (picked.type === 'action') onConfig({ tool: picked.tool, parameters: {} }); setPicking(false); }} />
         ) : (
-          <button onClick={() => setPicking(true)} className={cn(fieldClass, 'text-left font-mono')}>
-            {String(config.tool || 'Choose an operation that lists items (e.g. list issues)…')}
+          <button type="button" onClick={() => setPicking(true)} title={String(config.tool || '')} className={cn(fieldClass, 'text-left')}>
+            {picked ? `${picked.server.name} · ${toolLabel(picked.tool)}` : String(config.tool || 'Choose an operation that lists items (e.g. list issues)…')}
           </button>
         )}
       </div>
@@ -197,9 +203,41 @@ function PollForm({ config, onConfig, servers, tools }: {
         <FieldLabel>Check every (minutes)</FieldLabel>
         <input type="number" min={1} max={1440} value={Number(config.interval_minutes ?? 5)} onChange={(e) => onConfig({ interval_minutes: Number(e.target.value) })} className={fieldClass} />
       </label>
+      <PollCostNote minutes={Number(config.interval_minutes ?? 5)} />
+      <label className="block sm:w-1/2">
+        <FieldLabel>Start a run for</FieldLabel>
+        <select value={String(config.poll_mode ?? 'new')} onChange={(e) => onConfig({ poll_mode: e.target.value })} className={fieldClass}>
+          <option value="new">New items only</option>
+          <option value="new_or_updated">New or updated items</option>
+        </select>
+      </label>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <label className="block">
+          <FieldLabel hint="(optional)">Only when</FieldLabel>
+          <input value={String(config.filter_field ?? '')} onChange={(e) => onConfig({ filter_field: e.target.value })} placeholder="item.title" className={cn(fieldClass, 'font-mono')} />
+        </label>
+        <label className="block">
+          <FieldLabel>Operator</FieldLabel>
+          <select value={String(config.filter_operator || 'contains')} onChange={(e) => onConfig({ filter_operator: e.target.value })} className={fieldClass} disabled={!config.filter_field}>
+            {['contains', 'equals', 'not_equals', 'not_contains', 'truthy', 'gt', 'lt'].map(op => <option key={op} value={op}>{op.replace('_', ' ')}</option>)}
+          </select>
+        </label>
+        <label className="block">
+          <FieldLabel>Value</FieldLabel>
+          <input value={String(config.filter_value ?? '')} onChange={(e) => onConfig({ filter_value: e.target.value })} placeholder="urgent" className={fieldClass} disabled={!config.filter_field} />
+        </label>
+      </div>
       <details className="text-xs">
         <summary className="cursor-pointer text-nexus-text-secondary">Advanced</summary>
         <div className="grid gap-3 sm:grid-cols-2 mt-2">
+          <label className="block">
+            <FieldLabel hint="(blank = created_time, created_at…)">Created-time field</FieldLabel>
+            <input value={String(config.created_field ?? '')} onChange={(e) => onConfig({ created_field: e.target.value })} placeholder="created_time" className={cn(fieldClass, 'font-mono')} />
+          </label>
+          <label className="block">
+            <FieldLabel hint="(blank = last_edited_time, updated_at…)">Updated-time field</FieldLabel>
+            <input value={String(config.updated_field ?? '')} onChange={(e) => onConfig({ updated_field: e.target.value })} placeholder="last_edited_time" className={cn(fieldClass, 'font-mono')} />
+          </label>
           <label className="block">
             <FieldLabel hint="(blank = first list found)">Items path</FieldLabel>
             <input value={String(config.items_path ?? '')} onChange={(e) => onConfig({ items_path: e.target.value })} placeholder="items" className={cn(fieldClass, 'font-mono')} />
@@ -211,8 +249,36 @@ function PollForm({ config, onConfig, servers, tools }: {
         </div>
       </details>
       <p className="text-xs text-nexus-text-muted">
-        The first check only records what already exists. After that, each new item starts one run, available as <code>{'{{ trigger.item }}'}</code>.
+        The first check only records what already exists, and items created before the trigger started are ignored even if edited later.
+        After that, each new item starts one run, available as <code>{'{{ trigger.item }}'}</code>.
       </p>
+    </div>
+  );
+}
+
+function AppEventSetup({ appId }: { appId: string }) {
+  const [setup, setSetup] = useState<AppWebhookSetup[]>([]);
+  useEffect(() => {
+    workflowService.getAppWebhookSetup().then(setSetup).catch(() => {});
+  }, []);
+  const app = setup.find(a => a.app_id === appId);
+  const url = `${api.getBaseUrl()}/api/webhooks/apps/${appId || '<app>'}`;
+  return (
+    <div className="rounded-lg border border-nexus-border p-3 space-y-2 text-xs text-nexus-text-secondary">
+      <p>The app must send its webhooks to <code className="text-nexus-accent break-all">{url}</code></p>
+      <p className="text-nexus-text-muted">If Nexus runs on your computer, apps on the internet can only reach it through a tunnel (for example <code>cloudflared tunnel --url {api.getBaseUrl()}</code>); use the tunnel's address instead of localhost.</p>
+      {app ? (
+        <>
+          <p>
+            {app.configured
+              ? <span className="text-green-500">✓ {app.secret_env} is set</span>
+              : <span className="text-nexus-warning">Set {app.secret_env} in backend/.env to accept {app.label} webhooks.</span>}
+          </p>
+          <ol className="list-decimal pl-5 space-y-1">{app.steps.map(step => <li key={step}>{step}</li>)}</ol>
+        </>
+      ) : appId && (
+        <p>For this app, add <code>?token=…</code> to the URL with the value of NEXUS_WEBHOOK_TOKEN, and send JSON like <code>{'{"event": "issue.created", "payload": {…}}'}</code>.</p>
+      )}
     </div>
   );
 }
@@ -224,6 +290,17 @@ interface TriggerCardProps {
   tools: Map<string, ToolDefinition>;
   triggerTypes: TriggerTypeInfo[];
   webhookPath?: string;
+}
+
+/** How often a poll runs, and what that costs: checks only call the app; AI steps run once per new item. */
+function PollCostNote({ minutes }: { minutes: number }) {
+  const perDay = Math.round(1440 / Math.max(1, minutes));
+  return (
+    <p className={minutes < 5 ? 'text-xs text-amber-500' : 'text-xs text-nexus-text-muted'} role="note">
+      About {perDay.toLocaleString()} checks a day. Checks call the app, not the AI; each new item starts a run, so a busy
+      source runs your AI steps many times. {minutes < 5 && 'Checking this often may hit the app\'s rate limits.'}
+    </p>
+  );
 }
 
 export function TriggerCard({ trigger, onChange, servers, tools, triggerTypes, webhookPath }: TriggerCardProps) {
@@ -253,6 +330,13 @@ export function TriggerCard({ trigger, onChange, servers, tools, triggerTypes, w
         </select>
       </label>
 
+      <label className="flex items-center gap-2 text-xs text-nexus-text-muted">
+        Max runs at once
+        <input type="number" min={0} max={20} value={Number(config.concurrency ?? 0)} onChange={(e) => onConfig({ concurrency: Number(e.target.value) })}
+          className="w-16 px-2 py-1 rounded bg-nexus-bg-tertiary border border-nexus-border text-nexus-text" aria-label="Max runs at once" />
+        <span>(0 = no limit; extra runs wait their turn)</span>
+      </label>
+
       {type === 'manual' && <ManualInputsForm config={config} onConfig={onConfig} />}
       {type === 'recurrence' && <RecurrenceForm config={config} onConfig={onConfig} />}
       {type === 'poll' && <PollForm config={config} onConfig={onConfig} servers={servers} tools={tools} />}
@@ -261,6 +345,7 @@ export function TriggerCard({ trigger, onChange, servers, tools, triggerTypes, w
           {webhookPath ? 'The secret URL is shown on the workflow page.' : 'A secret URL is created when you save. The request body is available as {{ trigger.payload }}.'}
         </p>
       )}
+      {type === 'app_event' && <AppEventSetup appId={String(config.app_id ?? '')} />}
       {type === 'app_event' && (
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="block">

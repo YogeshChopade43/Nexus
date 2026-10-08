@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -52,6 +52,56 @@ def log_activity(
             conn.close()
     except Exception:
         logger.exception("Failed to record activity %s", activity_type)
+
+
+# Schema changes after the baseline in init_db, applied once each in order. The database's
+# PRAGMA user_version records how many have run. Append only: never edit or reorder an entry.
+MIGRATIONS: list[str] = [
+    # 1: OAuth tokens and client registration for hosted MCP servers (encrypted JSON)
+    "ALTER TABLE mcp_servers ADD COLUMN oauth TEXT DEFAULT ''",
+    # 2: (removed: users, login sessions and audit log; see 4)
+    "SELECT 1",
+    # 3: tokens used per AI call, for the dashboard and the daily limit
+    """
+    CREATE TABLE llm_usage (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp TEXT NOT NULL,
+        provider_id INTEGER,
+        provider TEXT,
+        model TEXT,
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        estimated INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX idx_llm_usage_ts ON llm_usage(timestamp)
+    """,
+    # 4: drop the login tables migration 2 used to create
+    "DROP TABLE IF EXISTS user_sessions; DROP TABLE IF EXISTS audit_log; DROP TABLE IF EXISTS users",
+]
+
+
+def run_migrations(conn: sqlite3.Connection) -> None:
+    applied = conn.execute("PRAGMA user_version").fetchone()[0]
+    for number, statement in enumerate(MIGRATIONS[applied:], start=applied + 1):
+        logger.info("Applying database migration %d", number)
+        conn.executescript(f"BEGIN; {statement}; PRAGMA user_version = {number}; COMMIT;")
+
+
+def purge_old_records(days: int) -> dict[str, int]:
+    """Delete finished workflow runs and activity entries older than ``days`` (0 keeps everything)."""
+    if days <= 0:
+        return {"runs": 0, "activity": 0}
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat().replace("+00:00", "Z")
+    conn = get_connection()
+    try:
+        runs = conn.execute("DELETE FROM workflow_runs WHERE status != 'running' AND started_at < ?", (cutoff,)).rowcount
+        activity = conn.execute("DELETE FROM activity_log WHERE timestamp < ?", (cutoff,)).rowcount
+        conn.commit()
+    finally:
+        conn.close()
+    if runs or activity:
+        logger.info("Cleanup removed %d run(s) and %d activity entries older than %d days", runs, activity, days)
+    return {"runs": runs, "activity": activity}
 
 
 def init_db() -> None:
@@ -219,6 +269,14 @@ def init_db() -> None:
         init_mcp_table(conn)
         conn.executescript(
             """
+            CREATE TABLE IF NOT EXISTS workflow_versions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                workflow_id INTEGER NOT NULL,
+                version INTEGER NOT NULL,
+                snapshot TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (workflow_id) REFERENCES workflows(id) ON DELETE CASCADE
+            );
             CREATE TABLE IF NOT EXISTS trigger_state (
                 workflow_id INTEGER PRIMARY KEY,
                 seen TEXT DEFAULT '[]',
@@ -231,6 +289,10 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_activity_ts ON activity_log(timestamp);
             """
         )
+        trigger_state_columns = {row["name"] for row in conn.execute("PRAGMA table_info(trigger_state)").fetchall()}
+        if "baseline_at" not in trigger_state_columns:
+            conn.execute("ALTER TABLE trigger_state ADD COLUMN baseline_at TEXT")
+        run_migrations(conn)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.commit()
     finally:

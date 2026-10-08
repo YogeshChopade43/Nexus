@@ -16,8 +16,14 @@ function keysOf(value: unknown): string[] {
 }
 
 /** Everything a field can reference, given the trigger, the steps before it, and the last run's outputs. */
-export function dynamicEntries({ trigger, earlierSteps, lastOutputs }: DynamicSources): DynamicEntry[] {
+export function dynamicEntries({ trigger, earlierSteps, lastOutputs, scopes = [] }: DynamicSources): DynamicEntry[] {
   const entries: DynamicEntry[] = [];
+  if (scopes.includes('loop')) {
+    entries.push({ group: 'Current loop', label: 'Current item', path: 'loop.item' }, { group: 'Current loop', label: 'Item number (from 0)', path: 'loop.index' });
+  }
+  if (scopes.includes('error')) {
+    entries.push({ group: 'Error', label: 'Error message', path: 'error.message' });
+  }
   if (trigger) {
     const type = String(trigger.config.trigger_type ?? 'manual');
     if (type === 'manual') {
@@ -59,6 +65,16 @@ function stepEntries(node: WorkflowNode, output: unknown): DynamicEntry[] {
       return [{ group, label: 'Composed value', path: `${base}.value` }];
     case 'condition':
       return [{ group, label: 'Condition result', path: `${base}.result` }];
+    case 'http':
+      return [{ group, label: 'Status code', path: `${base}.status` }, { group, label: 'Response data', path: `${base}.data` }];
+    case 'code':
+      return [{ group, label: 'Returned value', path: `${base}.value` }];
+    case 'workflow':
+      return [{ group, label: 'Workflow result', path: `${base}.result` }];
+    case 'loop':
+      return [{ group, label: 'All results', path: `${base}.results` }, { group, label: 'Item count', path: `${base}.count` }];
+    case 'parallel':
+      return [{ group, label: 'Branch results', path: `${base}.branches` }];
     default:
       return [];
   }

@@ -50,9 +50,9 @@ def test_weekly_weekdays():
     assert len(runs) == 3
 
 
-def test_week_interval_rejected():
+def test_week_interval_needs_sane_range():
     with pytest.raises(ValueError):
-        recurrence.validate(cfg(frequency="week", interval=2, weekdays=["mon"]))
+        recurrence.validate(cfg(frequency="week", interval=0, weekdays=["mon"]))
 
 
 def test_week_requires_weekday():

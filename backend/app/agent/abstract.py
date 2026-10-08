@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, List
+from typing import Any, Awaitable, Callable, List, Optional
 
 from app.core.exceptions import AppNotConnectedError
 from app.tools.registry import ToolRegistry
@@ -27,10 +27,29 @@ class Agent(ABC):
         pass
 
 
+DECLINED = "The user declined this action, so it was not done. Do not retry it; tell the user it was not done."
+
+
 class BaseAgent(Agent):
-    def __init__(self, tool_registry: ToolRegistry, app_connections: dict[str, bool] = None):
+    def __init__(
+        self,
+        tool_registry: ToolRegistry,
+        app_connections: dict[str, bool] = None,
+        on_event: Optional[Callable[[dict[str, Any]], Awaitable[None]]] = None,
+    ):
         self._tool_registry = tool_registry
         self._app_connections = app_connections or {}
+        self._on_event = on_event  # live progress for streaming: tool_call, tool_result, delta, approval_needed
+
+    async def _emit(self, event: dict[str, Any]) -> None:
+        if self._on_event:
+            await self._on_event(event)
+
+    def _policy(self, tool_name: str) -> str:
+        try:
+            return getattr(self._tool_registry.get_tool(tool_name), "policy", "allow")
+        except Exception:
+            return "allow"
 
     def _is_app_connected(self, app_id: str) -> bool:
         return self._app_connections.get(app_id, False)
@@ -110,11 +129,55 @@ class BaseAgent(Agent):
         messages: list[dict[str, Any]] = [{"role": "system", "content": system_msg}]
         messages.extend(history or [])
         messages.append({"role": "user", "content": task})
+        state = {"task": task, "history": history or [], "messages": messages, "summaries": [], "queue": [],
+                 "iteration": 0, "events": events}
+        return await self._tool_loop(state, llm_provider, tool_schemas)
 
+    async def resume(self, state: dict[str, Any], approved: bool, llm_provider: Any, tool_schemas: List[dict[str, Any]]) -> dict[str, Any]:
+        """Continue a run that paused for approval of ``state['queue'][0]``."""
+        return await self._tool_loop(state, llm_provider, tool_schemas, approval=approved)
+
+    async def _tool_loop(
+        self, state: dict[str, Any], llm_provider: Any, tool_schemas: List[dict[str, Any]], approval: Optional[bool] = None,
+    ) -> dict[str, Any]:
+        """Call tools until the model answers. Pauses (returns needs_approval) before any tool whose policy is 'ask'.
+
+        ``state`` is plain JSON so a paused run can be stored with the chat session and resumed later.
+        """
+        messages, summaries, events = state["messages"], state["summaries"], state["events"]
         content = ""
-        summaries: List[str] = []
+        while True:
+            while state["queue"]:
+                call = state["queue"][0]
+                needs_ok = self._policy(call["name"]) == "ask"
+                if needs_ok and approval is None:
+                    action = {"tool": call["name"], "arguments": call["arguments"]}
+                    await self._emit({"type": "approval_needed", **action})
+                    return {
+                        "status": "needs_approval", "events": events, "pending": state, "pending_action": action,
+                        "summary": f"Waiting for approval to run {call['name']}",
+                        "message": f"Nexus wants to run {call['name']}. Approve or deny it to continue.",
+                        "response": f"Nexus wants to run {call['name']}. Approve or deny it to continue.",
+                    }
+                state["queue"].pop(0)
+                if needs_ok and approval is False:
+                    events.append({"type": "tool_declined", "tool_name": call["name"], "arguments": call["arguments"]})
+                    await self._emit({"type": "tool_result", "tool": call["name"], "ok": False, "summary": "Declined by you"})
+                    output = DECLINED
+                else:
+                    await self._emit({"type": "tool_call", "tool": call["name"], "arguments": call["arguments"]})
+                    output = await self._execute_tool_call(call["name"], call["arguments"], events, summaries)
+                    ok = events[-1]["type"] == "tool_executed"
+                    await self._emit({"type": "tool_result", "tool": call["name"], "ok": ok,
+                                      "summary": events[-1].get("summary") or events[-1].get("error", "")})
+                if needs_ok:
+                    approval = None  # an approval covers exactly one call
+                messages.append({"role": "tool", "tool_call_id": call["id"], "content": output})
 
-        for iteration in range(MAX_TOOL_ITERATIONS):
+            if state["iteration"] >= MAX_TOOL_ITERATIONS:
+                content = ""
+                break
+            state["iteration"] += 1
             result = await llm_provider.chat_with_tools(messages=messages, tools=tool_schemas)
             content = result.get("content") or ""
             tool_calls = result.get("tool_calls") or []
@@ -130,42 +193,38 @@ class BaseAgent(Agent):
                     except (json.JSONDecodeError, TypeError):
                         arguments = {}
                 calls.append({
-                    "id": tool_call.get("id") or f"call_{iteration}_{index}",
+                    "id": tool_call.get("id") or f"call_{state['iteration']}_{index}",
                     "name": tool_call.get("name", ""),
                     "arguments": arguments if isinstance(arguments, dict) else {},
                 })
-
             # One assistant turn carries every tool call, followed by one result per call:
             # the shape both OpenAI-style and Anthropic APIs require.
             messages.append({
                 "role": "assistant",
                 "content": content,
                 "tool_calls": [
-                    {
-                        "id": call["id"],
-                        "type": "function",
-                        "function": {"name": call["name"], "arguments": json.dumps(call["arguments"])},
-                    }
-                    for call in calls
+                    {"id": c["id"], "type": "function", "function": {"name": c["name"], "arguments": json.dumps(c["arguments"])}}
+                    for c in calls
                 ],
             })
-            for call in calls:
-                tool_output = await self._execute_tool_call(call["name"], call["arguments"], events, summaries)
-                messages.append({"role": "tool", "tool_call_id": call["id"], "content": tool_output})
+            state["queue"] = calls
             content = ""
 
-        final_content = content
-        if not final_content:
+        if content:
+            await self._emit({"type": "delta", "text": content})
+            final_content = content
+        else:
             final_content = await self._generate_llm_response(
-                task, llm_provider, " ".join(summaries), events, history
+                state["task"], llm_provider, " ".join(summaries), events, state["history"],
+                tool_results=[m["content"] for m in messages if m.get("role") == "tool"],
             )
-
+        final_content = final_content or "Completed without a text response."
         return {
             "status": "completed",
             "events": events,
-            "summary": f"Agent completed task: {task}. {len(summaries)} tool(s) executed.",
-            "message": final_content or "Completed without a text response.",
-            "response": final_content or "Completed without a text response.",
+            "summary": f"Agent completed task: {state['task']}. {len(summaries)} tool(s) executed.",
+            "message": final_content,
+            "response": final_content,
         }
 
     async def _execute_tool_call(
@@ -197,6 +256,7 @@ class BaseAgent(Agent):
         events.append({
             "type": "tool_executed",
             "tool_name": tool_name,
+            "arguments": arguments,
             "event": exec_result["event"],
             "data": data,
             "summary": tool_summary,
@@ -262,6 +322,7 @@ class BaseAgent(Agent):
         context_summary: str,
         events: list[dict[str, Any]],
         history: list[dict[str, Any]] = None,
+        tool_results: Optional[list[str]] = None,
     ) -> str:
         if not llm_provider:
             return context_summary
@@ -271,10 +332,17 @@ class BaseAgent(Agent):
         )
         if context_summary:
             system_msg += f"\n\nResults from tools run for this request: {context_summary}"
+        if tool_results:
+            system_msg += "\n\nTool outputs:\n" + "\n---\n".join(tool_results)[:MAX_TOOL_RESULT_CHARS]
+        messages = [{"role": "system", "content": system_msg}, *(history or []), {"role": "user", "content": task}]
         try:
-            result = await llm_provider.chat(
-                messages=[{"role": "system", "content": system_msg}, *(history or []), {"role": "user", "content": task}],
-            )
+            if self._on_event and hasattr(llm_provider, "chat_stream"):
+                parts: list[str] = []
+                async for chunk in llm_provider.chat_stream(messages=messages):
+                    parts.append(chunk)
+                    await self._emit({"type": "delta", "text": chunk})
+                return "".join(parts) or context_summary or "The language model returned an empty response."
+            result = await llm_provider.chat(messages=messages)
             return result.get("content") or context_summary or "The language model returned an empty response."
         except Exception as exc:
             logger.warning("LLM provider error: %s", exc)

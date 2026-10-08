@@ -1,19 +1,19 @@
 from __future__ import annotations
 
+import html
 import os
 from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.api.middleware import require_local
 from app.core.database import log_activity
 from app.mcp import mcp_manager
 from app.mcp import store
 
 router = APIRouter(prefix="/api/mcp/servers", tags=["mcp"])
-
-_LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost"}
-
 
 class ServerIn(BaseModel):
     name: str = Field(min_length=1, max_length=60)
@@ -24,6 +24,7 @@ class ServerIn(BaseModel):
     url: str = ""
     headers: dict[str, str] = Field(default_factory=dict)
     enabled: bool = True
+    tool_policies: dict[str, Literal["allow", "ask", "block"]] = Field(default_factory=dict)
 
     @field_validator("name", "command", "url")
     @classmethod
@@ -48,18 +49,14 @@ class ServerPatch(BaseModel):
     url: Optional[str] = None
     headers: Optional[dict[str, str]] = None
     enabled: Optional[bool] = None
+    tool_policies: Optional[dict[str, Literal["allow", "ask", "block"]]] = None
 
 
 def _require_local_for_stdio(request: Request, transport: str) -> None:
     """Launching commands is code execution: only allow it from this machine."""
     if transport != "stdio" or os.getenv("NEXUS_ALLOW_REMOTE_STDIO", "").lower() == "true":
         return
-    host = request.client.host if request.client else ""
-    if host not in _LOCAL_HOSTS:
-        raise HTTPException(
-            status_code=403,
-            detail="Local (command) MCP servers can only be configured from the machine running Nexus.",
-        )
+    require_local(request, "Local (command) MCP servers can only be configured from the machine running Nexus.")
 
 
 def _view(config: store.ServerConfig) -> dict[str, Any]:
@@ -69,6 +66,21 @@ def _view(config: store.ServerConfig) -> dict[str, Any]:
 @router.get("/")
 def list_servers() -> list[dict[str, Any]]:
     return [_view(config) for config in store.list_servers()]
+
+
+@router.get("/oauth/callback", response_class=HTMLResponse)
+def oauth_callback(code: str = "", state: str = "", error: str = "", error_description: str = "") -> HTMLResponse:
+    """Where the browser lands after signing in to a hosted MCP server."""
+    if error:
+        message = f"Sign-in failed: {error_description or error}"
+    elif code and state and mcp_manager.complete_sign_in(state, code):
+        message = "Signed in. Nexus is connecting to the server; you can close this tab."
+    else:
+        message = "This sign-in link has expired. Go back to Nexus and click Sign in again."
+    return HTMLResponse(
+        f"<!doctype html><meta charset=utf-8><title>Nexus sign-in</title>"
+        f"<body style='font-family:system-ui;padding:2rem'><p>{html.escape(message)}</p></body>"
+    )
 
 
 @router.get("/{server_id}")
@@ -97,7 +109,7 @@ async def update_server(server_id: int, req: ServerPatch, request: Request) -> d
     changes = req.model_dump(exclude_unset=True)
     transport = changes.get("transport", current.transport)
     # Changing what gets launched counts as configuring a command; toggling enabled does not.
-    if set(changes) - {"enabled", "name"}:
+    if set(changes) - {"enabled", "name", "tool_policies"}:
         _require_local_for_stdio(request, transport)
     try:
         ServerIn(**{**current.public(), "env": current.env, "headers": current.headers, **changes})
@@ -116,6 +128,28 @@ async def restart_server(server_id: int) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="Server not found")
     if not mcp_manager.restart(server_id):
         await mcp_manager.apply(config, server_id)
+    await mcp_manager.wait_ready(server_id)
+    return _view(config)
+
+
+@router.get("/{server_id}/logs")
+def server_logs(server_id: int) -> dict[str, Any]:
+    """Recent connection events plus the tail of a local server's own error output."""
+    config = store.get_server(server_id)
+    if config is None:
+        raise HTTPException(status_code=404, detail="Server not found")
+    return mcp_manager.logs(server_id, config.slug)
+
+
+@router.post("/{server_id}/sign-out")
+async def sign_out(server_id: int) -> dict[str, Any]:
+    """Forget the OAuth tokens of a hosted server; it asks you to sign in again on reconnect."""
+    config = store.get_server(server_id)
+    if config is None:
+        raise HTTPException(status_code=404, detail="Server not found")
+    store.set_oauth(server_id, {})
+    config = store.get_server(server_id)
+    await mcp_manager.apply(config, server_id)
     await mcp_manager.wait_ready(server_id)
     return _view(config)
 

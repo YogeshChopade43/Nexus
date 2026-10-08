@@ -26,6 +26,7 @@ class TriggerConfig(BaseModel):
     timezone: str = "UTC"
     enabled: bool = True
     secret: Optional[str] = None  # webhook token
+    concurrency: int = 0  # max simultaneous runs of this workflow; 0 = unlimited
     # manual
     inputs: list[dict[str, Any]] = Field(default_factory=list)
     # recurrence
@@ -33,7 +34,15 @@ class TriggerConfig(BaseModel):
     interval: int = 1
     at: str = "00:00"
     weekdays: list[str] = Field(default_factory=list)
-    month_day: Optional[int] = None
+    month_day: Optional[int] = None  # 1-31, or -1 for the last day of the month
+    anchor: Optional[str] = None  # YYYY-MM-DD the "every N days/weeks/months" cycle counts from
+    # poll precision
+    poll_mode: str = "new"  # new | new_or_updated
+    updated_field: str = ""
+    created_field: str = ""
+    filter_field: str = ""
+    filter_operator: str = ""
+    filter_value: Optional[Any] = None
     # poll
     tool: Optional[str] = None
     parameters: dict[str, Any] = Field(default_factory=dict)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 import uuid
 from typing import Any, Optional
@@ -15,6 +16,32 @@ from slowapi.middleware import SlowAPIMiddleware
 from app.core.config import ENVIRONMENT, RATE_LIMIT
 
 logger = logging.getLogger("nexus")
+
+
+LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost"}
+
+
+def is_local(request: Request) -> bool:
+    """From this machine. NEXUS_TRUSTED_NETWORKS (e.g. Docker's 172.16.0.0/12) counts as this machine too."""
+    import ipaddress
+
+    host = request.client.host if request.client else ""
+    if host in LOCAL_HOSTS:
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    networks = [n.strip() for n in os.getenv("NEXUS_TRUSTED_NETWORKS", "").split(",") if n.strip()]
+    return any(address in ipaddress.ip_network(n, strict=False) for n in networks)
+
+
+def require_local(request: Request, message: str) -> None:
+    """Refuse requests that don't come from the machine running Nexus."""
+    from fastapi import HTTPException
+
+    if not is_local(request):
+        raise HTTPException(status_code=403, detail=message)
 
 
 def setup_middleware(app: FastAPI) -> None:

@@ -1,13 +1,21 @@
 from __future__ import annotations
 
 import copy
+import io
 import json
 import logging
+import os
+import sqlite3
+import tempfile
+import zipfile
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request, Response
 
-from app.core.database import get_connection
+from app.api.middleware import require_local
+from app.core.database import get_connection, log_activity
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +51,10 @@ def _load_json(value: Any, default: Any) -> Any:
 
 DEFAULT_USER_SETTINGS = {
     "theme": "dark",
+    "retentionDays": 30,  # runs and activity older than this are deleted daily; 0 keeps everything
+    "notificationsReadAt": None,  # notifications up to this time have been seen
+    "dailyTokenLimit": 0,  # AI tokens per day (UTC) across chat and workflows; 0 = no limit
+    "llmPrices": {},  # model -> {"input": $, "output": $} per million tokens, for cost estimates
     "language": "en-US",
     "timezone": "America/New_York",
     "notifications": {
@@ -187,3 +199,43 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> None:
             _deep_merge(base[key], value)
         else:
             base[key] = value
+
+def load_user_settings() -> dict[str, Any]:
+    conn = _conn()
+    try:
+        return _read_user_settings(conn)
+    finally:
+        conn.close()
+
+
+@router.get("/backup")
+def download_backup(request: Request) -> Response:
+    """A zip with a consistent copy of the database and the key that decrypts its secrets."""
+    require_local(request, "Backups contain every stored secret, so they can only be downloaded on the machine running Nexus.")
+    with tempfile.TemporaryDirectory() as folder:
+        copy_path = Path(folder) / "nexus.db"
+        source, target = _conn(), sqlite3.connect(copy_path)
+        try:
+            source.backup(target)  # safe while Nexus keeps writing
+        finally:
+            target.close()
+            source.close()
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.write(copy_path, "nexus.db")
+            archive.writestr("NEXUS_SECRET_KEY.txt", os.getenv("NEXUS_SECRET_KEY", ""))
+            archive.writestr("RESTORE.txt", RESTORE_STEPS)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
+    log_activity("settings_changed", "Backup downloaded")
+    return Response(buffer.getvalue(), media_type="application/zip",
+                    headers={"Content-Disposition": f'attachment; filename="nexus-backup-{stamp}.zip"'})
+
+
+RESTORE_STEPS = """To restore this backup:
+1. Stop the Nexus backend.
+2. Copy nexus.db over backend/data/nexus.db (or the file DATABASE_PATH points to).
+3. Put the key from NEXUS_SECRET_KEY.txt in backend/.env as NEXUS_SECRET_KEY=<key>
+   (or in backend/data/.nexus_secret_key). Without that exact key the stored secrets can't be read.
+4. Start the backend.
+Keep this file private: with the key, anyone can read every stored token and API key.
+"""

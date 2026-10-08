@@ -5,6 +5,7 @@ from typing import Any, Optional
 from fastapi import HTTPException
 
 from app.core.database import get_connection
+from app.llm.metering import Metered
 from app.llm.registry import LLMRegistry
 
 
@@ -45,7 +46,8 @@ def get_active_llm_provider(provider_id: Optional[int] = None, provider_name: Op
         provider = registry.get_provider(provider_id)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Could not load LLM provider: {exc}")
-    return provider, registry.get_config(provider_id)
+    config = registry.get_config(provider_id)
+    return Metered(provider, provider_id, config), config
 
 
 def get_default_llm_provider():

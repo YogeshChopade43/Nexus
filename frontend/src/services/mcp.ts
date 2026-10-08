@@ -1,5 +1,5 @@
 import { api } from './api';
-import type { McpServer, McpServerInput } from '../types/mcp';
+import type { McpLogs, McpServer, McpServerInput } from '../types/mcp';
 
 export const mcpService = {
   list: () => api.get<McpServer[]>('/api/mcp/servers/'),
@@ -7,4 +7,6 @@ export const mcpService = {
   update: (id: number, input: Partial<McpServerInput>) => api.patch<McpServer>(`/api/mcp/servers/${id}`, input),
   restart: (id: number) => api.post<McpServer>(`/api/mcp/servers/${id}/restart`),
   remove: (id: number) => api.delete<void>(`/api/mcp/servers/${id}`),
+  logs: (id: number) => api.get<McpLogs>(`/api/mcp/servers/${id}/logs`),
+  signOut: (id: number) => api.post<McpServer>(`/api/mcp/servers/${id}/sign-out`),
 };

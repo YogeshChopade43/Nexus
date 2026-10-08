@@ -28,9 +28,12 @@ const typeLabels: Record<ActivityType, string> = {
   app_disconnected: 'App disconnected',
   workflow_created: 'Workflow created',
   workflow_updated: 'Workflow updated',
+  workflow_deleted: 'Workflow deleted',
   workflow_executed: 'Workflow executed',
   workflow_completed: 'Workflow completed',
   workflow_failed: 'Workflow failed',
+  workflow_resumed: 'Workflow resumed',
+  server_error: 'Server not connected',
   settings_changed: 'Settings changed',
 };
 
@@ -41,21 +44,26 @@ const typeIcons: Record<ActivityType, typeof ActivityIcon> = {
   app_disconnected: Plug,
   workflow_created: GitBranch,
   workflow_updated: GitBranch,
+  workflow_deleted: GitBranch,
   workflow_executed: CheckCircle,
   workflow_completed: CheckCircle,
   workflow_failed: AlertCircle,
+  workflow_resumed: CheckCircle,
+  server_error: AlertCircle,
   settings_changed: Settings,
 };
 
 function activityGroup(type: ActivityType): ActivityGroup {
   if (type === 'message_sent' || type === 'message_received') return 'messages';
-  if (type === 'app_connected' || type === 'app_disconnected') return 'apps';
+  if (type === 'app_connected' || type === 'app_disconnected' || type === 'server_error') return 'apps';
   if (
     type === 'workflow_created' ||
     type === 'workflow_updated' ||
+    type === 'workflow_deleted' ||
     type === 'workflow_executed' ||
     type === 'workflow_completed' ||
-    type === 'workflow_failed'
+    type === 'workflow_failed' ||
+    type === 'workflow_resumed'
   ) return 'workflows';
   return 'settings';
 }

@@ -5,9 +5,12 @@ export type ActivityType =
   | 'app_disconnected'
   | 'workflow_created'
   | 'workflow_updated'
+  | 'workflow_deleted'
   | 'workflow_executed'
   | 'workflow_completed'
   | 'workflow_failed'
+  | 'workflow_resumed'
+  | 'server_error'
   | 'settings_changed';
 
 export interface Activity {

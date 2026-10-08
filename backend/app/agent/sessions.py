@@ -143,6 +143,18 @@ def append_message(session_id: str, message: dict[str, Any]) -> dict[str, Any]:
     return session
 
 
+def set_metadata(session_id: str, metadata: dict[str, Any]) -> None:
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE agent_sessions SET metadata = ?, updated_at = ? WHERE session_id = ?",
+            (json.dumps(metadata, default=str), _now(), session_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def get_history(session_id: str, limit: int = 50) -> list[dict[str, Any]]:
     session = get_session(session_id)
     if session is None:

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, AsyncIterator
+import asyncio
+from typing import Any, AsyncIterator, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -14,6 +15,7 @@ from app.agent.sessions import (
     get_history,
     get_session,
     list_sessions,
+    set_metadata,
 )
 from app.agent.abstract import BaseAgent, clean_history
 from app.core.database import log_activity
@@ -24,6 +26,7 @@ from app.models.agent import (
     AgentRunResponse,
     AgentSessionCreate,
     AgentSession,
+    ApprovalRequest,
 )
 from app.tools import get_tool_registry
 
@@ -159,97 +162,166 @@ def delete_agent_session(session_id: str) -> dict[str, Any]:
 # Agent run (non-streaming)
 # ---------------------------------------------------------------------------
 
+MAX_ATTACHMENT_CHARS = 100_000
+
+
+def _task_with_attachments(req: AgentRunRequest) -> str:
+    task = req.task or req.message or ""
+    for attachment in req.attachments:
+        content = attachment.content
+        if len(content) > MAX_ATTACHMENT_CHARS:
+            content = content[:MAX_ATTACHMENT_CHARS] + "\n... [file truncated]"
+        task += f"\n\nAttached file '{attachment.name}':\n```\n{content}\n```"
+    return task
+
+
+class _Prepared:
+    """Everything one agent turn needs, shared by /run, /run/stream and /approval."""
+
+    def __init__(self, req: AgentRunRequest, session_id: Optional[str]):
+        self.task = _task_with_attachments(req)
+        if not self.task.strip():
+            raise HTTPException(status_code=400, detail="task or message is required")
+        self.req = req
+        self.session_id = session_id
+        self.states = server_states()
+        self.llm = _resolve_llm_provider(req)
+        self.registry = get_tool_registry()
+        self.available, self.unavailable, self.tools_by_name, _ = _build_available_tools(req, self.registry, self.states)
+        self.history = _session_history(session_id, req)
+
+    def agent(self, on_event=None) -> BaseAgent:
+        connections = {app_id: state["available"] for app_id, state in self.states.items()}
+        return BaseAgent(self.registry, connections, on_event=on_event)
+
+
+def _finish(session_id: Optional[str], user_text: Optional[str], result: dict[str, Any], llm_provider_id: Optional[int]) -> AgentRunResponse:
+    """Persist the turn to the session (or the pending approval) and build the response."""
+    if session_id:
+        session = get_session(session_id) or {}
+        metadata = dict(session.get("metadata") or {})
+        if user_text is not None:
+            append_message(session_id, {"role": "user", "content": user_text})
+        if result["status"] == "needs_approval":
+            metadata["pending"] = {"state": result.pop("pending"), "llm_provider_id": llm_provider_id}
+        else:
+            metadata.pop("pending", None)
+            append_message(session_id, {
+                "role": "assistant", "content": result.get("response") or result.get("message", ""),
+                "events": result["events"], "status": result["status"], "summary": result["summary"],
+            })
+            tools_used = [e.get("tool_name") for e in result["events"] if e.get("type") == "tool_executed"]
+            log_activity("message_received", f"Agent: {(user_text or 'approved action')[:80]}", result.get("summary", ""),
+                         {"status": result["status"], "tools": tools_used, "session_id": session_id})
+        set_metadata(session_id, metadata)
+    result.pop("pending", None)
+    return AgentRunResponse(
+        status=result["status"], events=result["events"], summary=result["summary"],
+        message=result.get("message", ""), response=result.get("response", result.get("message", "")),
+        session_id=session_id, pending_action=result.get("pending_action"),
+    )
+
+
+async def _run(prepared: _Prepared, on_event=None) -> dict[str, Any]:
+    result = await prepared.agent(on_event).run(
+        task=prepared.task, context=prepared.req.context, available_tools=prepared.available,
+        llm_provider=prepared.llm, history=prepared.history,
+    )
+    if result["status"] != "needs_approval":
+        result = _augment_with_unavailable_apps(result, prepared.task, prepared.unavailable, prepared.tools_by_name, prepared.states)
+    return result
+
+
+def _ensure_session(req: AgentRunRequest) -> Optional[str]:
+    # Approvals need somewhere to keep the paused run, so every run belongs to a session.
+    return req.session_id or create_session(title=(req.message or req.task)[:80])
+
+
 @router.post("/run", response_model=AgentRunResponse)
 async def run_agent(req: AgentRunRequest) -> AgentRunResponse:
-    task = req.task or req.message or ""
-    if not task:
-        raise HTTPException(status_code=400, detail="task or message is required")
-
-    states = server_states()
-
-    llm_provider = _resolve_llm_provider(req)
-    tool_registry = get_tool_registry()
-    available_tools, unavailable_names, tools_by_name, states = _build_available_tools(
-        req, tool_registry, states
-    )
-
-    session_id = req.session_id
-    history = _session_history(session_id, req)
-
-    agent = BaseAgent(tool_registry, {app_id: state["available"] for app_id, state in states.items()})
-    result = await agent.run(
-        task=task,
-        context=req.context,
-        available_tools=available_tools,
-        llm_provider=llm_provider,
-        history=history,
-    )
-    result = _augment_with_unavailable_apps(
-        result, task, unavailable_names, tools_by_name, states
-    )
-
-    if session_id:
-        append_message(session_id, {"role": "user", "content": task})
-        append_message(session_id, {
-            "role": "assistant",
-            "content": result.get("response") or result.get("message", ""),
-            "events": result["events"],
-            "status": result["status"],
-            "summary": result["summary"],
-        })
-
-    tools_used = [e.get("tool_name") for e in result["events"] if e.get("type") == "tool_executed"]
-    log_activity(
-        "message_received",
-        f"Agent: {task[:80]}",
-        result.get("summary", ""),
-        {"status": result["status"], "tools": tools_used, "session_id": session_id},
-    )
-
-    return AgentRunResponse(
-        status=result["status"],
-        events=result["events"],
-        summary=result["summary"],
-        message=result.get("message", ""),
-        response=result.get("response", result.get("message", "")),
-        session_id=session_id,
-    )
+    session_id = _ensure_session(req)
+    prepared = _Prepared(req, session_id)
+    result = await _run(prepared)
+    return _finish(session_id, prepared.task, result, req.llm_provider_id)
 
 
-# ---------------------------------------------------------------------------
-# Agent run (streaming via SSE)
-# ---------------------------------------------------------------------------
+@router.post("/sessions/{session_id}/approval", response_model=AgentRunResponse)
+async def answer_approval(session_id: str, body: ApprovalRequest) -> AgentRunResponse:
+    """Approve or deny the tool call a paused run is waiting on, then continue the run."""
+    session = get_session(session_id)
+    pending = (session or {}).get("metadata", {}).get("pending")
+    if not pending:
+        raise HTTPException(status_code=409, detail="Nothing is waiting for approval in this conversation")
+    req = AgentRunRequest(message="(continue)", session_id=session_id, llm_provider_id=pending.get("llm_provider_id"))
+    prepared = _Prepared(req, session_id)
+    if prepared.llm is None:
+        raise HTTPException(status_code=400, detail="No LLM provider configured")
+    agent = prepared.agent()
+    schemas = agent._build_tool_schemas(prepared.available)
+    result = await agent.resume(pending["state"], body.approved, prepared.llm, schemas)
+    return _finish(session_id, None, result, req.llm_provider_id)
+
 
 @router.post("/run/stream")
 async def run_agent_stream(req: AgentRunRequest):
-    """Stream the agent's final text response token-by-token as SSE."""
-    task = req.task or req.message or ""
-    if not task:
-        raise HTTPException(status_code=400, detail="task or message is required")
+    """Server-sent events: tool_call, tool_result, approval_needed and delta while working, then done."""
+    session_id = _ensure_session(req)
+    prepared = _Prepared(req, session_id)
+    if prepared.llm is None:
+        raise HTTPException(status_code=400, detail="An LLM provider is required")
+    queue: asyncio.Queue = asyncio.Queue()
 
-    llm_provider = _resolve_llm_provider(req)
-    if llm_provider is None:
-        raise HTTPException(status_code=400, detail="An LLM provider is required for streaming")
-
-    session_id = req.session_id
-    messages = [*_session_history(session_id, req), {"role": "user", "content": task}]
+    async def worker() -> None:
+        try:
+            result = await _run(prepared, on_event=queue.put)
+            final = _finish(session_id, prepared.task, result, req.llm_provider_id)
+            await queue.put({"type": "done", **final.model_dump()})
+        except Exception as exc:
+            logger.warning("Stream error: %s", exc)
+            await queue.put({"type": "error", "error": str(exc)})
+        finally:
+            await queue.put(None)
 
     async def event_generator() -> AsyncIterator[str]:
-        full_content = ""
+        task = asyncio.create_task(worker())
         try:
-            async for chunk in llm_provider.chat_stream(messages=messages):
-                full_content += chunk
-                yield f"data: {json.dumps({'delta': chunk, 'content': full_content})}\n\n"
-        except Exception as exc:
-            logger.warning(f"Stream error: {exc}")
-            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
-            return
-
-        yield "data: [DONE]\n\n"
-
-        if session_id:
-            append_message(session_id, {"role": "user", "content": task})
-            if full_content:
-                append_message(session_id, {"role": "assistant", "content": full_content})
+            while (event := await queue.get()) is not None:
+                yield f"data: {json.dumps(event, default=str)}\n\n"
+        finally:
+            if not task.done():
+                task.cancel()
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@router.post("/sessions/{session_id}/workflow")
+def conversation_to_workflow(session_id: str) -> dict[str, Any]:
+    """Turn the tool calls made in a conversation into a workflow you can re-run with one click."""
+    session = get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    calls = [
+        event for message in session["messages"] if message.get("role") == "assistant"
+        for event in message.get("events") or [] if event.get("type") == "tool_executed"
+    ]
+    if not calls:
+        raise HTTPException(status_code=400, detail="This conversation didn't use any tools, so there is nothing to automate")
+    request = next((m["content"] for m in session["messages"] if m.get("role") == "user"), "")
+    request = request.split("\n\nAttached file '")[0][:500]  # attachment bodies don't belong in the workflow
+    nodes: list[dict[str, Any]] = [{"id": "trigger_1", "type": "trigger", "name": "Trigger", "config": {"trigger_type": "manual"}}]
+    for index, call in enumerate(calls, start=1):
+        nodes.append({"id": f"action_{index}", "type": "action", "name": call["tool_name"].split("__")[-1],
+                      "config": {"tool": call["tool_name"], "parameters": call.get("arguments") or {}}})
+    references = " ".join(f"{{{{ steps.action_{i}.text }}}}" for i in range(1, len(calls) + 1))
+    nodes.append({"id": "llm_1", "type": "llm", "name": "Answer", "config": {
+        "prompt": f"Using these results:\n{references}\n\nAnswer this request: {request}"}})
+    edges = [{"id": f"edge-{a['id']}-{b['id']}", "source": a["id"], "target": b["id"]} for a, b in zip(nodes, nodes[1:])]
+
+    from app.api.routes.workflows import create_workflow
+    from app.models.workflow import WorkflowCreate
+
+    created = create_workflow(WorkflowCreate(
+        name=(session.get("title") or "Chat workflow")[:60], description=f"Created from a chat: {request[:200]}",
+        nodes=nodes, edges=edges, isActive=True,
+    ))
+    return created.model_dump()

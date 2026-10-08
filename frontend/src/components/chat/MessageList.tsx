@@ -7,6 +7,7 @@ import type { ChatMessage } from '../../types/chat';
 export interface MessageListProps {
   messages: ChatMessage[];
   onCopy?: (text: string) => void;
+  onApprove?: (approved: boolean) => void;
   autoScroll?: boolean;
 }
 
@@ -16,7 +17,7 @@ export interface MessageListRef {
 }
 
 export const MessageList = forwardRef<MessageListRef, MessageListProps>(
-  ({ messages, onCopy, autoScroll = true }, ref) => {
+  ({ messages, onCopy, onApprove, autoScroll = true }, ref) => {
     const scrollAreaRef = useRef<HTMLDivElement>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -52,11 +53,12 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(
     return (
       <ScrollArea className="h-full" ref={scrollAreaRef}>
         <div className="flex flex-col gap-4 pb-4" role="log" aria-live="polite" aria-label="Chat messages">
-          {messages.map((message) => (
+          {messages.map((message, index) => (
             <Message
               key={message.id}
               message={message}
               onCopy={onCopy}
+              onApprove={index === messages.length - 1 ? onApprove : undefined}
             />
           ))}
           <div ref={messagesEndRef} />

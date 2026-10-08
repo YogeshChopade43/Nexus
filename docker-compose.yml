@@ -1,0 +1,19 @@
+# docker compose up --build   ->  open http://localhost:8000
+services:
+  nexus:
+    build: .
+    ports:
+      # Only this computer can reach Nexus. Nexus has no login yet, so don't publish it more widely.
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - nexus-data:/app/backend/data  # database, secret key, MCP server logs
+    environment:
+      # Requests arrive from Docker's network, not 127.0.0.1; with the port bound to 127.0.0.1
+      # above they can only come from this computer, so treat them as local (command-launched
+      # MCP servers, backups).
+      NEXUS_TRUSTED_NETWORKS: "172.16.0.0/12"
+      # Optional: NEXUS_SECRET_KEY (otherwise generated into the data volume), NEXUS_PUBLIC_URL.
+    restart: unless-stopped
+
+volumes:
+  nexus-data:

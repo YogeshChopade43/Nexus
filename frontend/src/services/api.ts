@@ -1,9 +1,9 @@
 const DEFAULT_BASE_URL = 'http://localhost:8000';
 
-const envBaseUrl =
-  (typeof import.meta !== 'undefined' &&
-    (import.meta.env?.VITE_API_URL || import.meta.env?.VITE_API_BASE_URL)) ||
-  DEFAULT_BASE_URL;
+const configuredUrl =
+  (typeof import.meta !== 'undefined' && (import.meta.env?.VITE_API_URL || import.meta.env?.VITE_API_BASE_URL)) || '';
+// 'same-origin': the backend serves this frontend (the Docker image), so call it on the same address.
+const envBaseUrl = configuredUrl === 'same-origin' ? '' : configuredUrl || DEFAULT_BASE_URL;
 
 /** FastAPI returns `detail` as a string, or a list of {msg} objects for validation errors. */
 function errorMessage(data: { message?: string; detail?: unknown }, fallback: string): string {
@@ -18,11 +18,16 @@ function errorMessage(data: { message?: string; detail?: unknown }, fallback: st
   return fallback;
 }
 
+async function failure(response: Response): Promise<ApiError> {
+  const errorData = await response.json().catch(() => ({}));
+  return { code: `HTTP_${response.status}`, message: errorMessage(errorData, response.statusText), details: errorData };
+}
+
 class ApiService {
   private baseUrl: string;
   private defaultHeaders: HeadersInit;
 
-  constructor(baseUrl: string = envBaseUrl || DEFAULT_BASE_URL) {
+  constructor(baseUrl: string = envBaseUrl) {
     this.baseUrl = baseUrl;
     this.defaultHeaders = {
       'Content-Type': 'application/json',
@@ -53,13 +58,7 @@ class ApiService {
     });
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      const message = errorMessage(errorData, response.statusText);
-      throw {
-        code: `HTTP_${response.status}`,
-        message,
-        details: errorData,
-      } as ApiError;
+      throw await failure(response);
     }
 
     if (response.status === 204) {
@@ -116,13 +115,7 @@ class ApiService {
     });
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      const message = errorMessage(errorData, response.statusText);
-      throw {
-        code: `HTTP_${response.status}`,
-        message,
-        details: errorData,
-      } as ApiError;
+      throw await failure(response);
     }
 
     const reader = response.body?.getReader();

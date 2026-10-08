@@ -1,5 +1,10 @@
 import { api } from './api';
-import type { ActivityFilter, ActivityResponse } from '../types/activity';
+import type { Activity, ActivityFilter, ActivityResponse } from '../types/activity';
+
+export interface Notifications {
+  unread: number;
+  items: (Activity & { unread: boolean })[];
+}
 
 export const activityService = {
   async getActivities(filter?: ActivityFilter): Promise<ActivityResponse> {
@@ -12,4 +17,7 @@ export const activityService = {
 
     return api.get<ActivityResponse>('/api/activity', params);
   },
+
+  getNotifications: () => api.get<Notifications>('/api/activity/notifications'),
+  markNotificationsRead: () => api.post<{ unread: number }>('/api/activity/notifications/read'),
 };

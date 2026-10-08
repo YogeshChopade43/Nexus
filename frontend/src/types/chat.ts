@@ -8,6 +8,25 @@ export interface ChatMessage {
   events?: AgentEvent[];
   summary?: string;
   status?: string;
+  /** Live tool activity while a streamed reply is still running. */
+  activity?: ToolActivity[];
+  pendingAction?: PendingAction;
+}
+
+export interface ToolActivity {
+  tool: string;
+  state: 'running' | 'ok' | 'failed';
+  summary?: string;
+}
+
+export interface PendingAction {
+  tool: string;
+  arguments: Record<string, unknown>;
+}
+
+export interface ChatAttachment {
+  name: string;
+  content: string;
 }
 
 export interface AgentRunRequest {
@@ -17,6 +36,7 @@ export interface AgentRunRequest {
   available_tools?: string[];
   llm_provider_id?: number;
   session_id?: string;
+  attachments?: ChatAttachment[];
 }
 
 export interface StoredMessage {
@@ -32,6 +52,7 @@ export interface AgentSession {
   session_id: string;
   title: string;
   messages: StoredMessage[];
+  metadata?: { pending?: { state?: { queue?: { name: string; arguments: Record<string, unknown> }[] } } };
   created_at: string;
   updated_at: string;
 }
@@ -53,7 +74,17 @@ export interface AgentRunResponse {
   summary?: string;
   message?: string;
   response?: string;
+  session_id?: string | null;
+  pending_action?: PendingAction | null;
 }
+
+export type AgentStreamEvent =
+  | { type: 'tool_call'; tool: string; arguments: Record<string, unknown> }
+  | { type: 'tool_result'; tool: string; ok: boolean; summary: string }
+  | { type: 'approval_needed'; tool: string; arguments: Record<string, unknown> }
+  | { type: 'delta'; text: string }
+  | { type: 'error'; error: string }
+  | ({ type: 'done' } & AgentRunResponse);
 
 export interface SendMessageRequest {
   content: string;

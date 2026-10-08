@@ -11,17 +11,30 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
+import re
+from collections import deque
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import parse_qs, urlparse
 
 import anyio
+import mcp.types as mcp_types
 from mcp import Client
-from mcp.client.stdio import StdioServerParameters
+from mcp.client.auth import OAuthClientProvider
+from mcp.client.stdio import StdioServerParameters, stdio_client
+from mcp.client.subscriptions import ListenNotSupportedError
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared._httpx_utils import create_mcp_http_client
+from mcp.shared.auth import AuthorizationCodeResult, OAuthClientInformationFull, OAuthClientMetadata, OAuthToken
 
+from app.core.config import PORT
+from app.core.database import get_db_path, log_activity
 from app.core.exceptions import AppNotConnectedError
+from app.mcp import store
 from app.mcp.store import ServerConfig, list_servers
 from app.tools.base import Tool
 from app.tools.registry import ToolRegistry
@@ -31,6 +44,57 @@ logger = logging.getLogger(__name__)
 CONNECT_TIMEOUT = 60  # first npx/uvx launch may download the package
 CALL_TIMEOUT = 120
 MAX_BACKOFF = 300
+SIGN_IN_TIMEOUT = 600  # how long a hosted server waits for you to finish signing in
+MAX_LOG_BYTES = 512_000
+# Where the browser comes back after signing in to a hosted server; must reach this backend.
+PUBLIC_URL = os.getenv("NEXUS_PUBLIC_URL", f"http://localhost:{PORT}").rstrip("/")
+OAUTH_CALLBACK_URL = f"{PUBLIC_URL}/api/mcp/servers/oauth/callback"
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def log_path(slug: str) -> Path:
+    """File that receives a local server's stderr (its own logs and crash output)."""
+    folder = get_db_path().parent / "mcp-logs"
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder / f"{slug}.log"
+
+
+def read_log_tail(slug: str, max_bytes: int = 32_000) -> str:
+    path = log_path(slug)
+    if not path.exists():
+        return ""
+    with path.open("rb") as handle:
+        handle.seek(max(0, path.stat().st_size - max_bytes))
+        return handle.read().decode("utf-8", errors="replace")
+
+
+class _TokenStorage:
+    """Keeps a hosted server's OAuth tokens and client registration in the database, encrypted."""
+
+    def __init__(self, server_id: int) -> None:
+        self._id = server_id
+
+    def _update(self, key: str, value: Any) -> None:
+        data = store.get_oauth(self._id)
+        data[key] = value.model_dump(mode="json", exclude_none=True)
+        store.set_oauth(self._id, data)
+
+    async def get_tokens(self) -> Optional[OAuthToken]:
+        data = store.get_oauth(self._id).get("tokens")
+        return OAuthToken.model_validate(data) if data else None
+
+    async def set_tokens(self, tokens: OAuthToken) -> None:
+        self._update("tokens", tokens)
+
+    async def get_client_info(self) -> Optional[OAuthClientInformationFull]:
+        data = store.get_oauth(self._id).get("client_info")
+        return OAuthClientInformationFull.model_validate(data) if data else None
+
+    async def set_client_info(self, client_info: OAuthClientInformationFull) -> None:
+        self._update("client_info", client_info)
 _CONNECTION_ERRORS = (anyio.ClosedResourceError, anyio.BrokenResourceError, anyio.EndOfStream, ConnectionError)
 
 
@@ -70,6 +134,23 @@ def result_to_dict(result: Any) -> dict[str, Any]:
     return output
 
 
+_RISKY_VERBS = re.compile(
+    r"(^|[_\-.])(create|send|post|delete|remove|update|patch|put|write|move|archive|add|set|insert|upload|merge|close|"
+    r"publish|invite|kick|ban|transfer|pay|execute|run|deploy|restart|drop)", re.IGNORECASE)
+POLICIES = ("allow", "ask", "block")
+
+
+def default_policy(tool_name: str, annotations: Any) -> str:
+    """'ask' for tools that change things, 'allow' for read-only ones. MCP hints win over the name."""
+    hint = (lambda key: annotations.get(key)) if isinstance(annotations, dict) else (lambda key: getattr(annotations, key, None))
+    if annotations is not None:
+        if hint("destructive_hint"):
+            return "ask"
+        if hint("read_only_hint"):
+            return "allow"
+    return "ask" if _RISKY_VERBS.search(tool_name) else "allow"
+
+
 class MCPTool(Tool):
     def __init__(self, manager: "MCPManager", server: ServerConfig, tool: Any) -> None:
         description = tool.description or tool.name
@@ -80,6 +161,12 @@ class MCPTool(Tool):
         schema.setdefault("type", "object")
         schema.setdefault("properties", {})
         self._schema = schema
+        annotations = getattr(tool, "annotations", None)
+        self.policy = server.tool_policies.get(tool.name) or default_policy(tool.name, annotations)
+        # Display hints for the workflow builder: the server's own title and whether the tool changes data.
+        self.title = getattr(tool, "title", None) or getattr(annotations, "title", None)
+        self.read_only = getattr(annotations, "read_only_hint", None)
+        self.destructive = getattr(annotations, "destructive_hint", None)
 
     @property
     def parameters_schema(self) -> dict[str, Any]:
@@ -92,14 +179,29 @@ class MCPTool(Tool):
 @dataclass
 class _Runtime:
     config: ServerConfig
-    status: str = "connecting"  # connecting | connected | error | stopped
+    status: str = "connecting"  # connecting | needs_auth | connected | error | stopped
     error: Optional[str] = None
     tools: list[MCPTool] = field(default_factory=list)
+    blocked: list[MCPTool] = field(default_factory=list)
     client: Optional[Client] = None
     task: Optional[asyncio.Task] = None
     wake: asyncio.Event = field(default_factory=asyncio.Event)
     stopping: bool = False
     restart_requested: bool = False
+    events: deque = field(default_factory=lambda: deque(maxlen=50))  # recent connection events, newest last
+    connected_since: Optional[str] = None
+    calls: int = 0
+    failures: int = 0
+    last_call_at: Optional[str] = None
+    # Hosted-server sign-in in progress: the URL to open and the code the callback delivers.
+    auth_url: Optional[str] = None
+    auth_state: Optional[str] = None
+    auth_future: Optional[asyncio.Future] = None
+    connect_deadline: Any = None  # the asyncio.timeout() guarding the connect, paused while signing in
+    refresh_task: Optional[asyncio.Task] = None
+
+    def log(self, message: str) -> None:
+        self.events.append({"at": _now(), "message": message})
 
 
 class MCPManager:
@@ -148,46 +250,160 @@ class MCPManager:
         deadline = asyncio.get_running_loop().time() + timeout
         while asyncio.get_running_loop().time() < deadline:
             runtime = self._runtimes.get(server_id)
-            if runtime is None or runtime.status in ("connected", "error"):
+            if runtime is None or runtime.status in ("connected", "error", "needs_auth"):
                 return
             await asyncio.sleep(0.1)
 
+    async def wait_all_ready(self) -> None:
+        await asyncio.gather(*(self.wait_ready(server_id) for server_id in list(self._runtimes)))
+
     # ---- connection loop -------------------------------------------------
 
-    def _target(self, config: ServerConfig, stack: AsyncExitStack) -> Any:
+    def _target(self, runtime: _Runtime, stack: AsyncExitStack) -> Any:
+        config = runtime.config
         if config.transport == "stdio":
-            return StdioServerParameters(command=config.command, args=config.args, env=config.env or None)
-        http_client = create_mcp_http_client(headers=config.headers or None)
+            path = log_path(config.slug)
+            if path.exists() and path.stat().st_size > MAX_LOG_BYTES:
+                path.unlink()
+            errlog = stack.enter_context(path.open("a", encoding="utf-8", errors="replace"))
+            errlog.write(f"\n--- {_now()} starting {config.command} ---\n")
+            errlog.flush()
+            params = StdioServerParameters(command=config.command, args=config.args, env=config.env or None)
+            return stdio_client(params, errlog=errlog)
+        # Servers with their own Authorization header use it; the rest can sign in with OAuth when they ask (401).
+        has_auth_header = any(key.lower() == "authorization" for key in config.headers)
+        http_client = create_mcp_http_client(
+            headers=config.headers or None, auth=None if has_auth_header else self._oauth(runtime),
+        )
         stack.push_async_callback(http_client.aclose)
         return streamable_http_client(config.url, http_client=http_client)
+
+    def _oauth(self, runtime: _Runtime) -> OAuthClientProvider:
+        loop = asyncio.get_running_loop()
+
+        async def redirect(authorization_url: str) -> None:
+            runtime.auth_url = authorization_url
+            runtime.auth_state = (parse_qs(urlparse(authorization_url).query).get("state") or [None])[0]
+            runtime.auth_future = loop.create_future()
+            runtime.status = "needs_auth"
+            runtime.log("Waiting for you to sign in")
+            if runtime.connect_deadline is not None:
+                runtime.connect_deadline.reschedule(None)  # signing in may take a while
+
+        async def callback() -> AuthorizationCodeResult:
+            try:
+                return await asyncio.wait_for(runtime.auth_future, SIGN_IN_TIMEOUT)
+            except asyncio.TimeoutError:
+                raise RuntimeError("Sign-in was not completed in time. Reconnect to try again.") from None
+            finally:
+                runtime.auth_url = runtime.auth_state = runtime.auth_future = None
+                runtime.status = "connecting"
+                if runtime.connect_deadline is not None:
+                    runtime.connect_deadline.reschedule(loop.time() + CONNECT_TIMEOUT)
+
+        return OAuthClientProvider(
+            server_url=runtime.config.url,
+            client_metadata=OAuthClientMetadata(
+                client_name="Nexus", redirect_uris=[OAUTH_CALLBACK_URL],
+                grant_types=["authorization_code", "refresh_token"], token_endpoint_auth_method="none",
+            ),
+            storage=_TokenStorage(runtime.config.id),
+            redirect_handler=redirect,
+            callback_handler=callback,
+        )
+
+    def complete_sign_in(self, state: str, code: str) -> bool:
+        """Hand the authorization code from the OAuth callback to the server waiting for it."""
+        for runtime in self._runtimes.values():
+            future = runtime.auth_future
+            if runtime.auth_state and runtime.auth_state == state and future and not future.done():
+                future.set_result(AuthorizationCodeResult(code=code, state=state))
+                return True
+        return False
+
+    async def _listen_for_changes(self, runtime: _Runtime, client: Client) -> None:
+        """2026-07-28 servers announce tool changes on a subscription stream."""
+        try:
+            async with client.listen(tools_list_changed=True) as subscription:
+                async for _ in subscription:
+                    await self._refresh_tools(runtime)
+        except ListenNotSupportedError:
+            pass  # older servers send notifications/tools/list_changed instead (see _message_handler)
+        except Exception as exc:  # the server may not offer subscriptions; tools still work
+            logger.debug("MCP server %s: no tool-change subscription (%s)", runtime.config.slug, _describe(exc))
+
+    def _message_handler(self, runtime: _Runtime):
+        """Older servers announce tool changes as a notification."""
+        async def handle(message: Any) -> None:
+            if isinstance(message, mcp_types.ToolListChangedNotification):
+                # Not awaited here: listing tools needs this same receive loop to deliver the reply.
+                runtime.refresh_task = asyncio.get_running_loop().create_task(self._refresh_tools(runtime))
+        return handle
+
+    async def _refresh_tools(self, runtime: _Runtime) -> None:
+        client = runtime.client
+        if client is None:
+            return
+        try:
+            tools = await self._list_tools(client)
+        except Exception as exc:
+            runtime.log(f"Could not refresh tools: {_describe(exc)}")
+            return
+        self._unregister(runtime)
+        self._set_tools(runtime, tools)
+        self._register(runtime)
+        runtime.log(f"Tool list changed: {len(tools)} tool(s)")
+
+    def _set_tools(self, runtime: _Runtime, tools: list[Any]) -> None:
+        every_tool = [MCPTool(self, runtime.config, tool) for tool in tools]
+        runtime.blocked = [t for t in every_tool if t.policy == "block"]
+        runtime.tools = [t for t in every_tool if t.policy != "block"]
 
     async def _run(self, runtime: _Runtime) -> None:
         attempt = 0
         while not runtime.stopping:
             runtime.status = "connecting"
+            runtime.log("Connecting")
             try:
                 async with AsyncExitStack() as stack:
-                    async with asyncio.timeout(CONNECT_TIMEOUT):
-                        client = await stack.enter_async_context(
-                            Client(self._target(runtime.config, stack), read_timeout_seconds=CALL_TIMEOUT)
-                        )
+                    async with asyncio.timeout(CONNECT_TIMEOUT) as deadline:
+                        runtime.connect_deadline = deadline
+                        client = await stack.enter_async_context(Client(
+                            self._target(runtime, stack), read_timeout_seconds=CALL_TIMEOUT,
+                            message_handler=self._message_handler(runtime),
+                        ))
                         tools = await self._list_tools(client)
+                    runtime.connect_deadline = None
                     runtime.client = client
-                    runtime.tools = [MCPTool(self, runtime.config, tool) for tool in tools]
+                    self._set_tools(runtime, tools)
                     self._register(runtime)
                     runtime.status, runtime.error, attempt = "connected", None, 0
+                    runtime.connected_since = _now()
+                    runtime.log(f"Connected with {len(tools)} tool(s)")
                     logger.info("MCP server %s connected with %d tool(s)", runtime.config.slug, len(tools))
-                    if not (runtime.stopping or runtime.restart_requested):
-                        runtime.wake.clear()
-                        await runtime.wake.wait()  # set on stop, or when a call finds the connection broken
+                    listener = asyncio.create_task(self._listen_for_changes(runtime, client))
+                    try:
+                        if not (runtime.stopping or runtime.restart_requested):
+                            runtime.wake.clear()
+                            await runtime.wake.wait()  # set on stop, or when a call finds the connection broken
+                    finally:
+                        listener.cancel()
+                        await asyncio.gather(listener, return_exceptions=True)
             except asyncio.CancelledError:
                 raise
             except BaseException as exc:  # ExceptionGroup from the SDK's task groups included
                 runtime.error = _describe(exc)
                 logger.warning("MCP server %s failed: %s", runtime.config.slug, runtime.error)
             finally:
-                runtime.client = None
+                runtime.client = runtime.connect_deadline = runtime.connected_since = None
+                runtime.auth_url = runtime.auth_state = runtime.auth_future = None
                 self._unregister(runtime)
+
+            if not runtime.stopping and not runtime.restart_requested:
+                runtime.log(f"Failed: {runtime.error or 'Connection lost'}")
+                if attempt == 0:  # once per outage, not on every retry
+                    log_activity("server_error", f"MCP server '{runtime.config.name}' is not connected",
+                                 runtime.error or "Connection lost", {"server": runtime.config.slug})
 
             if runtime.stopping:
                 break
@@ -233,12 +449,18 @@ class MCPManager:
         runtime = self._runtime_for(slug)
         if runtime is None or runtime.status != "connected" or runtime.client is None:
             raise AppNotConnectedError(f"MCP server '{slug}' is not connected")
+        runtime.calls += 1
+        runtime.last_call_at = _now()
         try:
             result = await runtime.client.call_tool(tool_name, arguments)
+            return result_to_dict(result)
         except _CONNECTION_ERRORS as exc:
+            runtime.failures += 1
             runtime.wake.set()  # reconnect in the background
             raise AppNotConnectedError(f"Lost connection to MCP server '{slug}'") from exc
-        return result_to_dict(result)
+        except Exception:
+            runtime.failures += 1
+            raise
 
     def restart(self, server_id: int) -> bool:
         runtime = self._runtimes.get(server_id)
@@ -252,15 +474,27 @@ class MCPManager:
     def status(self, server_id: int) -> dict[str, Any]:
         runtime = self._runtimes.get(server_id)
         if runtime is None:
-            return {"status": "stopped", "error": None, "tools": []}
+            return {"status": "stopped", "error": None, "tools": [], "blocked_tools": [], "auth_url": None,
+                    "health": None}
+
+        def view(t: MCPTool) -> dict[str, Any]:
+            return {"name": t.tool_name, "remote_name": t._remote_name, "description": t.description, "policy": t.policy,
+                    "title": t.title, "read_only": t.read_only, "destructive": t.destructive,
+                    "required": list(t.parameters_schema.get("required") or [])}
+
         return {
             "status": runtime.status,
             "error": runtime.error,
-            "tools": [
-                {"name": t.tool_name, "remote_name": t._remote_name, "description": t.description}
-                for t in runtime.tools
-            ],
+            "tools": [view(t) for t in runtime.tools],
+            "blocked_tools": [view(t) for t in runtime.blocked],
+            "auth_url": runtime.auth_url,
+            "health": {"connected_since": runtime.connected_since, "calls": runtime.calls,
+                       "failures": runtime.failures, "last_call_at": runtime.last_call_at},
         }
+
+    def logs(self, server_id: int, slug: str) -> dict[str, Any]:
+        runtime = self._runtimes.get(server_id)
+        return {"events": list(runtime.events) if runtime else [], "stderr": read_log_tail(slug)}
 
     def server_states(self) -> dict[str, dict[str, bool]]:
         """``{slug: {enabled, connected, available}}`` for every configured server."""

@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Search, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, Search, X } from 'lucide-react';
 import { cn } from '../../lib/utils';
-import type { McpServer } from '../../types/mcp';
+import type { McpServer, McpTool } from '../../types/mcp';
 import type { WorkflowNodeType } from '../../types/workflow';
+import { paramLabel, toolKind, toolLabel, toolSummary } from './toolInfo';
 
 export type PickedAction =
   | { type: Exclude<WorkflowNodeType, 'trigger' | 'action' | 'output'>; name: string }
@@ -14,6 +15,11 @@ export const BUILT_INS: Array<{ type: Exclude<WorkflowNodeType, 'trigger' | 'act
   { type: 'condition', name: 'Condition', description: 'Do different things depending on a value', icon: '🔀' },
   { type: 'transform', name: 'Compose', description: 'Build text or JSON from earlier steps', icon: '🔄' },
   { type: 'delay', name: 'Delay', description: 'Wait before continuing', icon: '⏱️' },
+  { type: 'loop', name: 'For each', description: 'Repeat steps for every item in a list', icon: '🔁' },
+  { type: 'parallel', name: 'Parallel branches', description: 'Run several sets of steps at the same time', icon: '🔀' },
+  { type: 'http', name: 'HTTP request', description: 'Call any web API (GET, POST, …)', icon: '🌐' },
+  { type: 'code', name: 'Code (JavaScript)', description: 'Reshape data with a small sandboxed script', icon: '🧩' },
+  { type: 'workflow', name: 'Run a workflow', description: 'Call another workflow and use its result', icon: '🧭' },
 ];
 
 interface ActionPickerProps {
@@ -24,12 +30,50 @@ interface ActionPickerProps {
   toolsOnly?: boolean;
 }
 
+interface ToolEntry {
+  tool: McpTool;
+  label: string;
+  summary: string;
+  kind: 'read' | 'write';
+}
+
+function entries(server: McpServer): ToolEntry[] {
+  return server.tools
+    .map(tool => ({ tool, label: toolLabel(tool), summary: toolSummary(tool), kind: toolKind(tool) }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+}
+
+function ToolButton({ entry, onPick }: { entry: ToolEntry; onPick: () => void }) {
+  const needs = (entry.tool.required ?? []).map(paramLabel);
+  return (
+    <button
+      type="button"
+      onClick={onPick}
+      title={entry.tool.remote_name}
+      className="w-full text-left px-2.5 py-2 rounded-md hover:bg-nexus-bg-tertiary focus:outline-none focus:ring-2 focus:ring-nexus-accent"
+    >
+      <span className="block text-sm text-nexus-text">{entry.label}</span>
+      {entry.summary && <span className="block text-xs text-nexus-text-muted line-clamp-2 mt-0.5">{entry.summary}</span>}
+      {needs.length > 0 && (
+        <span className="block text-[11px] text-nexus-text-muted mt-0.5">Needs: {needs.slice(0, 4).join(', ')}{needs.length > 4 ? '…' : ''}</span>
+      )}
+    </button>
+  );
+}
+
 export function ActionPicker({ servers, onPick, onClose, toolsOnly }: ActionPickerProps) {
   const [query, setQuery] = useState('');
+  // With several apps, start collapsed so the list is a short menu of apps.
+  const [open, setOpen] = useState<Set<number>>(() => new Set(servers.length <= 1 ? servers.map(s => s.id) : []));
   const q = query.trim().toLowerCase();
   const matches = (...texts: string[]) => !q || texts.some(t => t.toLowerCase().includes(q));
 
   const builtIns = toolsOnly ? [] : BUILT_INS.filter(b => matches(b.name, b.description));
+  const toggle = (id: number) => setOpen(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
 
   return (
     <div className="rounded-lg border border-nexus-border bg-nexus-bg-secondary shadow-lg p-3 space-y-3" role="dialog" aria-label="Choose an operation">
@@ -41,19 +85,20 @@ export function ActionPicker({ servers, onPick, onClose, toolsOnly }: ActionPick
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder={toolsOnly ? 'Search app operations' : 'Search apps and actions'}
+            aria-label={toolsOnly ? 'Search app operations' : 'Search apps and actions'}
             className="w-full pl-8 pr-3 py-2 rounded-lg bg-nexus-bg-tertiary border border-nexus-border text-sm text-nexus-text focus:outline-none focus:ring-2 focus:ring-nexus-accent"
           />
         </div>
-        <button onClick={onClose} aria-label="Close" className="text-nexus-text-muted hover:text-nexus-text"><X className="w-4 h-4" /></button>
+        <button type="button" onClick={onClose} aria-label="Close" className="text-nexus-text-muted hover:text-nexus-text"><X className="w-4 h-4" /></button>
       </div>
 
-      <div className="max-h-80 overflow-y-auto space-y-3">
+      <div className="max-h-96 overflow-y-auto space-y-3">
         {builtIns.length > 0 && (
           <section>
             <h5 className="text-xs font-semibold uppercase tracking-wide text-nexus-text-muted mb-1">Built-in</h5>
             <div className="grid gap-1 sm:grid-cols-2">
               {builtIns.map(b => (
-                <button key={b.type} onClick={() => onPick({ type: b.type, name: b.name })} className="text-left p-2 rounded hover:bg-nexus-bg-tertiary">
+                <button key={b.type} type="button" onClick={() => onPick({ type: b.type, name: b.name })} className="text-left p-2 rounded hover:bg-nexus-bg-tertiary">
                   <div className="text-sm text-nexus-text">{b.icon} {b.name}</div>
                   <div className="text-xs text-nexus-text-muted">{b.description}</div>
                 </button>
@@ -64,27 +109,53 @@ export function ActionPicker({ servers, onPick, onClose, toolsOnly }: ActionPick
 
         {servers.map(server => {
           const connected = server.status === 'connected';
-          const tools = server.tools.filter(t => matches(server.name, t.remote_name, t.description));
-          if (q && tools.length === 0) return null;
+          const all = entries(server);
+          const shown = all.filter(e => matches(server.name, e.label, e.summary, e.tool.remote_name));
+          if (q && shown.length === 0) return null;
+          const expanded = !!q || open.has(server.id);
+          // Reads first: most steps, and every poll trigger, start by fetching something.
+          const groups: Array<[string, ToolEntry[]]> = [
+            ['Reads', shown.filter(e => e.kind === 'read')],
+            ['Changes data', shown.filter(e => e.kind === 'write')],
+          ];
           return (
-            <section key={server.id}>
-              <h5 className="text-xs font-semibold uppercase tracking-wide text-nexus-text-muted mb-1 flex items-center gap-2">
-                {server.name}
-                {!connected && (
-                  <span className="normal-case font-normal">
-                    · {server.status} — <Link to="/servers" className="underline">check MCP Servers</Link>
-                  </span>
-                )}
-              </h5>
-              <div className={cn('grid gap-1 sm:grid-cols-2', !connected && 'opacity-50 pointer-events-none')}>
-                {tools.map(tool => (
-                  <button key={tool.name} onClick={() => onPick({ type: 'action', name: tool.remote_name, tool: tool.name })}
-                    className="text-left p-2 rounded hover:bg-nexus-bg-tertiary">
-                    <div className="text-sm text-nexus-text">{tool.remote_name}</div>
-                    <div className="text-xs text-nexus-text-muted line-clamp-2">{tool.description.replace(`[${server.name}] `, '')}</div>
-                  </button>
-                ))}
-              </div>
+            <section key={server.id} className="rounded-lg border border-nexus-border">
+              <button
+                type="button"
+                onClick={() => toggle(server.id)}
+                aria-expanded={expanded}
+                className="w-full flex items-center gap-2 px-3 py-2 text-left"
+              >
+                {expanded ? <ChevronDown className="w-4 h-4 text-nexus-text-muted" /> : <ChevronRight className="w-4 h-4 text-nexus-text-muted" />}
+                <span className="text-sm font-medium text-nexus-text">{server.name}</span>
+                <span className="text-xs text-nexus-text-muted">
+                  {q ? `${shown.length} of ${all.length}` : `${all.length} action${all.length === 1 ? '' : 's'}`}
+                </span>
+                {!connected && <span className="ml-auto text-xs text-amber-500">{server.status}</span>}
+              </button>
+              {expanded && (
+                <div className="px-2 pb-2">
+                  {!connected && (
+                    <p className="px-1 pb-2 text-xs text-nexus-text-muted">
+                      Not connected, so its actions can't be added. <Link to="/servers" className="underline">Check MCP Servers</Link>
+                    </p>
+                  )}
+                  <div className={cn(!connected && 'opacity-50 pointer-events-none')}>
+                    {all.length === 0 && connected && <p className="px-1 text-xs text-nexus-text-muted">This server has no tools.</p>}
+                    {groups.map(([title, list]) => list.length > 0 && (
+                      <div key={title} className="mt-1">
+                        <h6 className="px-2.5 text-[11px] font-semibold uppercase tracking-wide text-nexus-text-muted">{title}</h6>
+                        <div className="grid sm:grid-cols-2">
+                          {list.map(entry => (
+                            <ToolButton key={entry.tool.name} entry={entry}
+                              onPick={() => onPick({ type: 'action', name: entry.label, tool: entry.tool.name })} />
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </section>
           );
         })}

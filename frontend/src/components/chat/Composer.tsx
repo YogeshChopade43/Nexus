@@ -1,10 +1,14 @@
-import { useState, useRef, useCallback, useEffect, KeyboardEvent } from 'react';
+import { useState, useRef, useEffect, KeyboardEvent } from 'react';
 import { Button } from '../ui/Button';
-import { Send, Sparkles } from 'lucide-react';
+import { Paperclip, Send, Sparkles, X } from 'lucide-react';
 import { Textarea } from '../ui/Input';
+import type { ChatAttachment } from '../../types/chat';
+
+const MAX_FILES = 5;
+const MAX_FILE_BYTES = 1_000_000;
 
 interface ComposerProps {
-  onSend: (content: string) => void;
+  onSend: (content: string, attachments: ChatAttachment[]) => void;
   disabled?: boolean;
   placeholder?: string;
   maxLength?: number;
@@ -12,22 +16,42 @@ interface ComposerProps {
 
 export function Composer({ onSend, disabled, placeholder = 'Message Agent...', maxLength = 4000 }: ComposerProps) {
   const [value, setValue] = useState('');
+  const [files, setFiles] = useState<ChatAttachment[]>([]);
+  const [fileError, setFileError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
+  const addFiles = async (picked: FileList | null) => {
+    setFileError(null);
+    const added: ChatAttachment[] = [];
+    for (const file of Array.from(picked ?? [])) {
+      if (files.length + added.length >= MAX_FILES) { setFileError(`Up to ${MAX_FILES} files per message`); break; }
+      if (file.size > MAX_FILE_BYTES) { setFileError(`${file.name} is larger than 1 MB`); continue; }
+      const content = await file.text();
+      // Text only: the agent reads file contents as text, so binary files would just be noise.
+      if (content.includes('\u0000')) { setFileError(`${file.name} isn't a text file`); continue; }
+      added.push({ name: file.name, content });
+    }
+    setFiles(prev => [...prev, ...added]);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSubmit();
     }
-  }, []);
+  };
 
   const handleSubmit = () => {
     const trimmed = value.trim();
-    if (!trimmed) return;
+    if (!trimmed && files.length === 0) return;
     if (disabled) return;
 
-    onSend(trimmed);
+    onSend(trimmed, files);
     setValue('');
+    setFiles([]);
+    setFileError(null);
     textareaRef.current?.focus();
   };
 
@@ -39,7 +63,32 @@ export function Composer({ onSend, disabled, placeholder = 'Message Agent...', m
 
   return (
     <div className="bg-nexus-bg-secondary border-t-nexus-border border-t p-4">
+      {(files.length > 0 || fileError) && (
+        <div className="flex flex-wrap items-center gap-2 mb-2">
+          {files.map((file, i) => (
+            <span key={i} className="inline-flex items-center gap-1 px-2 py-1 rounded bg-nexus-bg-tertiary text-xs text-nexus-text-secondary">
+              <Paperclip className="w-3 h-3" />
+              {file.name}
+              <button type="button" onClick={() => setFiles(prev => prev.filter((_, j) => j !== i))} aria-label={`Remove ${file.name}`} className="hover:text-nexus-text">
+                <X className="w-3 h-3" />
+              </button>
+            </span>
+          ))}
+          {fileError && <span className="text-xs text-nexus-danger">{fileError}</span>}
+        </div>
+      )}
       <div className="flex items-end gap-2">
+        <input ref={fileInputRef} type="file" multiple hidden onChange={(e) => void addFiles(e.target.files)} />
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-10 w-10 p-0 flex-shrink-0"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={disabled || files.length >= MAX_FILES}
+          aria-label="Attach text files"
+        >
+          <Paperclip className="w-5 h-5" />
+        </Button>
         <div className="flex-1 relative">
           <Textarea
             ref={textareaRef}
@@ -62,7 +111,7 @@ export function Composer({ onSend, disabled, placeholder = 'Message Agent...', m
 
         <Button
           onClick={handleSubmit}
-          disabled={disabled || !value.trim()}
+          disabled={disabled || (!value.trim() && files.length === 0)}
           size="sm"
           className="h-10 w-10 p-0 flex-shrink-0"
           aria-label="Send message"

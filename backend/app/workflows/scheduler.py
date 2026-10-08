@@ -3,14 +3,14 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
-from app.core.database import get_connection
+from app.core.database import get_connection, purge_old_records
 from app.mcp import server_availability
 from app.models.workflow import WorkflowRunRequest
 from app.triggers.models import TriggerConfig
@@ -125,7 +125,19 @@ def start_scheduler() -> None:
         conn.close()
     for workflow_id in ids:
         sync_workflow_schedule(workflow_id)
+    # Daily cleanup of old runs and activity, also once shortly after startup.
+    _scheduler.add_job(_cleanup, IntervalTrigger(hours=24), id="cleanup", replace_existing=True,
+                       next_run_time=datetime.now(timezone.utc) + timedelta(minutes=1))
     logger.info("Workflow scheduler started with %d job(s)", len(_scheduler.get_jobs()))
+
+
+def _cleanup() -> None:
+    from app.api.routes.settings import load_user_settings
+
+    try:
+        purge_old_records(int(load_user_settings().get("retentionDays") or 0))
+    except Exception:
+        logger.exception("Cleanup of old runs failed")
 
 
 def stop_scheduler() -> None:

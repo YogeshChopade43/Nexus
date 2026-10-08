@@ -25,6 +25,8 @@ class ServerConfig:
     headers: dict[str, str] = field(default_factory=dict)
     enabled: bool = True
     created_at: str = ""
+    tool_policies: dict[str, str] = field(default_factory=dict)  # remote tool name -> allow | ask | block
+    signed_in: bool = False  # holds OAuth tokens from a hosted-server sign-in
 
     def public(self) -> dict[str, Any]:
         """API view: secret values are never returned, only their names."""
@@ -40,6 +42,8 @@ class ServerConfig:
             "headers": {key: MASK for key in self.headers},
             "enabled": self.enabled,
             "created_at": self.created_at,
+            "tool_policies": self.tool_policies,
+            "signed_in": self.signed_in,
         }
 
 
@@ -62,6 +66,9 @@ def init_table(conn) -> None:
         )
         """
     )
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(mcp_servers)").fetchall()}
+    if "tool_policies" not in columns:
+        conn.execute("ALTER TABLE mcp_servers ADD COLUMN tool_policies TEXT DEFAULT '{}'")
 
 
 def _from_row(row: Any) -> ServerConfig:
@@ -77,6 +84,8 @@ def _from_row(row: Any) -> ServerConfig:
         headers=decrypt_config(row["headers"]),
         enabled=bool(row["enabled"]),
         created_at=row["created_at"] or "",
+        tool_policies=json.loads(row["tool_policies"] or "{}") if "tool_policies" in row.keys() else {},
+        signed_in=bool(decrypt_config(row["oauth"]).get("tokens")) if "oauth" in row.keys() and row["oauth"] else False,
     )
 
 
@@ -116,13 +125,14 @@ def create_server(data: dict[str, Any]) -> ServerConfig:
         taken = {r["slug"] for r in conn.execute("SELECT slug FROM mcp_servers").fetchall()}
         cursor = conn.execute(
             """
-            INSERT INTO mcp_servers (slug, name, transport, command, args, env, url, headers, enabled)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO mcp_servers (slug, name, transport, command, args, env, url, headers, enabled, tool_policies)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 slugify(data["name"], taken), data["name"], data["transport"], data.get("command", ""),
                 json.dumps(data.get("args", [])), encrypt_config(data.get("env", {})), data.get("url", ""),
                 encrypt_config(data.get("headers", {})), int(data.get("enabled", True)),
+                json.dumps(data.get("tool_policies") or {}),
             ),
         )
         conn.commit()
@@ -143,14 +153,15 @@ def update_server(server_id: int, data: dict[str, Any]) -> Optional[ServerConfig
         conn.execute(
             """
             UPDATE mcp_servers SET name = ?, transport = ?, command = ?, args = ?, env = ?, url = ?,
-                headers = ?, enabled = ?, updated_at = datetime('now')
+                headers = ?, enabled = ?, tool_policies = ?, updated_at = datetime('now')
             WHERE id = ?
             """,
             (
                 data.get("name", current.name), data.get("transport", current.transport),
                 data.get("command", current.command), json.dumps(data.get("args", current.args)),
                 encrypt_config(env), data.get("url", current.url), encrypt_config(headers),
-                int(data.get("enabled", current.enabled)), server_id,
+                int(data.get("enabled", current.enabled)), json.dumps(data.get("tool_policies", current.tool_policies)),
+                server_id,
             ),
         )
         conn.commit()
@@ -165,5 +176,24 @@ def delete_server(server_id: int) -> bool:
         cursor = conn.execute("DELETE FROM mcp_servers WHERE id = ?", (server_id,))
         conn.commit()
         return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def get_oauth(server_id: int) -> dict[str, Any]:
+    """``{"tokens": ..., "client_info": ...}`` saved by the OAuth sign-in, or ``{}``."""
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT oauth FROM mcp_servers WHERE id = ?", (server_id,)).fetchone()
+        return decrypt_config(row["oauth"]) if row and row["oauth"] else {}
+    finally:
+        conn.close()
+
+
+def set_oauth(server_id: int, data: dict[str, Any]) -> None:
+    conn = get_connection()
+    try:
+        conn.execute("UPDATE mcp_servers SET oauth = ? WHERE id = ?", (encrypt_config(data) if data else "", server_id))
+        conn.commit()
     finally:
         conn.close()

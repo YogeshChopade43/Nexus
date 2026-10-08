@@ -1,0 +1,14 @@
+**/node_modules
+**/.venv*
+**/__pycache__
+**/*.db
+**/*.db-wal
+**/*.db-shm
+backend/data
+backend/.env
+frontend/dist
+frontend/test-results
+frontend/playwright-report
+.git
+.playwright-mcp
+.superpowers

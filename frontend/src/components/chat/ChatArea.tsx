@@ -3,10 +3,13 @@ import { cn } from '../../lib/utils';
 import { MessageList, MessageListRef } from './MessageList';
 import { Composer } from './Composer';
 import { Button } from '../ui/Button';
-import { Bot, Plus, Settings, Sparkles, AlertCircle, Trash2 } from 'lucide-react';
+import { Bot, Plus, Settings, Sparkles, AlertCircle, Trash2, Workflow } from 'lucide-react';
 import { useChatContext } from '../../hooks/useChatContext';
 import { api } from '../../services/api';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
+import { chatService } from '../../services/chat';
+import { getErrorMessage } from '../../lib/utils';
+import type { ChatAttachment } from '../../types/chat';
 
 interface ChatAreaProps {
   className?: string;
@@ -14,8 +17,11 @@ interface ChatAreaProps {
 
 export function ChatArea({ className }: ChatAreaProps) {
   const [toolCount, setToolCount] = useState<number | null>(null);
+  const [converting, setConverting] = useState(false);
+  const [convertError, setConvertError] = useState<string | null>(null);
+  const navigate = useNavigate();
   const {
-    messages, sending, error, sendMessage, clearMessages, hasLLM,
+    messages, sending, error, sendMessage, answerApproval, clearMessages, hasLLM,
     providers, providerId, setProviderId, sessionId, sessions, openSession, deleteSession,
   } = useChatContext();
   const messageListRef = useRef<MessageListRef>(null);
@@ -26,17 +32,31 @@ export function ChatArea({ className }: ChatAreaProps) {
       .catch(() => setToolCount(null));
   }, []);
 
-  const handleSend = useCallback(async (content: string) => {
+  const handleSend = useCallback(async (content: string, attachments: ChatAttachment[]) => {
     // No explicit tool list: the backend offers every tool from connected MCP servers.
-    await sendMessage(content, []);
+    await sendMessage(content, attachments);
     messageListRef.current?.scrollToBottom();
   }, [sendMessage]);
+
+  const awaiting = messages[messages.length - 1]?.status === 'needs_approval';
+  const usedTools = messages.some(m => m.events?.some(e => e.type === 'tool_executed'));
+  const turnIntoWorkflow = async () => {
+    if (!sessionId) return;
+    setConverting(true);
+    setConvertError(null);
+    try {
+      const workflow = await chatService.toWorkflow(sessionId);
+      navigate(`/workflows?open=${workflow.id}`);
+    } catch (err) {
+      setConvertError(getErrorMessage(err));
+    } finally {
+      setConverting(false);
+    }
+  };
 
   const handleCopy = (text: string) => {
     navigator.clipboard.writeText(text).catch(() => {});
   };
-
-  const isAgentRunning = sending;
 
   return (
     <div className={cn('flex flex-col h-full bg-nexus-bg-secondary border-nexus-border rounded-xl overflow-hidden', className)}>
@@ -90,11 +110,18 @@ export function ChatArea({ className }: ChatAreaProps) {
               <Trash2 className="w-4 h-4" />
             </Button>
           )}
-          {sending && (
-            <span className="text-xs text-nexus-text-secondary flex items-center gap-1.5">
-              <Sparkles className="w-3 h-3 text-nexus-accent animate-pulse" />
-              Agent is thinking...
-            </span>
+          {sessionId && usedTools && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => void turnIntoWorkflow()}
+              disabled={converting || sending}
+              className="gap-1.5"
+              title="Save the tool calls from this conversation as a workflow you can re-run"
+            >
+              <Workflow className="w-4 h-4" />
+              {converting ? 'Creating…' : 'Turn into workflow'}
+            </Button>
           )}
           <Button
             variant="ghost"
@@ -109,6 +136,9 @@ export function ChatArea({ className }: ChatAreaProps) {
         </div>
       </div>
 
+      {convertError && (
+        <div className="p-3 border-b-nexus-danger/30 border-b bg-red-500/5 text-sm text-nexus-danger">{convertError}</div>
+      )}
       {error && (
         <div className="p-3 border-b-nexus-danger/30 border-b bg-red-500/5">
           <div className="flex items-center gap-2 text-nexus-danger">
@@ -122,27 +152,9 @@ export function ChatArea({ className }: ChatAreaProps) {
         ref={messageListRef}
         messages={messages}
         onCopy={handleCopy}
+        onApprove={sending ? undefined : (approved) => void answerApproval(approved)}
         autoScroll={true}
       />
-      {sending && (
-        <div className="px-4 pb-4">
-          <div className="flex gap-3 animate-slide-up">
-            <div className="w-8 h-8 rounded-full bg-nexus-accent-dim flex items-center justify-center flex-shrink-0 mt-1">
-              <Bot className="w-5 h-5 text-nexus-accent" />
-            </div>
-            <div className="flex-1 max-w-[85%]">
-              <div className="inline-block px-4 py-2.5 rounded-2xl bg-nexus-bg-secondary border-nexus-border rounded-tl-none">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-nexus-text-secondary">Nexus is thinking</span>
-                  <span className="thinking-dots text-nexus-text-secondary/50">
-                    <span>.</span><span>.</span><span>.</span>
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
       {!hasLLM && messages.length === 0 && (
         <div className="flex-1 flex items-center justify-center p-6">
           <div className="max-w-sm text-center space-y-4">
@@ -164,8 +176,8 @@ export function ChatArea({ className }: ChatAreaProps) {
       )}
       <Composer
         onSend={handleSend}
-        disabled={sending || isAgentRunning || !hasLLM}
-        placeholder={!hasLLM ? 'Configure an LLM provider in Settings to start chatting...' : messages.length === 0 ? 'Start a conversation...' : 'Message Agent...'}
+        disabled={sending || !hasLLM || awaiting}
+        placeholder={!hasLLM ? 'Configure an LLM provider in Settings to start chatting...' : awaiting ? 'Approve or deny the action above to continue...' : messages.length === 0 ? 'Start a conversation...' : 'Message Agent...'}
       />
     </div>
   );

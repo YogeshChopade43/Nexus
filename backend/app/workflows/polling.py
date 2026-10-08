@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 MAX_SEEN = 1000
 MAX_RUNS_PER_CHECK = 25
 ID_FIELDS = ("id", "number", "key", "uid", "url")
+UPDATED_FIELDS = ("last_edited_time", "updated_at", "updatedAt", "updated", "modified_at", "modified", "last_modified")
+CREATED_FIELDS = ("created_time", "created_at", "createdAt", "created")
 
 
 def _now() -> str:
@@ -51,6 +53,22 @@ def detect_id_field(items: list, id_field: str) -> str:
     return next((field for field in ID_FIELDS if field in items[0]), "")
 
 
+def detect_field(items: list, explicit: str, candidates: tuple[str, ...]) -> str:
+    if explicit or not items or not isinstance(items[0], dict):
+        return explicit
+    return next((name for name in candidates if name in items[0]), "")
+
+
+def _parse_time(value: Any) -> Optional[datetime]:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
 def identity(item: Any, id_field: str) -> str:
     if id_field and isinstance(item, dict) and item.get(id_field) is not None:
         return str(item[id_field])
@@ -72,20 +90,24 @@ def _load_state(workflow_id: int) -> Optional[dict[str, Any]]:
         "baseline_done": bool(row["baseline_done"]),
         "last_checked_at": row["last_checked_at"],
         "last_error": row["last_error"],
+        "baseline_at": row["baseline_at"],
     }
 
 
-def _save_state(workflow_id: int, seen: list[str], baseline_done: bool, error: Optional[str]) -> None:
+def _save_state(
+    workflow_id: int, seen: list[str], baseline_done: bool, error: Optional[str], baseline_at: Optional[str] = None,
+) -> None:
     conn = get_connection()
     try:
         conn.execute(
             """
-            INSERT INTO trigger_state (workflow_id, seen, baseline_done, last_checked_at, last_error)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO trigger_state (workflow_id, seen, baseline_done, last_checked_at, last_error, baseline_at)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(workflow_id) DO UPDATE SET seen = excluded.seen, baseline_done = excluded.baseline_done,
-                last_checked_at = excluded.last_checked_at, last_error = excluded.last_error
+                last_checked_at = excluded.last_checked_at, last_error = excluded.last_error,
+                baseline_at = COALESCE(excluded.baseline_at, trigger_state.baseline_at)
             """,
-            (workflow_id, json.dumps(seen[-MAX_SEEN:]), int(baseline_done), _now(), error),
+            (workflow_id, json.dumps(seen[-MAX_SEEN:]), int(baseline_done), _now(), error, baseline_at),
         )
         conn.commit()
     finally:
@@ -152,19 +174,36 @@ async def poll_once(workflow_id: int) -> dict[str, Any]:
         _save_state(workflow_id, state["seen"], state["baseline_done"], str(exc))
         return {"started": 0, "error": str(exc)}
 
+    from app.workflows.engine import evaluate_condition
+
     id_field = detect_id_field(items, config.id_field)
+    track_updates = config.poll_mode == "new_or_updated"
+    updated_field = detect_field(items, config.updated_field, UPDATED_FIELDS) if track_updates else ""
+    created_field = "" if track_updates else detect_field(items, config.created_field, CREATED_FIELDS)
+    baseline_at = _parse_time(state.get("baseline_at"))
     seen = list(state["seen"])
     known = set(seen)
     new_items = []
     for item in items:
         key = identity(item, id_field)
-        if key not in known:
-            known.add(key)
-            seen.append(key)
-            new_items.append(item)
+        if updated_field and isinstance(item, dict) and item.get(updated_field) is not None:
+            key = f"{key}@{item[updated_field]}"  # each edit is a new identity in "new or updated" mode
+        if key in known:
+            continue
+        known.add(key)
+        seen.append(key)
+        created = _parse_time(item.get(created_field)) if created_field and isinstance(item, dict) else None
+        if baseline_at and created and created < baseline_at:
+            continue  # existed before the trigger started; it only showed up now because it was edited
+        if config.filter_field and not evaluate_condition(
+            {"field": config.filter_field, "operator": config.filter_operator or "truthy", "value": config.filter_value},
+            {"item": item},
+        ):
+            continue
+        new_items.append(item)
 
     if not state["baseline_done"]:
-        _save_state(workflow_id, seen, True, None)
+        _save_state(workflow_id, seen, True, None, baseline_at=_now())
         return {"started": 0, "error": None}
 
     warning = None

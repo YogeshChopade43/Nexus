@@ -52,6 +52,8 @@ export function ExecutionTrace({ trace, autoScroll = true }: ExecutionTraceProps
   };
 
   const getStatusBadge = (type: ExecutionTraceEntry['type'], status?: string) => {
+    if (status === 'running') return <Badge variant="info" size="sm">Running</Badge>;
+    if (status === 'cancelled') return <Badge variant="default" size="sm">Cancelled</Badge>;
     if (status === 'success') return <Badge variant="success" size="sm">Completed</Badge>;
     if (status === 'failed') return <Badge variant="danger" size="sm">Failed</Badge>;
     if (status === 'skipped') return <Badge variant="warning" size="sm">Skipped</Badge>;
@@ -99,7 +101,7 @@ export function ExecutionTrace({ trace, autoScroll = true }: ExecutionTraceProps
             <div
               key={entry.id || `trace-${index}`}
               className={cn(
-                'relative pl-8 pb-4',
+                'relative pl-8 pb-4', entry.parent && 'ml-6',
                 index < trace.length - 1 && 'before:content-[""] before:absolute before:left-3 before:top-8 before:bottom-0 before:w-[1px] before:bg-nexus-border'
               )}
             >
@@ -113,6 +115,7 @@ export function ExecutionTrace({ trace, autoScroll = true }: ExecutionTraceProps
                     <div className="flex items-center gap-2 mb-1">
                       <span className="font-mono text-sm text-nexus-text">{entry.nodeName || entry.nodeId || 'Unknown'}</span>
                       {getStatusBadge(entry.type, entry.status)}
+                      {entry.reused && <Badge variant="default" size="sm">reused from last run</Badge>}
                       {entry.duration !== undefined && entry.duration !== null && (
                         <span className="text-xs text-nexus-text-muted ml-auto">
                           {entry.duration}ms

@@ -187,3 +187,36 @@ def clear_activities() -> dict[str, Any]:
         return {"deleted": cursor.rowcount}
     finally:
         conn.close()
+
+NOTIFY_TYPES = ("workflow_failed", "server_error", "workflow_resumed")
+
+
+@router.get("/notifications")
+def get_notifications(limit: int = Query(20, ge=1, le=100)) -> dict[str, Any]:
+    """Things that need attention (failed runs, disconnected servers) and how many are unread."""
+    from app.api.routes.settings import load_user_settings
+
+    settings = load_user_settings()
+    types = [t for t in NOTIFY_TYPES if t != "workflow_failed" or settings["notifications"].get("workflowFailure", True)]
+    marks = ",".join("?" * len(types))
+    read_at = settings.get("notificationsReadAt") or ""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            f"SELECT * FROM activity_log WHERE type IN ({marks}) ORDER BY id DESC LIMIT ?", (*types, limit)
+        ).fetchall()
+        unread = conn.execute(
+            f"SELECT COUNT(*) FROM activity_log WHERE type IN ({marks}) AND timestamp > ?", (*types, read_at)
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    items = [{**_row_to_activity(row), "unread": row["timestamp"] > read_at} for row in rows]
+    return {"unread": unread, "items": items}
+
+
+@router.post("/notifications/read")
+def mark_notifications_read() -> dict[str, Any]:
+    from app.api.routes.settings import update_user_settings
+
+    update_user_settings({"notificationsReadAt": _utc_now()})
+    return {"unread": 0}

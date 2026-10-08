@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import sys
@@ -14,6 +15,7 @@ from app.core.logging_config import configure_logging
 from app.api.routes import (
     activity_router,
     agent_router,
+    dashboard_router,
     mcp_router,
     health_router,
     llm_router,
@@ -23,8 +25,9 @@ from app.api.routes import (
     workflows_router,
 )
 from app.api.middleware import setup_middleware, validate_cors_origins
-from app.mcp import mcp_manager
-from app.workflows.engine import mark_interrupted_runs
+from app.mcp import mcp_manager, server_availability
+from app.tools import get_tool_registry
+from app.workflows.engine import mark_interrupted_runs, resume_interrupted_runs
 from app.workflows.scheduler import start_scheduler, stop_scheduler
 
 configure_logging()
@@ -49,15 +52,25 @@ def validate_environment() -> None:
 async def lifespan(app: FastAPI):
     init_db()
     migrate_llm_api_keys()
-    mark_interrupted_runs()
+    interrupted = mark_interrupted_runs()
     # Servers connect in the background; startup doesn't wait for slow npx/uvx launches.
     await mcp_manager.start_all()
     start_scheduler()
+    resuming = None
+    if interrupted and os.getenv("NEXUS_RESUME_RUNS", "true").lower() != "false":
+        resuming = asyncio.create_task(_resume(interrupted))
     try:
         yield
     finally:
+        if resuming:
+            resuming.cancel()
         stop_scheduler()
         await mcp_manager.stop_all()
+
+
+async def _resume(runs: list) -> None:
+    await mcp_manager.wait_all_ready()  # the runs' tools come from MCP servers
+    await resume_interrupted_runs(runs, get_tool_registry(), server_availability)
 
 
 def create_app() -> FastAPI:
@@ -77,6 +90,7 @@ def create_app() -> FastAPI:
 
     for router in (
         health_router,
+        dashboard_router,
         mcp_router,
         agent_router,
         workflows_router,
@@ -87,7 +101,32 @@ def create_app() -> FastAPI:
         webhooks_router,
     ):
         app.include_router(router)
+    _serve_frontend(app)
     return app
+
+
+def _serve_frontend(app: FastAPI) -> None:
+    """With NEXUS_STATIC_DIR set (the Docker image), serve the built frontend from this same server."""
+    static_dir = os.getenv("NEXUS_STATIC_DIR")
+    if not static_dir or not os.path.isdir(static_dir):
+        return
+    from pathlib import Path
+
+    from fastapi import HTTPException
+    from fastapi.responses import FileResponse, RedirectResponse, Response
+
+    root = Path(static_dir).resolve()
+
+    @app.get("/{path:path}", include_in_schema=False)
+    def frontend(path: str) -> Response:
+        if path == "health":
+            return RedirectResponse("/health/")
+        if path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not found")
+        file = (root / path).resolve()
+        if path and file.is_file() and file.is_relative_to(root):
+            return FileResponse(file)
+        return FileResponse(root / "index.html")  # client-side routes like /workflows
 
 
 app = create_app()

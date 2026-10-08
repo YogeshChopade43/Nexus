@@ -1,6 +1,13 @@
 export type WorkflowId = number | string;
 
-export type WorkflowNodeType = 'trigger' | 'action' | 'llm' | 'condition' | 'transform' | 'delay' | 'output';
+export type WorkflowNodeType = 'trigger' | 'action' | 'llm' | 'condition' | 'transform' | 'delay' | 'output'
+  | 'http' | 'code' | 'workflow' | 'loop' | 'parallel';
+
+/** A sub-workflow held inside a step: loop body, parallel branch or error handler. */
+export interface NestedGraph {
+  nodes: WorkflowNode[];
+  edges: WorkflowEdge[];
+}
 
 export interface WorkflowNode {
   id: string;
@@ -53,6 +60,16 @@ export interface TriggerConfig {
   interval_minutes?: number;
   items_path?: string;
   id_field?: string;
+  concurrency?: number;
+}
+
+export interface AppWebhookSetup {
+  app_id: string;
+  label: string;
+  secret_env: string;
+  path: string;
+  configured: boolean;
+  steps: string[];
 }
 
 export interface TriggerStatus {
@@ -68,10 +85,12 @@ export interface TriggerTypeInfo {
   description: string;
 }
 
+/** JSON Schema for a tool's inputs, as the MCP server sends it (may use $defs, anyOf, enum, …). */
 export interface ToolParameterSchema {
   type: 'object';
-  properties: Record<string, { type?: string; description?: string }>;
+  properties: Record<string, Record<string, unknown> & { type?: string | string[]; description?: string }>;
   required?: string[];
+  $defs?: Record<string, Record<string, unknown>>;
 }
 
 export interface ToolDefinition {
@@ -124,6 +143,34 @@ export interface Workflow {
 
 export type ExecutionStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'partial' | 'skipped';
 
+export interface WorkflowVersion {
+  version: number;
+  name: string;
+  saved_at: string;
+  steps: number;
+}
+
+export interface WorkflowTemplate {
+  id: string;
+  name: string;
+  description: string;
+}
+
+export interface WorkflowDraft {
+  name: string;
+  description: string;
+  nodes: WorkflowNode[];
+  edges: WorkflowEdge[];
+  warnings?: string[];
+}
+
+export interface StepTestResult {
+  status: 'success' | 'failed';
+  output?: unknown;
+  error?: string;
+  duration_ms: number;
+}
+
 export interface ExecutionTraceEntry {
   id: string;
   nodeId: string;
@@ -131,6 +178,8 @@ export interface ExecutionTraceEntry {
   type: string;
   reason?: string;
   attempts?: number;
+  parent?: string;
+  reused?: boolean;
   timestamp: string;
   input?: Record<string, unknown>;
   output?: Record<string, unknown>;

@@ -18,9 +18,12 @@ import json
 import logging
 import re
 import time
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass, field
+from typing import Any, Callable, Optional
 from uuid import uuid4
+
+import httpx
 
 from jinja2 import Undefined
 from jinja2.sandbox import SandboxedEnvironment
@@ -31,13 +34,19 @@ from app.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
-NODE_TYPES = {"trigger", "action", "tool", "llm", "condition", "transform", "delay", "output"}
+NODE_TYPES = {"trigger", "action", "tool", "llm", "condition", "transform", "delay", "output",
+              "http", "code", "workflow", "loop", "parallel"}
 CONDITION_OPERATORS = {
     "truthy", "falsy", "equals", "not_equals", "contains", "not_contains",
     "gt", "gte", "lt", "lte", "is_empty", "not_empty",
 }
 MAX_RETRIES = 5
 MAX_DELAY_SECONDS = 300
+DEFAULT_STEP_TIMEOUT = 300  # seconds; container steps (loop, parallel, sub-workflow) have none by default
+MAX_LOOP_ITEMS = 500
+MAX_WORKFLOW_DEPTH = 5
+CODE_TIME_LIMIT = 5  # seconds of JavaScript CPU time
+CODE_MEMORY_LIMIT = 32 * 1024 * 1024
 
 class _TemplateEnvironment(SandboxedEnvironment):
     """``steps.a.items`` must mean the key ``items``, not ``dict.items``: prefer keys over attributes."""
@@ -65,6 +74,14 @@ def _load_list(value: Any) -> list[dict[str, Any]]:
     except (json.JSONDecodeError, TypeError):
         return []
     return parsed if isinstance(parsed, list) else []
+
+
+def _load_dict(value: Any) -> dict[str, Any]:
+    try:
+        parsed = json.loads(value) if value else {}
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 # ---------------------------------------------------------------------------
@@ -211,17 +228,37 @@ def validate_workflow(
     """Return (errors, warnings). Errors block saving; warnings describe nodes that will fail."""
     errors: list[str] = []
     warnings: list[str] = []
+    all_ids = [str(node.get("id", "")) for node in iter_all_nodes(nodes)]
+    if len(set(all_ids)) != len(all_ids) or "" in all_ids:
+        errors.append("Every node needs a unique id (including steps inside loops, branches and error handlers)")
+    _validate_graph(nodes, edges, tool_registry, errors, warnings, top_level=True)
+    return list(dict.fromkeys(errors)), list(dict.fromkeys(warnings))
+
+
+def nested_graphs(node: dict[str, Any]) -> list[dict[str, Any]]:
+    """Sub-workflows held inside a node: a loop body, parallel branches, an error handler."""
+    config = _node_config(node)
+    graphs = [config.get("body"), config.get("on_error"), *(config.get("branches") or [])]
+    return [g for g in graphs if isinstance(g, dict)]
+
+
+def iter_all_nodes(nodes: list[dict[str, Any]]):
+    for node in nodes:
+        yield node
+        for graph in nested_graphs(node):
+            yield from iter_all_nodes(graph.get("nodes") or [])
+
+
+def _validate_graph(nodes, edges, tool_registry, errors, warnings, top_level=False) -> None:
     ids = [str(node.get("id", "")) for node in nodes]
-    if len(set(ids)) != len(ids) or "" in ids:
-        errors.append("Every node needs a unique id")
     node_ids = set(ids)
     for edge in edges:
         if str(edge.get("source")) not in node_ids or str(edge.get("target")) not in node_ids:
             errors.append(f"Edge {edge.get('id', '?')} references a missing node")
     if topological_order(nodes, edges) is None:
         errors.append("The workflow contains a cycle")
-    if sum(1 for node in nodes if _node_type(node) == "trigger") > 1:
-        errors.append("A workflow can have only one trigger node")
+    if sum(1 for node in nodes if _node_type(node) == "trigger") > (1 if top_level else 0):
+        errors.append("A workflow can have only one trigger node, at the top level")
 
     for node in nodes:
         node_type = _node_type(node)
@@ -245,13 +282,22 @@ def validate_workflow(
                 errors.append(f"Condition '{label}' has unknown operator '{config.get('operator')}'")
             if not config.get("field"):
                 warnings.append(f"Condition '{label}' has no field to check")
+        elif node_type == "http" and not config.get("url"):
+            warnings.append(f"HTTP step '{label}' has no URL")
+        elif node_type == "code" and not str(config.get("code") or "").strip():
+            warnings.append(f"Code step '{label}' is empty")
+        elif node_type == "workflow" and not config.get("workflow_id"):
+            warnings.append(f"Sub-workflow step '{label}' has no workflow selected")
+        elif node_type == "loop" and not config.get("items"):
+            warnings.append(f"Loop '{label}' has no list to loop over")
         for template_field in ("prompt", "template"):
             if isinstance(config.get(template_field), str):
                 try:
                     _env.parse(config[template_field])
                 except Exception as exc:
                     errors.append(f"Node '{label}' has an invalid {template_field}: {exc}")
-    return errors, warnings
+        for graph in nested_graphs(node):
+            _validate_graph(graph.get("nodes") or [], graph.get("edges") or [], tool_registry, errors, warnings)
 
 
 # ---------------------------------------------------------------------------
@@ -401,10 +447,19 @@ def _finish_run(result: WorkflowRunResult, steps: list[dict[str, Any]]) -> None:
         conn.close()
 
 
-def mark_interrupted_runs() -> None:
-    """Runs left 'running' by a crash or restart can never finish; mark them failed."""
+RESUME_WINDOW = timedelta(hours=24)  # older interrupted runs are left failed, not resumed
+
+
+def mark_interrupted_runs() -> list[dict[str, Any]]:
+    """Runs left 'running' by a crash or restart can never finish: mark them failed.
+
+    Returns the recent ones so they can be resumed once the MCP servers are back.
+    """
     conn = get_connection()
     try:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT id, workflow_id, started_at, input_data, events FROM workflow_runs WHERE status = 'running'"
+        ).fetchall()]
         conn.execute(
             "UPDATE workflow_runs SET status = 'failed', error = 'Interrupted by server restart', "
             "completed_at = ? WHERE status = 'running'",
@@ -413,6 +468,37 @@ def mark_interrupted_runs() -> None:
         conn.commit()
     finally:
         conn.close()
+    cutoff = (datetime.now(timezone.utc) - RESUME_WINDOW).isoformat().replace("+00:00", "Z")
+    return [row for row in rows if row["started_at"] >= cutoff]
+
+
+async def resume_interrupted_runs(
+    runs: list[dict[str, Any]], tool_registry: ToolRegistry, app_connections: Callable[[], dict[str, bool]],
+) -> None:
+    """Start each interrupted run again, reusing the outputs of the steps it had finished.
+
+    The step that was in progress when Nexus stopped runs again.
+    """
+    for run in runs:
+        input_data = _load_dict(run["input_data"])
+        trigger = input_data.pop("trigger", None)
+        try:
+            new_id = start_background_run(
+                run["workflow_id"], tool_registry, app_connections(), WorkflowRunRequest(input_data=input_data),
+                trigger=trigger, reuse=reusable_outputs(_load_list(run["events"])),
+            )
+        except Exception:
+            logger.exception("Could not resume run %s", run["id"])
+            continue
+        conn = get_connection()
+        try:
+            conn.execute("UPDATE workflow_runs SET error = ? WHERE id = ?",
+                         (f"Interrupted by server restart; resumed as run {new_id}", run["id"]))
+            conn.commit()
+        finally:
+            conn.close()
+        log_activity("workflow_resumed", "Resumed a workflow run interrupted by a restart",
+                     metadata={"workflow_id": run["workflow_id"], "run_id": new_id, "previous_run_id": run["id"]})
 
 
 # ---------------------------------------------------------------------------
@@ -427,16 +513,344 @@ def load_workflow_graph(row: Any) -> tuple[list[dict[str, Any]], list[dict[str, 
     return nodes, edges
 
 
+def _update_progress(run_id: str, events: list[dict[str, Any]]) -> None:
+    """Write the trace so far, so a run can be watched while it executes."""
+    conn = get_connection()
+    try:
+        payload = json.dumps(events, default=str)
+        conn.execute("UPDATE workflow_runs SET events = ?, trace = ? WHERE id = ?", (payload, payload, run_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+@dataclass
+class RunState:
+    tool_registry: ToolRegistry
+    app_connections: dict[str, bool]
+    workflow_provider_id: Any = None
+    run_id: str = ""
+    depth: int = 0
+    reuse: dict[str, Any] = field(default_factory=dict)  # node_id -> output from an earlier run
+    events: list[dict[str, Any]] = field(default_factory=list)
+    counter: list[int] = field(default_factory=lambda: [0])
+    progress: Optional[Callable[[], None]] = None
+
+
+# ---- per-type executors (each returns {"input": ..., "output": ...}) ---------------
+
+async def _run_http(config, context) -> dict[str, Any]:
+    method = str(config.get("method") or "GET").upper()
+    url = render_value(config.get("url") or "", context)
+    if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+        raise ValueError("HTTP step needs an http(s) URL")
+    headers = {str(k): str(v) for k, v in (render_value(config.get("headers") or {}, context) or {}).items()}
+    body = render_value(config.get("body"), context) if config.get("body") not in (None, "") else None
+    kwargs: dict[str, Any] = {"headers": headers}
+    if isinstance(body, (dict, list)):
+        kwargs["json"] = body
+    elif body is not None:
+        kwargs["content"] = str(body)
+    async with httpx.AsyncClient(timeout=float(config.get("request_timeout") or 30), follow_redirects=True) as client:
+        response = await client.request(method, url, **kwargs)
+    try:
+        data: Any = response.json()
+        output: dict[str, Any] = {"status": response.status_code, "data": data}
+    except ValueError:
+        output = {"status": response.status_code, "text": response.text[:100_000]}
+    if response.status_code >= 400:
+        raise RuntimeError(f"HTTP {response.status_code} from {url}: {response.text[:200]}")
+    return {"input": {"method": method, "url": url}, "output": output}
+
+
+def _run_code_sync(code: str, payload: str) -> Any:
+    import quickjs
+
+    ctx = quickjs.Context()  # no require/fetch/filesystem: pure JavaScript only
+    ctx.set_time_limit(CODE_TIME_LIMIT)
+    ctx.set_memory_limit(CODE_MEMORY_LIMIT)
+    try:
+        result = ctx.eval(f"JSON.stringify((function (input) {{\n{code}\n}})({payload}))")
+    except quickjs.JSException as exc:
+        message = str(exc)
+        if "interrupted" in message:
+            raise RuntimeError(f"Code step timed out after {CODE_TIME_LIMIT}s")
+        raise RuntimeError(f"Code error: {message.splitlines()[0]}")
+    return None if result is None else json.loads(result)
+
+
+async def _run_code(config, context) -> dict[str, Any]:
+    code = str(config.get("code") or "")
+    payload = json.dumps({k: context.get(k) for k in ("input", "trigger", "steps", "loop", "error")}, default=str)
+    value = await asyncio.to_thread(_run_code_sync, code, payload)
+    return {"output": {"value": value}}
+
+
+async def _run_subworkflow(config, context, state: RunState) -> dict[str, Any]:
+    if state.depth >= MAX_WORKFLOW_DEPTH:
+        raise RuntimeError(f"Sub-workflows are nested too deep (max {MAX_WORKFLOW_DEPTH})")
+    workflow_id = int(config.get("workflow_id") or 0)
+    values = render_value(config.get("inputs") or {}, context)
+    child = await run_workflow(
+        workflow_id, state.tool_registry, state.app_connections, WorkflowRunRequest(input_data=values),
+        trigger={"type": "manual", "inputs": values}, depth=state.depth + 1,
+    )
+    output = {"status": child.status, "run_id": child.id, "result": child.output.get("result", {})}
+    if child.status == "failed":
+        raise RuntimeError(f"Sub-workflow failed: {child.error}")
+    return {"input": values, "output": output}
+
+
+async def _run_loop(node_id, config, context, state: RunState) -> dict[str, Any]:
+    items = render_value(config.get("items"), context)
+    if isinstance(items, str):
+        try:
+            items = json.loads(items)
+        except ValueError:
+            pass
+    if not isinstance(items, list):
+        raise ValueError("Loop items must be a list (for example {{ steps.action_1.data.items }})")
+    if len(items) > MAX_LOOP_ITEMS:
+        raise ValueError(f"Loop has {len(items)} items; the limit is {MAX_LOOP_ITEMS}")
+    graph = config.get("body") or {}
+    outer = context.get("loop")
+    results = []
+    try:
+        for index, item in enumerate(items):
+            context["loop"] = {"item": item, "index": index}
+            status, error, final = await _execute_graph(
+                graph.get("nodes") or [], graph.get("edges") or [], context, state, parent=node_id, label=f"item {index + 1}",
+            )
+            if status == "failed":
+                raise RuntimeError(f"item {index + 1}: {error}")
+            results.append(final)
+    finally:
+        context["loop"] = outer
+    return {"input": {"count": len(items)}, "output": {"results": results, "count": len(items)}}
+
+
+async def _run_parallel(node_id, config, context, state: RunState) -> dict[str, Any]:
+    graphs = config.get("branches") or []
+    outcomes = await asyncio.gather(*(
+        _execute_graph(g.get("nodes") or [], g.get("edges") or [], context, state, parent=node_id, label=f"branch {i + 1}")
+        for i, g in enumerate(graphs)
+    ))
+    failed = [f"branch {i + 1}: {error}" for i, (status, error, _) in enumerate(outcomes) if status == "failed"]
+    if failed:
+        raise RuntimeError("; ".join(failed))
+    return {"output": {"branches": [final for _, _, final in outcomes]}}
+
+
+async def run_node(node: dict[str, Any], context: dict[str, Any], state: RunState) -> dict[str, Any]:
+    """Execute one step (with retries and timeout). Raises on failure."""
+    node_id = str(node.get("id"))
+    node_type = _node_type(node)
+    config = _node_config(node)
+    retries = max(0, min(int(config.get("retries") or 0), MAX_RETRIES))
+
+    async def once() -> dict[str, Any]:
+        if node_type == "action":
+            return await _run_action(config, context, state.tool_registry, state.app_connections)
+        if node_type == "llm":
+            return await _run_llm(config, context, state.workflow_provider_id)
+        if node_type == "condition":
+            return {"output": {"result": evaluate_condition(config, context)}}
+        if node_type == "transform":
+            return _run_transform(config, context)
+        if node_type == "delay":
+            seconds = max(0.0, min(float(config.get("seconds") or 0), MAX_DELAY_SECONDS))
+            await asyncio.sleep(seconds)
+            return {"output": {"waited_seconds": seconds}}
+        if node_type == "http":
+            return await _run_http(config, context)
+        if node_type == "code":
+            return await _run_code(config, context)
+        if node_type == "workflow":
+            return await _run_subworkflow(config, context, state)
+        if node_type == "loop":
+            return await _run_loop(node_id, config, context, state)
+        if node_type == "parallel":
+            return await _run_parallel(node_id, config, context, state)
+        if node_type == "output":
+            value = render_value(config.get("template"), context) if config.get("template") else context["steps"]
+            return {"output": value if isinstance(value, dict) else {"value": value}}
+        raise ValueError(f"Unknown step type '{node_type}'")
+
+    containers = ("loop", "parallel", "workflow")
+    timeout = config.get("timeout_seconds") or (None if node_type in containers else DEFAULT_STEP_TIMEOUT)
+    try:
+        result, attempts = await asyncio.wait_for(_with_retries(once, retries), timeout=float(timeout) if timeout else None)
+    except asyncio.TimeoutError:
+        raise TimeoutError(f"Step timed out after {timeout}s")
+    result["attempts"] = attempts + 1
+    return result
+
+
+# ---- graph execution -------------------------------------------------------------
+
+async def _execute_graph(
+    nodes, edges, context: dict[str, Any], state: RunState, parent: Optional[str] = None, label: str = "",
+) -> tuple[str, Optional[str], dict[str, Any]]:
+    order = topological_order(nodes, edges)
+    if order is None:
+        return "failed", "The workflow contains a cycle", {}
+    by_id = {str(node["id"]): node for node in nodes}
+    incoming: dict[str, list[dict[str, Any]]] = {node_id: [] for node_id in by_id}
+    for edge in edges:
+        if str(edge.get("target")) in incoming:
+            incoming[str(edge["target"])].append(edge)
+
+    outcome: dict[str, str] = {}           # node_id -> success | failed | skipped
+    branch: dict[str, bool] = {}           # condition node_id -> result
+    status, first_error = "completed", None
+    final_output: dict[str, Any] = {}
+    last_output: dict[str, Any] = {}
+    halted = False
+
+    def edge_active(edge: dict[str, Any]) -> bool:
+        source = str(edge.get("source"))
+        if outcome.get(source) != "success":
+            return False
+        if source in branch:
+            handle = str(edge.get("sourceHandle") or edge.get("condition") or edge.get("label") or "true").lower()
+            return branch[source] == (handle not in ("false", "else", "no"))
+        return True
+
+    for node_id in order:
+        node = by_id[node_id]
+        node_type = _node_type(node)
+        config = _node_config(node)
+        name = node.get("name") or node_id
+
+        if node_type == "trigger":
+            outcome[node_id] = "success"
+            context["steps"][node_id] = context.get("trigger")
+            continue
+
+        state.counter[0] += 1
+        event: dict[str, Any] = {
+            "id": f"step-{state.counter[0]}", "nodeId": node_id, "nodeName": f"{name} · {label}" if label else name,
+            "type": node_type, "timestamp": _utc_now(), "step": state.counter[0], "status": "success",
+        }
+        if parent:
+            event["parent"] = parent
+        state.events.append(event)
+
+        if halted or (incoming[node_id] and not any(edge_active(e) for e in incoming[node_id])):
+            outcome[node_id] = event["status"] = "skipped"
+            event["type"] = "conditional"
+            event["reason"] = "Previous step failed" if halted else "Branch not taken"
+            continue
+
+        started = time.perf_counter()
+        try:
+            if parent is None and node_id in state.reuse:
+                result = {"output": state.reuse[node_id], "attempts": 0}
+                event["reused"] = True
+            else:
+                if state.progress:
+                    event["status"] = "running"
+                    state.progress()
+                result = await run_node(node, context, state)
+                event["status"] = "success"
+            output = result["output"]
+            if node_type == "condition":
+                branch[node_id] = bool(output.get("result"))
+                event["condition"] = branch[node_id]
+            if node_type == "action":
+                event.update({"type": "tool_executed", "tool": result.get("tool"), "tool_name": result.get("tool"),
+                              "app_id": result.get("app_id"), "connected": True})
+            if node_type == "output":
+                final_output = output
+            event["input"] = _sanitize(result.get("input", {}))
+            event["output"] = event["data"] = _sanitize(output)
+            event["attempts"] = result.get("attempts", 1)
+            context["steps"][node_id] = output
+            last_output = output
+            outcome[node_id] = "success"
+        except asyncio.CancelledError:
+            event.update({"status": "cancelled", "type": "error", "error": "Run was cancelled"})
+            raise
+        except Exception as exc:
+            message = str(exc) or exc.__class__.__name__
+            event.update({"status": "failed", "type": "error", "error": message})
+            if isinstance(exc, PermissionError):
+                event["connected"] = False
+            first_error = first_error or f"{name}: {message}"
+            handler = config.get("on_error")
+            handled = False
+            if isinstance(handler, dict) and handler.get("nodes"):
+                previous_error = context.get("error")
+                context["error"] = {"message": message, "step": node_id}
+                try:
+                    h_status, h_error, _ = await _execute_graph(
+                        handler["nodes"], handler.get("edges") or [], context, state, parent=node_id, label="error handler",
+                    )
+                finally:
+                    context["error"] = previous_error
+                handled = h_status != "failed"
+                if not handled:
+                    first_error = f"{name}: error handler failed: {h_error}"
+            if handled or config.get("continue_on_error"):
+                # Downstream steps still run; they see the error as this step's output.
+                outcome[node_id] = "success"
+                context["steps"][node_id] = {"error": message}
+                status = "partial" if status != "failed" else status
+            else:
+                outcome[node_id] = "failed"
+                status = "failed"
+                halted = True
+        event["duration"] = int((time.perf_counter() - started) * 1000)
+        event["completedAt"] = _utc_now()
+        if state.progress:
+            state.progress()
+
+    return status, first_error, final_output or last_output
+
+
+# ---- run entry points ---------------------------------------------------------------
+
+_active_runs: dict[str, asyncio.Task] = {}
+_semaphores: dict[int, tuple[int, asyncio.Semaphore]] = {}
+
+
+def _run_input(input_data: dict[str, Any], trigger: dict[str, Any]) -> dict[str, Any]:
+    return input_data if trigger == {"type": "manual"} else {**input_data, "trigger": trigger}
+
+
+def _concurrency_limit(row: Any) -> int:
+    try:
+        raw = json.loads(row["trigger"]) if row["trigger"] and row["trigger"] != "manual" else {}
+    except (json.JSONDecodeError, TypeError):
+        raw = {}
+    return max(0, int(raw.get("concurrency") or 0)) if isinstance(raw, dict) else 0
+
+
+def _semaphore(workflow_id: int, limit: int) -> Optional[asyncio.Semaphore]:
+    if limit <= 0:
+        return None
+    current = _semaphores.get(workflow_id)
+    if current is None or current[0] != limit:
+        current = (limit, asyncio.Semaphore(limit))
+        _semaphores[workflow_id] = current
+    return current[1]
+
+
 async def run_workflow(
     workflow_id: int,
     tool_registry: ToolRegistry,
     app_connections: dict[str, bool],
     req: WorkflowRunRequest,
     trigger: Optional[dict[str, Any]] = None,
+    run_id: Optional[str] = None,
+    depth: int = 0,
+    reuse: Optional[dict[str, Any]] = None,
 ) -> WorkflowRunResult:
+    """Run a workflow to completion. Pass ``run_id`` when the run row was already created."""
     started_at = _utc_now()
-    run_id = str(uuid4())
     input_data = dict(req.input_data or {})
+    trigger = trigger or {"type": "manual"}
+    run_input = _run_input(input_data, trigger)
 
     conn = get_connection()
     try:
@@ -445,34 +859,37 @@ async def run_workflow(
         conn.close()
     if row is None:
         raise ValueError("Workflow not found")
+    if run_id is None:
+        run_id = str(uuid4())
+        _insert_run(run_id, workflow_id, started_at, run_input)
 
     nodes, edges = load_workflow_graph(row)
-    workflow_name = row["name"]
-    trigger = trigger or {"type": "manual"}
-    run_input = input_data if trigger == {"type": "manual"} else {**input_data, "trigger": trigger}
-    _insert_run(run_id, workflow_id, started_at, run_input)
+    state = RunState(tool_registry, app_connections, row["llm_provider_id"], run_id, depth, dict(reuse or {}))
+    state.progress = lambda: _update_progress(run_id, state.events)
+    status, first_error, final_output = "completed", None, {}
 
-    events: list[dict[str, Any]] = []
-    status, first_error = "completed", None
-    final_output: dict[str, Any] = {}
-
-    if not (row["enabled"] and row["is_active"]):
-        status, first_error = "skipped", "Workflow is disabled"
-        events.append({"id": "workflow-disabled", "nodeId": "workflow", "nodeName": "Workflow", "type": "conditional",
-                       "status": "skipped", "timestamp": started_at, "step": 0, "error": first_error})
-    elif not any(_node_type(node) != "trigger" for node in nodes):
-        status, first_error = "failed", "Workflow has no steps to run"
-    else:
-        order = topological_order(nodes, edges)
-        if order is None:
-            status, first_error = "failed", "The workflow contains a cycle"
-        else:
-            status, first_error, final_output = await _execute_graph(
-                nodes, edges, order, input_data, trigger, tool_registry, app_connections,
-                row["llm_provider_id"], events,
-            )
+    semaphore = _semaphore(workflow_id, _concurrency_limit(row))
+    try:
+        if semaphore:
+            await semaphore.acquire()
+        try:
+            if not (row["enabled"] and row["is_active"]):
+                status, first_error = "skipped", "Workflow is disabled"
+                state.events.append({"id": "workflow-disabled", "nodeId": "workflow", "nodeName": "Workflow", "type": "conditional",
+                                     "status": "skipped", "timestamp": started_at, "step": 0, "error": first_error})
+            elif not any(_node_type(node) != "trigger" for node in nodes):
+                status, first_error = "failed", "Workflow has no steps to run"
+            else:
+                context = {"input": input_data, "trigger": trigger, "steps": {}}
+                status, first_error, final_output = await _execute_graph(nodes, edges, context, state)
+        finally:
+            if semaphore:
+                semaphore.release()
+    except asyncio.CancelledError:
+        status, first_error = "cancelled", "Run was cancelled"
 
     completed_at = _utc_now()
+    events = state.events
     result = WorkflowRunResult(
         id=run_id,
         workflow_id=workflow_id,
@@ -486,7 +903,7 @@ async def run_workflow(
         input=run_input,
         output={"result": final_output, "steps": [
             {"step": e["step"], "nodeId": e["nodeId"], "tool": e.get("tool"), "status": e["status"], "data": e.get("output", {})}
-            for e in events if e.get("step")
+            for e in events if e.get("step") and not e.get("parent")
         ]},
         error=first_error,
         events=events,
@@ -496,117 +913,48 @@ async def run_workflow(
     _finish_run(result, [e for e in events if e.get("step")])
     log_activity(
         "workflow_completed" if status in ("completed", "partial") else "workflow_failed",
-        f"Workflow '{workflow_name}' {status}",
+        f"Workflow '{row['name']}' {status}",
         first_error or f"{sum(1 for e in events if e['status'] == 'success')} step(s) succeeded",
         {"workflow_id": workflow_id, "run_id": run_id, "status": status, "trigger": trigger.get("type")},
     )
     return result
 
 
-async def _execute_graph(
-    nodes, edges, order, input_data, trigger, tool_registry, app_connections, workflow_provider_id, events,
-) -> tuple[str, Optional[str], dict[str, Any]]:
-    by_id = {str(node["id"]): node for node in nodes}
-    incoming: dict[str, list[dict[str, Any]]] = {node_id: [] for node_id in by_id}
-    for edge in edges:
-        if str(edge.get("target")) in incoming:
-            incoming[str(edge["target"])].append(edge)
+def start_background_run(
+    workflow_id: int,
+    tool_registry: ToolRegistry,
+    app_connections: dict[str, bool],
+    req: WorkflowRunRequest,
+    trigger: Optional[dict[str, Any]] = None,
+    reuse: Optional[dict[str, Any]] = None,
+) -> str:
+    """Create the run row now and execute in the background; returns the run id."""
+    trigger = trigger or {"type": "manual"}
+    run_id = str(uuid4())
+    _insert_run(run_id, workflow_id, _utc_now(), _run_input(dict(req.input_data or {}), trigger))
+    task = asyncio.create_task(run_workflow(
+        workflow_id, tool_registry, app_connections, req, trigger=trigger, run_id=run_id, reuse=reuse,
+    ))
+    _active_runs[run_id] = task
+    task.add_done_callback(lambda _: _active_runs.pop(run_id, None))
+    return run_id
 
-    context: dict[str, Any] = {"input": input_data, "trigger": trigger, "steps": {}}
-    outcome: dict[str, str] = {}           # node_id -> success | failed | skipped
-    branch: dict[str, bool] = {}           # condition node_id -> result
-    status, first_error = "completed", None
-    final_output: dict[str, Any] = {}
-    halted = False
-    step_number = 0
 
-    def edge_active(edge: dict[str, Any]) -> bool:
-        source = str(edge.get("source"))
-        if outcome.get(source) != "success":
-            return False
-        if source in branch:
-            label = str(edge.get("sourceHandle") or edge.get("condition") or edge.get("label") or "true").lower()
-            wants_true = label not in ("false", "else", "no")
-            return branch[source] == wants_true
-        return True
+def cancel_run(run_id: str) -> bool:
+    task = _active_runs.get(run_id)
+    if task is None or task.done():
+        return False
+    task.cancel()
+    return True
 
-    for node_id in order:
-        node = by_id[node_id]
-        node_type = _node_type(node)
-        config = _node_config(node)
-        name = node.get("name") or node_id
 
-        if node_type == "trigger":
-            outcome[node_id] = "success"
-            context["steps"][node_id] = trigger
-            continue
-
-        step_number += 1
-        event: dict[str, Any] = {
-            "id": f"step-{step_number}", "nodeId": node_id, "nodeName": name, "type": node_type,
-            "timestamp": _utc_now(), "step": step_number, "status": "success",
-        }
-        events.append(event)
-
-        if halted or (incoming[node_id] and not any(edge_active(e) for e in incoming[node_id])):
-            outcome[node_id] = event["status"] = "skipped"
-            event["type"] = "conditional"
-            event["reason"] = "Previous step failed" if halted else "Branch not taken"
-            continue
-
-        started = time.perf_counter()
-        retries = max(0, min(int(config.get("retries") or 0), MAX_RETRIES))
-        try:
-            if node_type == "action":
-                result, attempts = await _with_retries(
-                    lambda: _run_action(config, context, tool_registry, app_connections), retries
-                )
-                event.update({"tool": result["tool"], "tool_name": result["tool"], "app_id": result["app_id"], "connected": True})
-            elif node_type == "llm":
-                result, attempts = await _with_retries(lambda: _run_llm(config, context, workflow_provider_id), retries)
-            elif node_type == "condition":
-                branch[node_id] = evaluate_condition(config, context)
-                result, attempts = {"output": {"result": branch[node_id]}}, 0
-                event["condition"] = branch[node_id]
-            elif node_type == "transform":
-                result, attempts = _run_transform(config, context), 0
-            elif node_type == "delay":
-                seconds = max(0.0, min(float(config.get("seconds") or 0), MAX_DELAY_SECONDS))
-                await asyncio.sleep(seconds)
-                result, attempts = {"output": {"waited_seconds": seconds}}, 0
-            else:  # output
-                value = render_value(config.get("template"), context) if config.get("template") else context["steps"]
-                final_output = value if isinstance(value, dict) else {"value": value}
-                result, attempts = {"output": final_output}, 0
-            event["input"] = _sanitize(result.get("input", {}))
-            event["output"] = event["data"] = _sanitize(result["output"])
-            event["attempts"] = attempts + 1
-            context["steps"][node_id] = result["output"]
-            outcome[node_id] = "success"
-            if node_type == "action":
-                event["type"] = "tool_executed"
-        except Exception as exc:
-            message = str(exc) or exc.__class__.__name__
-            event.update({"status": "failed", "type": "error", "error": message})
-            if isinstance(exc, PermissionError):
-                event["connected"] = False
-            first_error = first_error or f"{name}: {message}"
-            if config.get("continue_on_error"):
-                # Downstream steps still run; they see an empty output for this node.
-                outcome[node_id] = "success"
-                context["steps"][node_id] = {"error": message}
-                status = "partial"
-            else:
-                outcome[node_id] = "failed"
-                status = "failed"
-                halted = True
-        event["duration"] = int((time.perf_counter() - started) * 1000)
-        event["completedAt"] = _utc_now()
-
-    if not final_output:
-        last = next((e for e in reversed(events) if e["status"] == "success" and e.get("output") is not None), None)
-        final_output = last["output"] if last else {}
-    return status, first_error, final_output
+def reusable_outputs(events: list[dict[str, Any]]) -> dict[str, Any]:
+    """Outputs of top-level steps that succeeded in an earlier run (for re-run from failure)."""
+    return {
+        e["nodeId"]: e.get("output", {})
+        for e in events
+        if e.get("status") == "success" and not e.get("parent") and e.get("step")
+    }
 
 
 def demo() -> None:

@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useState } from 'react';
-import { AlertCircle, ChevronDown, ChevronRight, Plus, RefreshCw, Server, Trash2 } from 'lucide-react';
+import { AlertCircle, BookOpen, ChevronDown, ChevronRight, LogIn, Plus, RefreshCw, Server, Trash2, Upload } from 'lucide-react';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
-import { cn, getErrorMessage } from '../../lib/utils';
+import { cn, formatRelativeTime, getErrorMessage } from '../../lib/utils';
 import { mcpService } from '../../services/mcp';
-import type { McpServer, McpServerInput, McpTransport } from '../../types/mcp';
+import type { ToolPolicy, McpLogs, McpServer, McpServerInput, McpTransport } from '../../types/mcp';
+import { CATALOG, parseMcpConfig, type CatalogEntry } from './catalog';
 
 const STATUS_STYLES: Record<string, string> = {
   connected: 'bg-green-500/15 text-green-500',
   connecting: 'bg-blue-500/15 text-blue-500',
+  needs_auth: 'bg-amber-500/15 text-amber-500',
   error: 'bg-red-500/15 text-red-500',
   stopped: 'bg-gray-500/15 text-nexus-text-muted',
 };
@@ -52,15 +54,15 @@ interface FormState {
 
 const EMPTY_FORM: FormState = { name: '', transport: 'stdio', command: '', args: '', env: '', url: '', headers: '' };
 
-function formFrom(server: McpServer): FormState {
+function formFrom(server: McpServerInput): FormState {
   return {
     name: server.name,
     transport: server.transport,
-    command: server.command,
-    args: joinArgs(server.args),
-    env: toLines(server.env),
-    url: server.url,
-    headers: Object.entries(server.headers).map(([k, v]) => `${k}: ${v}`).join('\n'),
+    command: server.command ?? '',
+    args: joinArgs(server.args ?? []),
+    env: toLines(server.env ?? {}),
+    url: server.url ?? '',
+    headers: Object.entries(server.headers ?? {}).map(([k, v]) => `${k}: ${v}`).join('\n'),
   };
 }
 
@@ -73,6 +75,12 @@ export function ServersPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState<number | 'form' | null>(null);
   const [expanded, setExpanded] = useState<number | null>(null);
+  const [formNote, setFormNote] = useState<string | null>(null);
+  const [catalogOpen, setCatalogOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importText, setImportText] = useState('');
+  const [importResult, setImportResult] = useState<string | null>(null);
+  const [logs, setLogs] = useState<{ id: number; data: McpLogs } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -89,19 +97,48 @@ export function ServersPage() {
     void load();
   }, [load]);
 
-  // Poll while any server is still starting (npx/uvx can take a while on first launch).
+  // Poll while a server is starting (npx/uvx can take a while on first launch) or waiting for sign-in.
   useEffect(() => {
-    if (!servers.some(s => s.status === 'connecting')) return;
+    if (!servers.some(s => s.status === 'connecting' || s.status === 'needs_auth')) return;
     const timer = setTimeout(() => void load(), 2000);
     return () => clearTimeout(timer);
   }, [servers, load]);
 
   const replace = (server: McpServer) => setServers(prev => prev.map(s => (s.id === server.id ? server : s)));
 
-  const openForm = (server: McpServer | 'new') => {
+  const openForm = (server: McpServer | 'new', fromCatalog?: CatalogEntry) => {
     setEditing(server);
-    setForm(server === 'new' ? EMPTY_FORM : formFrom(server));
+    setForm(fromCatalog ? formFrom(fromCatalog.server) : server === 'new' ? EMPTY_FORM : formFrom(server));
+    setFormNote(fromCatalog?.note ?? null);
     setFormError(null);
+    setCatalogOpen(false);
+  };
+
+  const importConfig = async () => {
+    setImportResult(null);
+    let parsed: ReturnType<typeof parseMcpConfig>;
+    try {
+      parsed = parseMcpConfig(importText);
+    } catch (err) {
+      setImportResult(`Could not read that file: ${getErrorMessage(err)}`);
+      return;
+    }
+    setBusy('form');
+    const results = await Promise.allSettled(parsed.servers.map(server => mcpService.create(server)));
+    setBusy(null);
+    const failed = results.flatMap((r, i) => (r.status === 'rejected' ? [`${parsed.servers[i].name}: ${getErrorMessage(r.reason)}`] : []));
+    const added = results.length - failed.length;
+    setImportResult([`Added ${added} server(s).`, ...failed.map(f => `Failed ${f}`), ...parsed.skipped.map(s => `Skipped ${s}`)].join('\n'));
+    if (added) await load();
+  };
+
+  const toggleLogs = async (server: McpServer) => {
+    if (logs?.id === server.id) { setLogs(null); return; }
+    try {
+      setLogs({ id: server.id, data: await mcpService.logs(server.id) });
+    } catch (err) {
+      setError(getErrorMessage(err));
+    }
   };
 
   const submit = async () => {
@@ -150,9 +187,17 @@ export function ServersPage() {
             Connect any app through its MCP server. Its tools become available to the agent and to workflows.
           </p>
         </div>
-        <Button variant="primary" onClick={() => openForm('new')} className="gap-1.5">
-          <Plus className="w-4 h-4" /> Add server
-        </Button>
+        <div className="flex flex-wrap gap-2 justify-end">
+          <Button variant="secondary" onClick={() => setCatalogOpen(true)} className="gap-1.5">
+            <BookOpen className="w-4 h-4" /> Catalog
+          </Button>
+          <Button variant="secondary" onClick={() => { setImportOpen(true); setImportResult(null); }} className="gap-1.5">
+            <Upload className="w-4 h-4" /> Import
+          </Button>
+          <Button variant="primary" onClick={() => openForm('new')} className="gap-1.5">
+            <Plus className="w-4 h-4" /> Add server
+          </Button>
+        </div>
       </div>
 
       {error && (
@@ -193,8 +238,21 @@ export function ServersPage() {
                       <p className="text-xs text-nexus-text-muted truncate mt-0.5 font-mono">
                         {server.transport === 'stdio' ? `${server.command} ${joinArgs(server.args)}` : server.url}
                       </p>
-                      {server.error && server.status !== 'connected' && <p className="text-xs text-nexus-danger mt-1">{server.error}</p>}
+                      {server.error && server.status !== 'connected' && server.status !== 'needs_auth' && <p className="text-xs text-nexus-danger mt-1">{server.error}</p>}
+                      {server.status === 'needs_auth' && <p className="text-xs text-amber-500 mt-1">This server needs you to sign in before Nexus can use it.</p>}
                     </div>
+                    {server.status === 'needs_auth' && server.auth_url && (
+                      <a href={server.auth_url} target="_blank" rel="noreferrer"
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-nexus-accent text-nexus-bg text-sm font-medium hover:opacity-90">
+                        <LogIn className="w-4 h-4" /> Sign in
+                      </a>
+                    )}
+                    {server.signed_in && server.status !== 'needs_auth' && (
+                      <Button variant="ghost" size="sm" disabled={busy === server.id}
+                        onClick={() => { if (window.confirm(`Sign out of ${server.name}? You'll need to sign in again to use it.`)) void act(server, () => mcpService.signOut(server.id)); }}>
+                        Sign out
+                      </Button>
+                    )}
                     <label className="flex items-center gap-2 text-sm text-nexus-text-secondary">
                       <input
                         type="checkbox"
@@ -219,18 +277,61 @@ export function ServersPage() {
                     </Button>
                   </div>
                   {open && (
-                    <div className="px-4 pb-4">
-                      {server.tools.length === 0 ? (
+                    <div className="px-4 pb-4 space-y-3">
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-nexus-text-muted">
+                        {server.health?.connected_since && <span>Connected {formatRelativeTime(server.health.connected_since)}</span>}
+                        {server.health && <span>{server.health.calls} call(s), {server.health.failures} failed</span>}
+                        {server.health?.last_call_at && <span>Last used {formatRelativeTime(server.health.last_call_at)}</span>}
+                        <button type="button" className="underline" onClick={() => void toggleLogs(server)}>
+                          {logs?.id === server.id ? 'Hide logs' : 'Show logs'}
+                        </button>
+                      </div>
+                      {logs?.id === server.id && (
+                        <div className="space-y-2">
+                          <ul className="text-xs text-nexus-text-secondary space-y-0.5 max-h-40 overflow-y-auto">
+                            {logs.data.events.length === 0 && <li className="text-nexus-text-muted">No connection events yet.</li>}
+                            {[...logs.data.events].reverse().map((event, i) => (
+                              <li key={i}><span className="text-nexus-text-muted font-mono">{event.at.replace('T', ' ').replace('Z', '')}</span> {event.message}</li>
+                            ))}
+                          </ul>
+                          {server.transport === 'stdio' && (
+                            <pre className="text-xs text-nexus-text-secondary bg-nexus-bg-tertiary/50 rounded p-2 max-h-64 overflow-auto whitespace-pre-wrap" aria-label="Server error output">
+                              {logs.data.stderr.trim() || 'The server has not written any error output.'}
+                            </pre>
+                          )}
+                        </div>
+                      )}
+                      {server.tools.length + server.blocked_tools.length === 0 ? (
                         <p className="text-sm text-nexus-text-muted">No tools available{server.status !== 'connected' ? ' until the server connects' : ''}.</p>
                       ) : (
-                        <ul className="grid gap-2 sm:grid-cols-2">
-                          {server.tools.map(tool => (
-                            <li key={tool.name} className="p-2 rounded border border-nexus-border">
-                              <code className="text-xs text-nexus-accent">{tool.name}</code>
-                              <p className="text-xs text-nexus-text-secondary mt-0.5 line-clamp-2">{tool.description.replace(`[${server.name}] `, '')}</p>
-                            </li>
-                          ))}
-                        </ul>
+                        <>
+                          <p className="text-xs text-nexus-text-muted mb-2">
+                            Allow: runs without asking. Ask: the chat agent asks you first. Block: hidden from the agent and workflows.
+                          </p>
+                          <ul className="grid gap-2 sm:grid-cols-2">
+                            {[...server.tools, ...server.blocked_tools].map(tool => (
+                              <li key={tool.name} className={cn('p-2 rounded border border-nexus-border', tool.policy === 'block' && 'opacity-60')}>
+                                <div className="flex items-center justify-between gap-2">
+                                  <code className="text-xs text-nexus-accent truncate">{tool.name}</code>
+                                  <select
+                                    value={tool.policy}
+                                    disabled={busy === server.id}
+                                    aria-label={`Policy for ${tool.name}`}
+                                    onChange={(e) => void act(server, () => mcpService.update(server.id, {
+                                      tool_policies: { ...server.tool_policies, [tool.remote_name]: e.target.value as ToolPolicy },
+                                    }))}
+                                    className="px-1.5 py-0.5 rounded bg-nexus-bg-tertiary border border-nexus-border text-xs text-nexus-text"
+                                  >
+                                    <option value="allow">Allow</option>
+                                    <option value="ask">Ask</option>
+                                    <option value="block">Block</option>
+                                  </select>
+                                </div>
+                                <p className="text-xs text-nexus-text-secondary mt-0.5 line-clamp-2">{tool.description.replace(`[${server.name}] `, '')}</p>
+                              </li>
+                            ))}
+                          </ul>
+                        </>
                       )}
                     </div>
                   )}
@@ -288,7 +389,11 @@ export function ServersPage() {
             </>
           )}
 
-          {editing !== 'new' && <p className="text-xs text-nexus-text-muted">Values shown as *** are kept unchanged.</p>}
+          {formNote && <p className="text-sm text-amber-500">{formNote}</p>}
+          {form.transport === 'http' && (
+            <p className="text-xs text-nexus-text-muted">Servers that use sign-in (OAuth) ask you to sign in after saving; leave the headers empty for those.</p>
+          )}
+          {editing !== 'new' && editing !== null && <p className="text-xs text-nexus-text-muted">Values shown as *** are kept unchanged.</p>}
           {formError && <p className="text-sm text-nexus-danger" role="alert">{formError}</p>}
           <div className="flex justify-end gap-2">
             <Button type="button" variant="ghost" onClick={() => setEditing(null)} disabled={busy === 'form'}>Cancel</Button>
@@ -297,6 +402,44 @@ export function ServersPage() {
             </Button>
           </div>
         </form>
+      </Modal>
+
+      <Modal open={catalogOpen} onClose={() => setCatalogOpen(false)} title="Server catalog" size="lg">
+        <p className="text-sm text-nexus-text-secondary mb-3">Popular servers. Picking one fills in the form; you can change anything before saving.</p>
+        <ul className="grid gap-2 sm:grid-cols-2">
+          {CATALOG.map(entry => (
+            <li key={entry.server.name}>
+              <button type="button" onClick={() => openForm('new', entry)}
+                className="w-full text-left p-3 rounded-lg border border-nexus-border hover:border-nexus-accent transition-colors">
+                <span className="font-medium text-nexus-text">{entry.server.name}</span>
+                <span className="ml-2 text-xs text-nexus-text-muted">{entry.server.transport === 'http' ? 'hosted' : 'local'}</span>
+                <p className="text-xs text-nexus-text-secondary mt-1">{entry.description}</p>
+              </button>
+            </li>
+          ))}
+        </ul>
+      </Modal>
+
+      <Modal open={importOpen} onClose={() => busy !== 'form' && setImportOpen(false)} title="Import MCP servers" size="lg">
+        <div className="space-y-3">
+          <p className="text-sm text-nexus-text-secondary">
+            Paste or choose a config file from Claude Desktop (<code>claude_desktop_config.json</code>), Claude Code
+            (<code>.mcp.json</code> or <code>~/.claude.json</code>), Cursor or VS Code (<code>.vscode/mcp.json</code>).
+          </p>
+          <input type="file" accept=".json,application/json" aria-label="Choose a config file"
+            onChange={(e) => { const file = e.target.files?.[0]; if (file) void file.text().then(setImportText); }}
+            className="text-sm text-nexus-text-secondary" />
+          <textarea rows={8} value={importText} onChange={(e) => setImportText(e.target.value)} aria-label="Config file contents"
+            placeholder='{"mcpServers": {"notion": {"command": "npx", "args": ["-y", "@notionhq/notion-mcp-server"]}}}'
+            className={cn(inputClass, 'font-mono text-xs')} />
+          {importResult && <pre className="text-sm text-nexus-text-secondary whitespace-pre-wrap" role="status">{importResult}</pre>}
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setImportOpen(false)} disabled={busy === 'form'}>Close</Button>
+            <Button variant="primary" onClick={() => void importConfig()} loading={busy === 'form'} disabled={busy === 'form' || !importText.trim()}>
+              {busy === 'form' ? 'Connecting…' : 'Import'}
+            </Button>
+          </div>
+        </div>
       </Modal>
     </div>
   );

@@ -20,7 +20,18 @@ from app.tools import get_tool_registry
 from app.triggers.models import TriggerConfig
 from app.triggers.registry import list_trigger_types
 from app.workflows import inputs, polling, recurrence
-from app.workflows.engine import load_workflow_graph, run_workflow, validate_workflow
+from app.workflows import drafting
+from app.workflows.engine import (
+    RunState,
+    cancel_run,
+    load_workflow_graph,
+    reusable_outputs,
+    run_node,
+    run_workflow,
+    start_background_run,
+    validate_workflow,
+)
+from app.workflows.templates import TEMPLATES, get_template
 from app.workflows.scheduler import cron_trigger, next_run_time, parse_trigger, sync_workflow_schedule
 
 router = APIRouter(prefix="/api/workflows", tags=["workflows"])
@@ -126,10 +137,16 @@ def _trigger_from_nodes(nodes: list[dict[str, Any]], fallback: Any, previous: Op
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=f"Invalid manual inputs: {exc}")
     if config.type == "recurrence":
+        if not config.anchor and config.interval > 1:
+            # Fix the cycle's start so "every N days/weeks/months" keeps its rhythm across edits and restarts.
+            config.anchor = (previous.anchor if previous and previous.type == "recurrence" and previous.anchor else None) \
+                or datetime.now(timezone.utc).date().isoformat()
         try:
             recurrence.validate(config)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=f"Invalid recurrence: {exc}")
+    if not 0 <= config.concurrency <= 20:
+        raise HTTPException(status_code=400, detail="Concurrency must be between 0 (unlimited) and 20")
     if config.type == "poll":
         if not config.tool:
             raise HTTPException(status_code=400, detail="A polling trigger needs a tool to check")
@@ -142,14 +159,16 @@ def _trigger_from_nodes(nodes: list[dict[str, Any]], fallback: Any, previous: Op
         config.secret = (previous.secret if previous and previous.secret else None) or secrets.token_urlsafe(24)
     else:
         config.secret = None
-    return "manual" if config.type == "manual" and not config.inputs else config.model_dump_json()
+    plain_manual = config.type == "manual" and not config.inputs and not config.concurrency
+    return "manual" if plain_manual else config.model_dump_json()
 
 
 def _poll_identity(config: TriggerConfig) -> Optional[str]:
     """What a poll's 'seen' state is tied to; None when the trigger is not a poll."""
     if config.type != "poll":
         return None
-    return json.dumps([config.tool, config.parameters, config.items_path, config.id_field], sort_keys=True, default=str)
+    return json.dumps([config.tool, config.parameters, config.items_path, config.id_field, config.poll_mode,
+                       config.updated_field], sort_keys=True, default=str)
 
 
 def _validate(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> list[str]:
@@ -175,6 +194,77 @@ def preview_recurrence(payload: dict[str, Any]) -> dict[str, Any]:
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"next_runs": [run.isoformat() for run in runs]}
+
+
+EXPORT_FORMAT = "nexus-workflow/1"
+
+
+@router.post("/import", response_model=WorkflowResponse)
+def import_workflow(payload: dict[str, Any]) -> WorkflowResponse:
+    if payload.get("format") != EXPORT_FORMAT or not isinstance(payload.get("nodes"), list):
+        raise HTTPException(status_code=400, detail=f"Not a Nexus workflow export (expected format '{EXPORT_FORMAT}')")
+    trigger = dict(payload.get("trigger") or {"type": "manual"})
+    trigger.pop("secret", None)  # never trust an imported webhook token; a new one is generated
+    return create_workflow(WorkflowCreate(
+        name=f"{payload.get('name') or 'Workflow'} (imported)", description=payload.get("description") or "",
+        nodes=payload["nodes"], edges=payload.get("edges") or [], trigger_config=trigger, isActive=False,
+    ))
+
+
+@router.get("/templates")
+def list_templates() -> list[dict[str, Any]]:
+    return [{"id": t["id"], "name": t["name"], "description": t["description"]} for t in TEMPLATES]
+
+
+@router.post("/templates/{template_id}", response_model=WorkflowResponse)
+def create_from_template(template_id: str) -> WorkflowResponse:
+    template = get_template(template_id)
+    if template is None:
+        raise HTTPException(status_code=404, detail="Template not found")
+    copy = json.loads(json.dumps(template))
+    return create_workflow(WorkflowCreate(
+        name=copy["name"], description=copy["description"], nodes=copy["nodes"], edges=copy["edges"], isActive=False,
+    ))
+
+
+@router.post("/test-step")
+async def test_step(payload: dict[str, Any]) -> dict[str, Any]:
+    """Run one step on its own with sample data (the builder's Test step button)."""
+    node = payload.get("node")
+    if not isinstance(node, dict) or not node.get("type"):
+        raise HTTPException(status_code=400, detail="A step to test is required")
+    sample = payload.get("sample") or {}
+    context = {"input": sample.get("input") or {}, "trigger": sample.get("trigger") or {}, "steps": dict(sample.get("steps") or {}),
+               "loop": sample.get("loop"), "error": sample.get("error")}
+    provider_id = None
+    if payload.get("workflow_id"):
+        conn = get_connection()
+        try:
+            row = conn.execute("SELECT llm_provider_id FROM workflows WHERE id = ?", (payload["workflow_id"],)).fetchone()
+        finally:
+            conn.close()
+        provider_id = row["llm_provider_id"] if row else None
+    state = RunState(get_tool_registry(), server_availability(), provider_id)
+    started = datetime.now(timezone.utc)
+    try:
+        result = await run_node(node, context, state)
+        outcome = {"status": "success", "output": result["output"], "input": result.get("input", {})}
+    except Exception as exc:
+        outcome = {"status": "failed", "error": str(exc) or exc.__class__.__name__}
+    outcome["duration_ms"] = int((datetime.now(timezone.utc) - started).total_seconds() * 1000)
+    return outcome
+
+
+@router.post("/draft")
+async def draft(payload: dict[str, Any]) -> dict[str, Any]:
+    """Draft (but do not save) a workflow from a plain-language description."""
+    description = str(payload.get("description") or "").strip()
+    if not description:
+        raise HTTPException(status_code=400, detail="Describe what the workflow should do")
+    try:
+        return await drafting.draft_workflow(description)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.post("/validate")
@@ -299,6 +389,10 @@ def update_workflow(workflow_id: int, req: WorkflowUpdate) -> WorkflowResponse:
 
     conn = get_connection()
     try:
+        conn.execute(
+            "INSERT INTO workflow_versions (workflow_id, version, snapshot) VALUES (?, ?, ?)",
+            (workflow_id, int(row["version"] or 1), json.dumps(_snapshot(row))),
+        )
         set_clause = ", ".join(f"{key} = ?" for key in updates)
         conn.execute(f"UPDATE workflows SET {set_clause} WHERE id = ?", [*updates.values(), workflow_id])
         conn.commit()
@@ -308,22 +402,81 @@ def update_workflow(workflow_id: int, req: WorkflowUpdate) -> WorkflowResponse:
     return _get_with_warnings(workflow_id, warnings)
 
 
+def _snapshot(row: Any) -> dict[str, Any]:
+    nodes, edges = load_workflow_graph(row)
+    trigger = parse_trigger(row["trigger"]).model_dump()
+    trigger.pop("secret", None)
+    return {"name": row["name"], "description": row["description"] or "", "nodes": nodes, "edges": edges, "trigger": trigger}
+
+
+@router.get("/{workflow_id}/versions")
+def list_versions(workflow_id: int) -> list[dict[str, Any]]:
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT version, snapshot, created_at FROM workflow_versions WHERE workflow_id = ? ORDER BY version DESC, id DESC",
+            (workflow_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    result = []
+    for r in rows:
+        snap = json.loads(r["snapshot"])
+        result.append({"version": r["version"], "name": snap.get("name"), "saved_at": r["created_at"], "steps": len(snap.get("nodes") or [])})
+    return result
+
+
+@router.post("/{workflow_id}/versions/{version}/restore", response_model=WorkflowResponse)
+def restore_version(workflow_id: int, version: int) -> WorkflowResponse:
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT snapshot FROM workflow_versions WHERE workflow_id = ? AND version = ? ORDER BY id DESC LIMIT 1",
+            (workflow_id, version),
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Version not found")
+    snap = json.loads(row["snapshot"])
+    return update_workflow(workflow_id, WorkflowUpdate(
+        name=snap["name"], description=snap["description"], nodes=snap["nodes"], edges=snap["edges"], trigger_config=snap["trigger"],
+    ))
+
+
+@router.get("/{workflow_id}/export")
+def export_workflow(workflow_id: int) -> dict[str, Any]:
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT * FROM workflows WHERE id = ?", (workflow_id,)).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    return {"format": EXPORT_FORMAT, **_snapshot(row)}
+
+
 @router.delete("/{workflow_id}", status_code=204)
 def delete_workflow(workflow_id: int) -> Response:
     conn = get_connection()
     try:
-        cursor = conn.execute("DELETE FROM workflows WHERE id = ?", (workflow_id,))
+        row = conn.execute("SELECT name FROM workflows WHERE id = ?", (workflow_id,)).fetchone()
+        conn.execute("DELETE FROM workflows WHERE id = ?", (workflow_id,))
         conn.commit()
     finally:
         conn.close()
-    if cursor.rowcount == 0:
+    if row is None:
         raise HTTPException(status_code=404, detail="Workflow not found")
     sync_workflow_schedule(workflow_id)
+    log_activity("workflow_deleted", f"Workflow '{row['name']}' deleted", metadata={"workflow_id": workflow_id})
     return Response(status_code=204)
 
 
 @router.post("/{workflow_id}/run", response_model=WorkflowRunResult)
-async def run_workflow_endpoint(workflow_id: int, req: WorkflowRunRequest) -> WorkflowRunResult:
+async def run_workflow_endpoint(
+    workflow_id: int, req: WorkflowRunRequest, background: bool = Query(False),
+) -> WorkflowRunResult:
+    """Run now. With ``background=true`` the run starts and its id returns at once; poll it for progress."""
     conn = get_connection()
     try:
         row = conn.execute("SELECT id, trigger FROM workflows WHERE id = ?", (workflow_id,)).fetchone()
@@ -345,7 +498,37 @@ async def run_workflow_endpoint(workflow_id: int, req: WorkflowRunRequest) -> Wo
             trigger = await polling.latest_item_trigger(config)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=f"Could not get an item to test with: {exc}")
+    if background:
+        run_id = start_background_run(workflow_id, get_tool_registry(), server_availability(), req, trigger=trigger)
+        return WorkflowRunResult(id=run_id, workflow_id=workflow_id, workflowId=str(workflow_id), status="running")
     return await run_workflow(workflow_id, get_tool_registry(), server_availability(), req, trigger=trigger)
+
+
+@router.post("/{workflow_id}/runs/{run_id}/cancel")
+def cancel_workflow_run(workflow_id: int, run_id: str) -> dict[str, Any]:
+    if not cancel_run(run_id):
+        raise HTTPException(status_code=409, detail="This run is not running")
+    return {"run_id": run_id, "cancelled": True}
+
+
+@router.post("/{workflow_id}/runs/{run_id}/rerun", response_model=WorkflowRunResult)
+async def rerun_from_failure(workflow_id: int, run_id: str) -> WorkflowRunResult:
+    """Run again, reusing the outputs of steps that succeeded last time so they are not repeated."""
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT * FROM workflow_runs WHERE id = ? AND workflow_id = ?", (run_id, workflow_id)).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Workflow run not found")
+    previous = _run_from_row(row)
+    input_data = dict(previous["input_data"])
+    trigger = input_data.pop("trigger", None)
+    new_id = start_background_run(
+        workflow_id, get_tool_registry(), server_availability(), WorkflowRunRequest(input_data=input_data),
+        trigger=trigger, reuse=reusable_outputs(previous["events"]),
+    )
+    return WorkflowRunResult(id=new_id, workflow_id=workflow_id, workflowId=str(workflow_id), status="running")
 
 
 def _run_from_row(row: Any) -> dict[str, Any]:

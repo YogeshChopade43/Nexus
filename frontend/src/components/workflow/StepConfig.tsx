@@ -1,6 +1,7 @@
 import { useRef } from 'react';
 import { cn } from '../../lib/utils';
 import { DynamicContent } from './DynamicContent';
+import { paramFields, type ParamField } from './toolInfo';
 import type { ToolDefinition, WorkflowNode } from '../../types/workflow';
 import type { LLMProviderConfig } from '../../types/llm';
 
@@ -9,6 +10,20 @@ export interface DynamicSources {
   trigger: WorkflowNode | null;
   earlierSteps: WorkflowNode[];
   lastOutputs: Record<string, unknown>;
+  /** Extra scopes available where this field lives: inside a loop body or an error handler. */
+  scopes?: Array<'loop' | 'error'>;
+}
+
+/** JSON object fields: stored objects show as JSON text; text that isn't valid JSON yet stays text. */
+function JsonField({ value, onChange, placeholder, label }: { value: unknown; onChange: (v: unknown) => void; placeholder?: string; label: string }) {
+  const text = value === undefined || value === null ? '' : typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+  return (
+    <textarea rows={3} aria-label={label} value={text} placeholder={placeholder} className={cn(fieldClass, 'font-mono')}
+      onChange={(e) => {
+        const raw = e.target.value;
+        try { onChange(raw.trim() ? JSON.parse(raw) : undefined); } catch { onChange(raw); }
+      }} />
+  );
 }
 
 export const fieldClass =
@@ -80,27 +95,75 @@ interface ParameterFormProps {
 
 export function ParameterForm({ tool, parameters, onChange, sources }: ParameterFormProps) {
   if (!tool) return null;
-  const required = new Set(tool.parameters.required ?? []);
-  const entries = Object.entries(tool.parameters.properties ?? {});
-  if (entries.length === 0) return <p className="text-xs text-nexus-text-muted">This tool takes no parameters.</p>;
+  const fields = paramFields(tool.parameters);
+  if (fields.length === 0) return <p className="text-xs text-nexus-text-muted">This action takes no inputs.</p>;
+  const required = fields.filter(f => f.required);
+  const optional = fields.filter(f => !f.required);
+  const isSet = (f: ParamField) => parameters[f.key] !== undefined && parameters[f.key] !== '';
+  const setCount = optional.filter(isSet).length;
+  const render = (f: ParamField) => (
+    <ParamInput key={f.key} field={f} value={parameters[f.key]} sources={sources}
+      onChange={(value) => {
+        const next = { ...parameters };
+        if (value === undefined || value === '') delete next[f.key]; else next[f.key] = value;
+        onChange(next);
+      }} />
+  );
   return (
-    <div className="grid gap-3 sm:grid-cols-2">
-      {entries.map(([key, schema]) => {
-        const raw = parameters[key];
-        const value = raw === undefined || raw === null ? '' : typeof raw === 'string' ? raw : JSON.stringify(raw);
-        return (
-          <label key={key} className="block">
-            <FieldLabel hint={required.has(key) ? '(required)' : schema.type ? `(${schema.type})` : undefined}>{key}</FieldLabel>
-            <TemplateInput
-              value={value}
-              label={key}
-              placeholder={schema.description ?? ''}
-              sources={sources}
-              onChange={(text) => onChange({ ...parameters, [key]: parseTyped(text, schema.type) })}
-            />
-          </label>
-        );
-      })}
+    <div className="space-y-3">
+      {required.length > 0 && <div className="grid gap-3 sm:grid-cols-2">{required.map(render)}</div>}
+      {optional.length > 0 && (
+        <details open={required.length === 0 || setCount > 0} className="group">
+          <summary className="cursor-pointer text-xs font-medium text-nexus-text-secondary select-none">
+            Optional inputs ({optional.length}){setCount > 0 && ` · ${setCount} set`}
+          </summary>
+          <div className="grid gap-3 sm:grid-cols-2 mt-2">{optional.map(render)}</div>
+        </details>
+      )}
+    </div>
+  );
+}
+
+/** One tool input: a dropdown for fixed choices and true/false, JSON for objects, text (with {{ }}) otherwise. */
+function ParamInput({ field, value, onChange, sources }: {
+  field: ParamField;
+  value: unknown;
+  onChange: (value: unknown) => void;
+  sources?: DynamicSources;
+}) {
+  const text = value === undefined || value === null ? '' : typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+  const structured = field.type === 'object' || field.type === 'array';
+  const choices = field.options ?? (field.type === 'boolean' ? ['true', 'false'] : undefined);
+  const hint = field.required ? '(required)' : field.deprecated ? '(deprecated)'
+    : field.defaultValue !== undefined ? `(default ${JSON.stringify(field.defaultValue)})` : undefined;
+  return (
+    <div className={cn('block', structured && 'sm:col-span-2')}>
+      <span title={field.key}><FieldLabel hint={hint}>{field.label}</FieldLabel></span>
+      {choices && !text.includes('{{') ? (
+        <select value={text} aria-label={field.label} className={fieldClass}
+          onChange={(e) => onChange(e.target.value === '' ? undefined : parseTyped(e.target.value, field.type))}>
+          <option value="">{field.required ? 'Choose…' : 'Not set'}</option>
+          {choices.map(option => <option key={option} value={option}>{option}</option>)}
+        </select>
+      ) : (
+        <TemplateInput
+          value={text}
+          label={field.label}
+          multiline={structured}
+          mono={structured}
+          placeholder={structured ? field.example : field.type === 'integer' || field.type === 'number' ? 'A number' : ''}
+          sources={sources}
+          onChange={(next) => onChange(parseTyped(next, field.type))}
+        />
+      )}
+      {(field.description || (structured && !text && field.example)) && (
+        <p className="text-[11px] text-nexus-text-muted mt-1">
+          <span className="line-clamp-2" title={field.description}>{field.description}</span>
+          {structured && !text && field.example && (
+            <button type="button" className="underline" onClick={() => onChange(JSON.parse(field.example!))}>Insert example</button>
+          )}
+        </p>
+      )}
     </div>
   );
 }
@@ -117,10 +180,11 @@ interface StepConfigProps {
   tools: Map<string, ToolDefinition>;
   llmProviders: LLMProviderConfig[];
   sources: DynamicSources;
+  workflows: Array<{ id: number | string; name: string }>;
 }
 
 /** The settings form shown when a step card is expanded. */
-export function StepConfig({ node, onConfig, tools, llmProviders, sources }: StepConfigProps) {
+export function StepConfig({ node, onConfig, tools, llmProviders, sources, workflows }: StepConfigProps) {
   const c = node.config;
   switch (node.type) {
     case 'action': {
@@ -194,6 +258,74 @@ export function StepConfig({ node, onConfig, tools, llmProviders, sources }: Ste
             placeholder={'{"count": {{ steps.action_1.data.items | length }}}'} sources={sources} label="Template" />
         </label>
       );
+    case 'http':
+      return (
+        <div className="space-y-3">
+          <div className="grid gap-3 sm:grid-cols-4">
+            <label className="block">
+              <FieldLabel>Method</FieldLabel>
+              <select value={String(c.method ?? 'GET')} onChange={(e) => onConfig({ method: e.target.value })} className={fieldClass}>
+                {['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map(m => <option key={m}>{m}</option>)}
+              </select>
+            </label>
+            <label className="block sm:col-span-3">
+              <FieldLabel>URL</FieldLabel>
+              <TemplateInput value={String(c.url ?? '')} onChange={(url) => onConfig({ url })} placeholder="https://api.example.com/items" sources={sources} label="URL" />
+            </label>
+          </div>
+          <label className="block">
+            <FieldLabel hint="(JSON object)">Headers</FieldLabel>
+            <JsonField label="Headers" value={c.headers} onChange={(headers) => onConfig({ headers })} placeholder='{"Authorization": "Bearer ..."}' />
+          </label>
+          {String(c.method ?? 'GET') !== 'GET' && (
+            <label className="block">
+              <FieldLabel hint="(JSON or text; {{ }} allowed)">Body</FieldLabel>
+              <JsonField label="Body" value={c.body} onChange={(body) => onConfig({ body })} placeholder='{"text": "{{ steps.llm_1.text }}"}' />
+            </label>
+          )}
+          <p className="text-xs text-nexus-text-muted">Result: <code>{`{{ steps.${node.id}.status }}`}</code> and <code>{`{{ steps.${node.id}.data }}`}</code>. Error codes (4xx/5xx) fail the step.</p>
+        </div>
+      );
+    case 'code':
+      return (
+        <div className="space-y-2">
+          <FieldLabel hint="(JavaScript function body; read input.steps, input.trigger, input.loop and return a value)">Code</FieldLabel>
+          <textarea rows={6} aria-label="Code" value={String(c.code ?? '')} onChange={(e) => onConfig({ code: e.target.value })}
+            placeholder={'const items = input.steps.action_1.data.items;\nreturn items.length;'}
+            className={cn(fieldClass, 'font-mono')} spellCheck={false} />
+          <p className="text-xs text-nexus-text-muted">Runs in a sandbox with no network or file access, for up to 5 seconds. Result: <code>{`{{ steps.${node.id}.value }}`}</code>.</p>
+        </div>
+      );
+    case 'workflow':
+      return (
+        <div className="space-y-3">
+          <label className="block">
+            <FieldLabel>Workflow to run</FieldLabel>
+            <select value={String(c.workflow_id ?? '')} onChange={(e) => onConfig({ workflow_id: e.target.value ? Number(e.target.value) : null })} className={fieldClass}>
+              <option value="">Select a workflow...</option>
+              {workflows.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+            </select>
+          </label>
+          <label className="block">
+            <FieldLabel hint="(JSON object of its manual inputs)">Inputs</FieldLabel>
+            <JsonField label="Inputs" value={c.inputs} onChange={(value) => onConfig({ inputs: value })} placeholder='{"who": "{{ trigger.inputs.name }}"}' />
+          </label>
+          <p className="text-xs text-nexus-text-muted">Its result is <code>{`{{ steps.${node.id}.result }}`}</code>.</p>
+        </div>
+      );
+    case 'loop':
+      return (
+        <label className="block">
+          <FieldLabel hint="(a list from an earlier step)">For each item in</FieldLabel>
+          <TemplateInput value={String(c.items ?? '')} onChange={(items) => onConfig({ items })}
+            placeholder="{{ steps.action_1.data.items }}" sources={sources} label="Items" />
+          <span className="block text-xs text-nexus-text-muted mt-1">
+            Inside the loop use <code>{'{{ loop.item }}'}</code> and <code>{'{{ loop.index }}'}</code>. Results: <code>{`{{ steps.${node.id}.results }}`}</code>.
+          </span>
+        </label>
+      );
+    case 'parallel':
+      return <p className="text-xs text-nexus-text-muted">All branches start together; the next step waits for every branch. Results: <code>{`{{ steps.${node.id}.branches }}`}</code>.</p>;
     case 'delay':
       return (
         <label className="block w-40">
