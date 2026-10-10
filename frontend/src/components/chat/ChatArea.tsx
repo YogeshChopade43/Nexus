@@ -26,7 +26,7 @@ export function ChatArea({ className }: ChatAreaProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const navigate = useNavigate();
   const {
-    messages, sending, error, sendMessage, answerApproval, stop, retry, clearMessages, hasLLM,
+    messages, sending, error, sendMessage, answerApproval, answerQuestions, stop, retry, clearMessages, hasLLM,
     providers, providerId, setProviderId, sessionId, sessions, openSession, deleteSession, refreshSessions,
     settings, saveSettings,
   } = useChatContext();
@@ -45,7 +45,8 @@ export function ChatArea({ className }: ChatAreaProps) {
     messageListRef.current?.scrollToBottom();
   }, [sendMessage]);
 
-  const awaiting = messages[messages.length - 1]?.status === 'needs_approval';
+  const lastStatus = messages[messages.length - 1]?.status;
+  const awaiting = lastStatus === 'needs_approval' || lastStatus === 'needs_input';
   const usedTools = messages.some(m => m.events?.some(e => e.type === 'tool_executed'));
   const turnIntoWorkflow = async () => {
     if (!sessionId) return;
@@ -157,6 +158,7 @@ export function ChatArea({ className }: ChatAreaProps) {
         messages={messages}
         onCopy={handleCopy}
         onApprove={sending ? undefined : (approved) => void answerApproval(approved)}
+        onAnswer={sending ? undefined : (answers) => void answerQuestions(answers)}
         onRetry={sending || !sessionId ? undefined : () => void retry()}
         onEdit={sending || !sessionId ? undefined : (text) => void retry(text)}
         onPickPrompt={hasLLM && !sending ? (text) => void handleSend(text, [], []) : undefined}
@@ -167,7 +169,7 @@ export function ChatArea({ className }: ChatAreaProps) {
         disabled={sending || !hasLLM || awaiting}
         running={sending}
         onStop={stop}
-        placeholder={!hasLLM ? 'Configure an LLM provider in Settings to start chatting...' : awaiting ? 'Approve or deny the action above to continue...' : messages.length === 0 ? 'Start a conversation...' : 'Message Agent...'}
+        placeholder={!hasLLM ? 'Configure an LLM provider in Settings to start chatting...' : awaiting ? (lastStatus === 'needs_input' ? 'Answer the questions above to continue...' : 'Approve or deny the action above to continue...') : messages.length === 0 ? 'Start a conversation...' : 'Message Agent...'}
       />
     </div>
   );

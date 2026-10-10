@@ -25,6 +25,32 @@ FIND_TOOLS_SCHEMA = {
     "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "What you need to do"}},
                    "required": ["query"]},
 }
+ASK_USER = "nexus_ask_user"
+ASK_USER_SCHEMA = {
+    "name": ASK_USER,
+    "description": "Ask the user 1-4 multiple-choice questions, shown as cards they click. Use it when you're unsure and "
+                   "the answer changes what you'll do (where a reminder should alert them, which app or account to use, "
+                   "which of several things they mean). Offer 1-4 concrete options, from their connected apps when "
+                   "relevant; they can also type their own answer. Don't ask what you can work out yourself, and ask "
+                   "everything you need at once.",
+    "parameters": {
+        "type": "object",
+        "properties": {"questions": {"type": "array", "minItems": 1, "maxItems": 4, "items": {
+            "type": "object",
+            "properties": {
+                "question": {"type": "string", "description": "The full question, ending with a question mark"},
+                "header": {"type": "string", "description": "A 1-2 word label, e.g. 'Alerts' or 'Time'"},
+                "multi_select": {"type": "boolean", "description": "True if they may pick several options"},
+                "options": {"type": "array", "minItems": 1, "maxItems": 4, "items": {
+                    "type": "object",
+                    "properties": {"label": {"type": "string", "description": "1-5 words"},
+                                   "description": {"type": "string", "description": "What choosing it means"}},
+                    "required": ["label"]}},
+            },
+            "required": ["question", "options"]}}},
+        "required": ["questions"],
+    },
+}
 READ_RESULT_SCHEMA = {
     "name": READ_RESULT,
     "description": "Read more of a tool result that was cut off. Use the result id and offset given in the cut-off note.",
@@ -49,6 +75,43 @@ class Agent(ABC):
 DECLINED = "The user declined this action, so it was not done. Do not retry it; tell the user it was not done."
 
 
+# Step summaries: where results lists usually live, and the fields that name an item.
+LIST_KEYS = ("items", "results", "data", "pages", "issues", "repositories", "records")
+LABEL_KEYS = ("full_name", "login", "name", "title", "email", "status", "id")
+
+
+def _label(item: Any) -> Optional[str]:
+    if not isinstance(item, dict):
+        return str(item) if isinstance(item, (str, int)) else None
+    return next((str(item[k]) for k in LABEL_KEYS if isinstance(item.get(k), (str, int)) and str(item[k]).strip()), None)
+
+
+def _check_questions(arguments: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
+    """The questions in a tidy shape, or a problem to send back to the model (never shown to the user)."""
+    questions = arguments.get("questions")
+    if not isinstance(questions, list) or not 1 <= len(questions) <= 4:
+        return [], "Ask 1 to 4 questions in a 'questions' list."
+    tidy = []
+    for q in questions:
+        options = q.get("options") if isinstance(q, dict) else None
+        if not isinstance(q, dict) or not str(q.get("question") or "").strip():
+            return [], "Every question needs its 'question' text."
+        if (not isinstance(options, list) or not 1 <= len(options) <= 4  # "Other" is always offered too
+                or not all(isinstance(o, dict) and str(o.get("label") or "").strip() for o in options)):
+            return [], f"'{q['question']}' needs 1 to 4 options, each with a 'label'."
+        tidy.append({"question": str(q["question"]).strip(), "header": str(q.get("header") or "")[:20],
+                     "multi_select": bool(q.get("multi_select")),
+                     "options": [{"label": str(o["label"]).strip(), "description": str(o.get("description") or "")}
+                                 for o in options]})
+    return tidy, ""
+
+
+def _format_answers(answers: dict[str, Any]) -> str:
+    lines = [f"- {question} → {', '.join(answer) if isinstance(answer, list) else answer}"
+             for question, answer in answers.items()]
+    return "The user answered:\n" + "\n".join(lines)
+
+
 class BaseAgent(Agent):
     def __init__(
         self,
@@ -60,6 +123,7 @@ class BaseAgent(Agent):
         self._app_connections = app_connections or {}
         self._on_event = on_event  # live progress for streaming: tool_call, tool_result, delta, approval_needed
         self._extra_system = ""  # memories, chat instructions, earlier-conversation summary (see run)
+        self.can_ask = False  # offer nexus_ask_user (question cards); the chat route sets it when the agent can act
 
     async def _emit(self, event: dict[str, Any]) -> None:
         if self._on_event:
@@ -71,13 +135,54 @@ class BaseAgent(Agent):
         except Exception:
             return "allow"
 
+    async def _precheck(self, call: dict[str, Any], state: dict[str, Any], llm_provider: Any) -> Optional[str]:
+        """A tool's own "ask the user first" rule (``tool.precheck``), when question cards are available."""
+        if not state.get("can_ask"):
+            return None
+        try:
+            check = getattr(self._tool_registry.get_tool(call["name"]), "precheck", None)
+        except Exception:
+            return None
+        if check is None:
+            return None
+        apps = sorted(app for app, connected in self._app_connections.items() if connected and app != "nexus")
+        asked = any(e.get("type") == "user_answered" for e in state["events"])
+        return await check(call["arguments"], {"task": state["task"], "asked": asked, "apps": apps, "llm": llm_provider})
+
+    def _ask_hint(self) -> str:
+        """After a failed or incomplete call: ask the user (a question card) rather than tell them to rephrase."""
+        return (f" If only the user can tell you what's needed, ask them with {ASK_USER} instead of giving up."
+                if self.can_ask else "")
+
     def _is_app_connected(self, app_id: str) -> bool:
         return self._app_connections.get(app_id, False)
 
     @staticmethod
     def _summarize_tool_result(tool_name: str, data: dict[str, Any]) -> str:
+        """One readable line for the step list (the app and action are shown beside it): JSON results become
+        "2 of 12 results: a, b" or "Login: x · Name: y"; plain text is kept."""
         text = " ".join(str(data.get("text") or "").split())
-        return f"{tool_name}: {text[:200]}" if text else f"Executed {tool_name}"
+        try:
+            parsed = json.loads(text) if text[:1] in "[{" else None
+        except ValueError:
+            parsed = None
+        if parsed is None:
+            return text[:200] if text else "Done"
+        items = parsed if isinstance(parsed, list) else next(
+            (parsed[k] for k in LIST_KEYS if isinstance(parsed.get(k), list)), None)
+        if items is not None:
+            if not items:
+                return "No results"
+            names = [str(n) for n in (_label(item) for item in items[:3]) if n]
+            total = parsed.get("total_count") if isinstance(parsed, dict) else None
+            count = f"{len(items)} of {total}" if isinstance(total, int) and total > len(items) else str(len(items))
+            more = "…" if len(items) > 3 and names else ""
+            return f"{count} result{'s' if count != '1' else ''}" + (f": {', '.join(names)}{more}" if names else "")
+        if isinstance(parsed, dict):
+            fields = [f"{k.replace('_', ' ').capitalize()}: {parsed[k]}" for k in LABEL_KEYS
+                      if isinstance(parsed.get(k), (str, int)) and str(parsed[k]).strip()][:2]
+            return " · ".join(fields) if fields else "Done"
+        return text[:200]
 
     def _build_tool_schemas(self, tool_names: List[str]) -> List[dict[str, Any]]:
         schemas: List[dict[str, Any]] = []
@@ -104,6 +209,8 @@ class BaseAgent(Agent):
             schemas.append(FIND_TOOLS_SCHEMA)
         if state.get("results"):
             schemas.append(READ_RESULT_SCHEMA)
+        if state.get("can_ask"):
+            schemas.append(ASK_USER_SCHEMA)
         return schemas
 
     def _select_tools(self, task: str, history: list[dict[str, Any]], names: list[str]) -> list[str]:
@@ -183,7 +290,8 @@ class BaseAgent(Agent):
             "(such as get_me) instead of guessing their username from other context. When a tool fails, "
             "report its actual error; don't invent causes it doesn't state.\n\n"
             "### 5. AMBIGUOUS REQUESTS\n"
-            "If a request could be interpreted either way, ASK FOR CLARIFICATION instead of guessing. "
+            "If a request could be interpreted either way, ASK FOR CLARIFICATION instead of guessing: when the "
+            f"{ASK_USER} tool is available, ask with it (clickable options) rather than in plain text. "
             "If no available tool fits, say which kind of MCP server would be needed.\n\n"
             "### 6. TOOL CALL FORMAT\n"
             "When tools ARE required:\n"
@@ -209,7 +317,7 @@ class BaseAgent(Agent):
         state = {"task": task, "history": history or [], "messages": messages, "summaries": [], "queue": [],
                  "iteration": 0, "events": events, "all_tools": list(tool_names),
                  "offered": self._select_tools(task, history or [], tool_names), "results": {},
-                 "extra_system": self._extra_system}
+                 "extra_system": self._extra_system, "can_ask": self.can_ask}
         return await self._tool_loop(state, llm_provider)
 
     async def resume(self, state: dict[str, Any], approved: bool, llm_provider: Any) -> dict[str, Any]:
@@ -219,10 +327,19 @@ class BaseAgent(Agent):
         state.setdefault("offered", names)
         state.setdefault("results", {})
         self._extra_system = state.get("extra_system", "")
+        self.can_ask = bool(state.get("can_ask"))
         return await self._tool_loop(state, llm_provider, approval=approved)
+
+    async def resume_with_answers(self, state: dict[str, Any], answers: dict[str, Any], llm_provider: Any) -> dict[str, Any]:
+        """Continue a run that paused to ask the user (``state['queue'][0]`` is the nexus_ask_user call)."""
+        state.setdefault("results", {})
+        self._extra_system = state.get("extra_system", "")
+        self.can_ask = bool(state.get("can_ask"))
+        return await self._tool_loop(state, llm_provider, answers=answers)
 
     async def _tool_loop(
         self, state: dict[str, Any], llm_provider: Any, approval: Optional[bool] = None,
+        answers: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         """Call tools until the model answers. Pauses (returns needs_approval) before any tool whose policy is 'ask'.
 
@@ -233,7 +350,31 @@ class BaseAgent(Agent):
         while True:
             while state["queue"]:
                 call = state["queue"][0]
+                if call["name"] == ASK_USER:  # question cards: pause until the user answers
+                    if answers is None:
+                        questions, problem = _check_questions(call["arguments"])
+                        if not problem:
+                            await self._emit({"type": "question_needed", "questions": questions})
+                            return {
+                                "status": "needs_input", "events": events, "pending": state,
+                                "pending_question": {"questions": questions},
+                                "summary": "Waiting for your answers", "message": "Nexus has a question for you.",
+                                "response": "Nexus has a question for you.",
+                            }
+                        output = f"Error: {problem} Fix the questions and ask again."
+                    else:
+                        output = _format_answers(answers)
+                        events.append({"type": "user_answered", "answers": answers})
+                        answers = None  # these answers belong to this one question card
+                    state["queue"].pop(0)
+                    messages.append({"role": "tool", "tool_call_id": call["id"], "content": output})
+                    continue
                 needs_ok = self._policy(call["name"]) == "ask"
+                guidance = await self._precheck(call, state, llm_provider) if needs_ok and approval is None else None
+                if guidance:  # e.g. a reminder with no alert channel: ask the user before the approval card
+                    state["queue"].pop(0)
+                    messages.append({"role": "tool", "tool_call_id": call["id"], "content": guidance})
+                    continue
                 if needs_ok and approval is None:
                     action = {"tool": call["name"], "arguments": call["arguments"]}
                     await self._emit({"type": "approval_needed", **action})
@@ -334,6 +475,15 @@ class BaseAgent(Agent):
             tool = self._tool_registry.get_tool(tool_name)
             if not self._is_app_connected(tool.app_id):
                 raise AppNotConnectedError(f"{tool.app_id} is not connected")
+            # A required value left out: don't send the app a broken request; let the model fill it in (or ask).
+            required = (getattr(tool, "parameters_schema", None) or {}).get("required") or []
+            missing = [p for p in required if arguments.get(p) in (None, "", [], {})]
+            if missing:
+                events.append({"type": "tool_error", "tool_name": tool_name,
+                               "error": f"Needs {', '.join(missing)}: asked the agent to fill it in"})
+                return (f"Not run: {tool_name} needs {', '.join(repr(p) for p in missing)}. Work it out and call it "
+                        "again (for example, look up the user's account with their app's who-am-I tool first)."
+                        + self._ask_hint())
             exec_result = await self._tool_registry.execute_tool(tool_name, arguments)
         except AppNotConnectedError:
             events.append({"type": "tool_error", "tool_name": tool_name, "error": "App not connected to Nexus"})
@@ -342,8 +492,9 @@ class BaseAgent(Agent):
             logger.warning("Tool error in LLM path: %s: %s", tool_name, exc)
             events.append({"type": "tool_error", "tool_name": tool_name, "error": str(exc)})
             return (f"Error from {tool_name}: {exc}\n"
-                    "Tell the user what failed using this message. Do not guess other causes (such as permissions) "
-                    "it doesn't state; if your own input caused it (a wrong name or ID), say so and correct it.")
+                    "If your own input caused it (a missing or wrong name, ID or value), fix it and try again."
+                    + self._ask_hint() + " Otherwise tell the user what failed using this message. Do not guess "
+                    "other causes (such as permissions) it doesn't state.")
 
         data = exec_result.get("data", {})
         try:

@@ -102,7 +102,10 @@ export function WorkflowList({
                     onClick={(e) => { e.stopPropagation(); onExecute(workflow); }}>
                     <Play className="w-3.5 h-3.5" /> Run
                   </Button>
-                  <Dropdown trigger={<MoreVertical className="w-5 h-5 text-nexus-text-muted" />} items={menuItems(workflow)} />
+                  <Dropdown items={menuItems(workflow)} trigger={
+                    <Button variant="ghost" size="sm" className="px-1.5" aria-label={`More actions for ${workflow.name}`}>
+                      <MoreVertical className="w-5 h-5 text-nexus-text-muted" />
+                    </Button>} />
                 </div>
               </div>
             ))}

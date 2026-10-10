@@ -13,6 +13,8 @@ export interface ChatMessage {
   /** Live tool activity while a streamed reply is still running. */
   activity?: ToolActivity[];
   pendingAction?: PendingAction;
+  /** Questions the reply paused to ask (status needs_input). */
+  pendingQuestion?: PendingQuestion;
   usage?: ReplyUsage | null;
   /** Document passages the reply cited as [n]. */
   citations?: Citation[] | null;
@@ -49,6 +51,22 @@ export interface PendingAction {
   arguments: Record<string, unknown>;
 }
 
+/** A multiple-choice question the agent asks with a card (nexus_ask_user). */
+export interface AgentQuestion {
+  question: string;
+  /** A 1-2 word label shown as a chip, e.g. "Alerts". */
+  header: string;
+  multi_select: boolean;
+  options: { label: string; description: string }[];
+}
+
+export interface PendingQuestion {
+  questions: AgentQuestion[];
+}
+
+/** Question text -> the chosen label(s), or the user's own words. */
+export type QuestionAnswers = Record<string, string | string[]>;
+
 export interface ChatAttachment {
   name: string;
   content: string;
@@ -81,7 +99,7 @@ export interface AgentSession {
   title: string;
   messages: StoredMessage[];
   metadata?: {
-    pending?: { state?: { queue?: { name: string; arguments: Record<string, unknown> }[] } };
+    pending?: { state?: { queue?: { name: string; arguments: Record<string, unknown> }[] }; question?: PendingQuestion };
     settings?: ChatSettings;
   };
   created_at: string;
@@ -107,6 +125,7 @@ export interface AgentRunResponse {
   response?: string;
   session_id?: string | null;
   pending_action?: PendingAction | null;
+  pending_question?: PendingQuestion | null;
   usage?: ReplyUsage | null;
   citations?: Citation[] | null;
 }
@@ -115,6 +134,7 @@ export type AgentStreamEvent =
   | { type: 'tool_call'; tool: string; arguments: Record<string, unknown> }
   | { type: 'tool_result'; tool: string; ok: boolean; summary: string }
   | { type: 'approval_needed'; tool: string; arguments: Record<string, unknown> }
+  | { type: 'question_needed'; questions: AgentQuestion[] }
   | { type: 'delta'; text: string }
   | { type: 'error'; error: string }
   | ({ type: 'done' } & AgentRunResponse);

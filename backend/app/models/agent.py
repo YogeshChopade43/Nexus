@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -38,12 +38,18 @@ class AgentRunResponse(BaseModel):
     response: str = ""
     session_id: Optional[str] = None
     pending_action: Optional[dict[str, Any]] = None
+    pending_question: Optional[dict[str, Any]] = None  # questions the run paused to ask (status needs_input)
     usage: Optional[dict[str, Any]] = None  # tokens (and cost, when prices are set) for this reply
     citations: Optional[List[dict[str, Any]]] = None  # sources cited as [n] in the reply
 
 
 class ApprovalRequest(BaseModel):
     approved: bool
+
+
+class AnswerRequest(BaseModel):
+    """Answers to the question cards: question text -> the chosen label(s) or the user's own words."""
+    answers: dict[str, Union[str, List[str]]] = Field(min_length=1)
 
 
 class AgentSession(BaseModel):

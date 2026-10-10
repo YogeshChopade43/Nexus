@@ -35,7 +35,7 @@ from app.models.agent import (
     AgentRunResponse,
     AgentSessionCreate,
     AgentSession,
-    ApprovalRequest,
+    AnswerRequest, ApprovalRequest,
     ChatSettings,
 )
 from app.tools import get_tool_registry
@@ -199,6 +199,8 @@ def _chat_settings(session: dict[str, Any], req: AgentRunRequest) -> ChatSetting
     return ChatSettings(**((session.get("metadata") or {}).get("settings") or {}))
 
 
+PAUSED = ("needs_approval", "needs_input")  # a run waiting on the user (saved with the chat)
+
 # Messages that ask for something scheduled or automatic: only these get the create-workflow tool.
 AUTOMATION_REQUEST = re.compile(
     r"\b(remind|reminder|schedule|automat\w*|workflow|every (day|weekday|week|month|morning|evening|night|hour|monday|"
@@ -294,12 +296,16 @@ class _Prepared:
 
     def agent(self, on_event=None) -> BaseAgent:
         connections = {app_id: state["available"] for app_id, state in self.states.items()}
-        return BaseAgent(self.registry, connections, on_event=on_event)
+        agent = BaseAgent(self.registry, connections, on_event=on_event)
+        # Question cards only when the agent can act (apps, or creating a workflow): plain chats keep streaming.
+        agent.can_ask = any(self.tools_by_name[n].app_id != BUILTIN_APP or n == f"{BUILTIN_APP}__create_workflow"
+                            for n in self.available)
+        return agent
 
 
 def _cite(result: dict[str, Any], turn) -> dict[str, Any]:
     """Turn [n] markers in the final answer into citations of the sources gathered this turn."""
-    if result["status"] == "needs_approval" or not turn.sources:
+    if result["status"] in PAUSED or not turn.sources:
         return result
     text, citations = turn.cite(result.get("response") or result.get("message", ""))
     result.update(response=text, message=text, citations=citations)
@@ -314,8 +320,10 @@ def _finish(session_id: Optional[str], user_text: Optional[str], result: dict[st
         metadata = dict(session.get("metadata") or {})
         if user_text is not None:
             append_message(session_id, {"role": "user", "content": user_text})
-        if result["status"] == "needs_approval":
+        if result["status"] in PAUSED:
             metadata["pending"] = {"state": result.pop("pending"), "llm_provider_id": llm_provider_id}
+            if result.get("pending_question"):
+                metadata["pending"]["question"] = result["pending_question"]
         else:
             metadata.pop("pending", None)
             append_message(session_id, {
@@ -331,7 +339,8 @@ def _finish(session_id: Optional[str], user_text: Optional[str], result: dict[st
     return AgentRunResponse(
         status=result["status"], events=result["events"], summary=result["summary"],
         message=result.get("message", ""), response=result.get("response", result.get("message", "")),
-        session_id=session_id, pending_action=result.get("pending_action"), usage=usage,
+        session_id=session_id, pending_action=result.get("pending_action"),
+        pending_question=result.get("pending_question"), usage=usage,
         citations=result.get("citations"),
     )
 
@@ -350,7 +359,7 @@ async def _run(prepared: _Prepared, on_event=None) -> dict[str, Any]:
             task=prepared.task, context={**prepared.req.context, "system_extra": system_extra},
             available_tools=prepared.available, llm_provider=prepared.llm, history=prepared.history,
         )
-        if result["status"] != "needs_approval":
+        if result["status"] not in PAUSED:
             result = _augment_with_unavailable_apps(result, prepared.task, prepared.unavailable, prepared.tools_by_name, prepared.states)
         return _cite(result, turn)
 
@@ -360,16 +369,23 @@ async def _resume(prepared: _Prepared, state: dict[str, Any], approved: bool, on
         return _cite(await prepared.agent(on_event).resume(state, approved, prepared.llm), turn)
 
 
+async def _resume_answers(prepared: _Prepared, state: dict[str, Any], answers: dict[str, Any], on_event=None) -> dict[str, Any]:
+    with rag_turn(DEFAULT_WORKSPACE, prepared.session_id) as turn:
+        return _cite(await prepared.agent(on_event).resume_with_answers(state, answers, prepared.llm), turn)
+
+
 def _ensure_session(req: AgentRunRequest) -> Optional[str]:
     # Approvals need somewhere to keep the paused run, so every run belongs to a session.
     return req.session_id or create_session(title=(req.message or req.task)[:80])
 
 
-def _pending(session_id: str) -> tuple[dict[str, Any], _Prepared]:
+def _pending(session_id: str, question: bool = False) -> tuple[dict[str, Any], _Prepared]:
+    """The paused run: one waiting for answers (``question``) or for an approval."""
     session = get_session(session_id)
     pending = (session or {}).get("metadata", {}).get("pending")
-    if not pending:
-        raise HTTPException(status_code=409, detail="Nothing is waiting for approval in this conversation")
+    if not pending or bool(pending.get("question")) != question:
+        waiting = "answers" if question else "approval"
+        raise HTTPException(status_code=409, detail=f"Nothing is waiting for {waiting} in this conversation")
     req = AgentRunRequest(message="(continue)", session_id=session_id, llm_provider_id=pending.get("llm_provider_id"))
     prepared = _Prepared(req, session_id)
     if prepared.llm is None:
@@ -392,6 +408,15 @@ async def answer_approval(session_id: str, body: ApprovalRequest) -> AgentRunRes
     pending, prepared = _pending(session_id)
     with usage_scope() as calls:
         result = await _resume(prepared, pending["state"], body.approved)
+    return _finish(session_id, None, result, prepared.req.llm_provider_id, usage_total(calls))
+
+
+@router.post("/sessions/{session_id}/answer", response_model=AgentRunResponse)
+async def answer_questions(session_id: str, body: AnswerRequest) -> AgentRunResponse:
+    """Answer the question cards a paused run is waiting on, then continue the run."""
+    pending, prepared = _pending(session_id, question=True)
+    with usage_scope() as calls:
+        result = await _resume_answers(prepared, pending["state"], body.answers)
     return _finish(session_id, None, result, prepared.req.llm_provider_id, usage_total(calls))
 
 
@@ -457,6 +482,14 @@ async def answer_approval_stream(session_id: str, body: ApprovalRequest):
     pending, prepared = _pending(session_id)
     return _stream(session_id, None, prepared.req.llm_provider_id,
                    lambda on_event: _resume(prepared, pending["state"], body.approved, on_event))
+
+
+@router.post("/sessions/{session_id}/answer/stream")
+async def answer_questions_stream(session_id: str, body: AnswerRequest):
+    """Like /answer, but streams the rest of the reply."""
+    pending, prepared = _pending(session_id, question=True)
+    return _stream(session_id, None, prepared.req.llm_provider_id,
+                   lambda on_event: _resume_answers(prepared, pending["state"], body.answers, on_event))
 
 
 @router.post("/sessions/{session_id}/rewind")

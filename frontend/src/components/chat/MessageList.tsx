@@ -3,7 +3,7 @@ import { Bot } from 'lucide-react';
 import { ScrollArea } from '../ui/ScrollArea';
 import { Message } from './Message';
 import { StarterPrompts } from './StarterPrompts';
-import type { ChatMessage } from '../../types/chat';
+import type { ChatMessage, QuestionAnswers } from '../../types/chat';
 
 export interface MessageListProps {
   messages: ChatMessage[];
@@ -11,6 +11,7 @@ export interface MessageListProps {
   onApprove?: (approved: boolean) => void;
   onRetry?: () => void;
   onEdit?: (text: string) => void;
+  onAnswer?: (answers: QuestionAnswers) => void;
   /** Offer starter prompts in an empty chat; picking one sends it. */
   onPickPrompt?: (text: string) => void;
   autoScroll?: boolean;
@@ -22,7 +23,7 @@ export interface MessageListRef {
 }
 
 export const MessageList = forwardRef<MessageListRef, MessageListProps>(
-  ({ messages, onCopy, onApprove, onRetry, onEdit, onPickPrompt, autoScroll = true }, ref) => {
+  ({ messages, onCopy, onApprove, onRetry, onEdit, onAnswer, onPickPrompt, autoScroll = true }, ref) => {
     const lastUser = messages.map(m => m.role).lastIndexOf('user');
     const lastAssistant = messages.map(m => m.role).lastIndexOf('assistant');
     const scrollAreaRef = useRef<HTMLDivElement>(null);
@@ -67,7 +68,8 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(
               message={message}
               onCopy={onCopy}
               onApprove={index === messages.length - 1 ? onApprove : undefined}
-              onRetry={index === lastAssistant && index > lastUser && messages[index].status !== 'needs_approval' ? onRetry : undefined}
+              onAnswer={index === messages.length - 1 ? onAnswer : undefined}
+              onRetry={index === lastAssistant && index > lastUser && !['needs_approval', 'needs_input'].includes(messages[index].status ?? '') ? onRetry : undefined}
               onEdit={index === lastUser ? onEdit : undefined}
             />
           ))}

@@ -1,4 +1,5 @@
-import { ReactNode, useState, useRef, useEffect } from 'react';
+import { ReactNode, useState, useRef, useEffect, useLayoutEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { cn } from '../../lib/utils';
 
 export interface DropdownItem {
@@ -17,39 +18,55 @@ interface DropdownProps {
   align?: 'left' | 'right';
 }
 
+const GAP = 4;  // px between the trigger and the menu
+
+/** A menu under its trigger. It is drawn in a portal on <body> with fixed positioning, so neighbouring
+ *  cards or scrolling lists can never cover or clip it. */
 export function Dropdown({ trigger, children, items, align = 'right' }: DropdownProps) {
   const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState<{ top: number; left?: number; right?: number }>({ top: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
-  const dropdownRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // Place the menu under the trigger (above it if there's no room below); follow scrolling and resizing.
+  useLayoutEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const height = menuRef.current?.offsetHeight ?? 0;
+      const below = rect.bottom + GAP;
+      const top = below + height > window.innerHeight && rect.top - GAP - height > 0 ? rect.top - GAP - height : below;
+      setPosition(align === 'right' ? { top, right: window.innerWidth - rect.right } : { top, left: rect.left });
+    };
+    place();
+    window.addEventListener('scroll', place, true);
+    window.addEventListener('resize', place);
+    return () => { window.removeEventListener('scroll', place, true); window.removeEventListener('resize', place); };
+  }, [open, align]);
 
   useEffect(() => {
+    if (!open) return;
     const handleClickOutside = (event: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
-        setOpen(false);
-      }
+      const target = event.target as Node;
+      // The menu lives in a portal, outside the trigger's container: presses inside it aren't "outside".
+      if (!containerRef.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false);
     };
-
-    if (open) {
-      document.addEventListener('mousedown', handleClickOutside);
-    }
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    const handleEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleEscape);
+    };
   }, [open]);
-
-  const handleKeyDown = (event: React.KeyboardEvent) => {
-    if (event.key === 'Escape') {
-      setOpen(false);
-    }
-  };
 
   const dropdownContent = (
     <div
-      ref={dropdownRef}
-      className={cn(
-        'absolute z-50 min-w-[160px] bg-nexus-bg-secondary border-nexus-border rounded-lg shadow-lg py-1 animate-fade-in',
-        align === 'right' ? 'right-0' : 'left-0'
-      )}
+      ref={menuRef}
+      style={{ position: 'fixed', top: position.top, left: position.left, right: position.right }}
+      className="z-[80] min-w-[160px] bg-nexus-bg-secondary border border-nexus-border rounded-lg shadow-lg py-1 animate-fade-in"
       role="menu"
-      onKeyDown={handleKeyDown}
     >
       {items.map((item, index) => {
         if (item.divider) {
@@ -84,10 +101,10 @@ export function Dropdown({ trigger, children, items, align = 'right' }: Dropdown
 
   return (
     <div ref={containerRef} className="relative inline-block">
-      <div onClick={() => setOpen(o => !o)} className="cursor-pointer inline-block">
+      <div onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }} className="cursor-pointer inline-block">
         {trigger ?? children}
       </div>
-      {open && dropdownContent}
+      {open && createPortal(dropdownContent, document.body)}
     </div>
   );
 }

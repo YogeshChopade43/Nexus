@@ -8,6 +8,7 @@ import {
   DEFAULT_CHAT_SETTINGS,
   type AgentRunResponse, type AgentSession, type AgentStreamEvent, type ChatAttachment, type ChatMessage,
   type ChatSettings, type StoredMessage, type ToolActivity,
+  type QuestionAnswers,
 } from '../types/chat';
 import type { LLMProviderConfig } from '../types/llm';
 
@@ -18,6 +19,7 @@ interface ChatContextType {
   /** Inline text attachments go into the message; ``uploads`` are added to the knowledge base first. */
   sendMessage: (content: string, attachments?: ChatAttachment[], uploads?: File[]) => Promise<void>;
   answerApproval: (approved: boolean) => Promise<void>;
+  answerQuestions: (answers: QuestionAnswers) => Promise<void>;
   /** Stop the reply being written; what was said so far is kept. */
   stop: () => void;
   /** Ask again: the last question, or ``newText`` in its place (edit). */
@@ -50,6 +52,7 @@ function fromResponse(response: AgentRunResponse): Partial<ChatMessage> {
     status: response.status,
     activity: undefined,
     pendingAction: response.pending_action ?? undefined,
+    pendingQuestion: response.pending_question ?? undefined,
     usage: response.usage ?? undefined,
     citations: response.citations ?? undefined,
   };
@@ -109,9 +112,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     try {
       const session = await chatService.getSession(id);
       const restored = session.messages.map(m => fromStored(m, session.updated_at));
-      // A run paused for approval isn't in the message list yet; show its approval card again.
+      // A paused run isn't in the message list yet; show its question cards or approval card again.
+      const question = session.metadata?.pending?.question;
       const waiting = session.metadata?.pending?.state?.queue?.[0];
-      if (waiting) {
+      if (question) {
+        restored.push({
+          id: newId(), role: 'assistant', timestamp: session.updated_at, status: 'needs_input',
+          content: 'Nexus has a question for you.', pendingQuestion: question,
+        });
+      } else if (waiting) {
         restored.push({
           id: newId(), role: 'assistant', timestamp: session.updated_at, status: 'needs_approval',
           content: `Nexus wants to run ${waiting.name}. Approve or deny it to continue.`,
@@ -241,6 +250,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     await streamInto(waiting.id, (onEvent, signal) => chatService.streamApproval(sessionId, approved, onEvent, signal));
   }, [messages, sessionId, streamInto]);
 
+  const answerQuestions = useCallback(async (answers: QuestionAnswers) => {
+    const waiting = [...messages].reverse().find(m => m.status === 'needs_input');
+    if (!waiting || !sessionId || sendingRef.current) return;
+    setMessages(prev => prev.map(m => (m.id === waiting.id
+      ? { ...m, status: 'running', content: '', pendingQuestion: undefined, activity: [],
+          events: [...(m.events ?? []), { type: 'user_answered', answers }] }
+      : m)));
+    await streamInto(waiting.id, (onEvent, signal) => chatService.streamAnswers(sessionId, answers, onEvent, signal));
+  }, [messages, sessionId, streamInto]);
+
   const stop = useCallback(() => abortRef.current?.abort(), []);
 
   const retry = useCallback(async (newText?: string) => {
@@ -284,7 +303,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   return (
     <ChatContext.Provider value={{
-      messages, sending, error, sendMessage, answerApproval, stop, retry, clearMessages, hasLLM,
+      messages, sending, error, sendMessage, answerApproval, answerQuestions, stop, retry, clearMessages, hasLLM,
       providers, providerId, setProviderId,
       sessionId, sessions, openSession, deleteSession, refreshSessions, settings, saveSettings,
     }}>

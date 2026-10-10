@@ -24,9 +24,11 @@ def _words(text: str) -> set[str]:
     return words
 
 
-PERSONAL = re.compile(r"\b(my|me|mine|myself|i|i'm|i've)\b", re.IGNORECASE)
 WHO_AM_I_NAME = re.compile(r"(^|[-_])(get[-_]?me|whoami|who[-_]am[-_]i|get[-_]?self|current[-_]?user)$", re.IGNORECASE)
-WHO_AM_I_TEXT = re.compile(r"\b(authenticated|signed[- ]in|logged[- ]in|current) (\w+ )?(user|account)\b", re.IGNORECASE)
+# Who-am-I tools: by name, or a description that *starts* by saying it returns the signed-in user/account
+# ("[GitHub] Get details of the authenticated GitHub user"), not one mentioning the user in passing.
+WHO_AM_I_TEXT = re.compile(r"^\W*(\[[^\]]*\]\s*)?(get|retrieve|return|fetch|show)s?\b[^.]{0,40}?\b"
+                           r"(authenticated|signed[- ]in|logged[- ]in|current) (\w+ )?(user|account)\b", re.IGNORECASE)
 
 
 def rank_tools(query: str, tools: list[tuple[str, str]], limit: int, min_score: int = 0) -> list[str]:
@@ -34,23 +36,22 @@ def rank_tools(query: str, tools: list[tuple[str, str]], limit: int, min_score: 
 
     ``min_score=1`` leaves out tools that share no word with the query."""
     wanted = _words(query)
-    personal = bool(PERSONAL.search(query))
     # Apps the request names ("github"): their tools outrank others that merely share a word with it.
     named = {name.partition("__")[0] for name, _ in tools if wanted & _words(name.partition("__")[0])}
-    scored = []
+    scored, who_am_i = [], []
     for index, (name, description) in enumerate(tools):
         server, _, tool = name.partition("__")
         # OpenAPI-generated servers name tools "API-post-search": the HTTP method says nothing about intent.
         tool = re.sub(r"^api[-_](get|post|put|patch|delete)[-_]", "", tool or name, flags=re.IGNORECASE)
-        name_words = _words(tool)
-        score = 2 * len(wanted & name_words) + len(wanted & _words(description)) + (5 if server in named else 0)
-        # "my repos": that app's who-am-I tool, so the agent looks the account up instead of guessing its name.
-        if (score and personal and (server in named or not named)
-                and (WHO_AM_I_NAME.search(tool) or WHO_AM_I_TEXT.search(description))):
-            score += 100
+        # Each app's who-am-I tool is always offered (only the named app's, if the request names one), on top of
+        # the best matches, so "my ..." works in any wording or language instead of guessing a username.
+        if (server in named or not named) and (WHO_AM_I_NAME.search(tool) or WHO_AM_I_TEXT.search(description)):
+            who_am_i.append(name)
+            continue
+        score = 2 * len(wanted & _words(tool)) + len(wanted & _words(description)) + (5 if server in named else 0)
         if score >= min_score:
             scored.append((-score, index, name))
-    return [name for _, _, name in sorted(scored)[:limit]]
+    return [name for _, _, name in sorted(scored)[:limit]] + who_am_i
 
 
 if __name__ == "__main__":
@@ -61,3 +62,4 @@ if __name__ == "__main__":
     assert rank_tools("hello", tools, 2) == ["notion__API-post-search", "github__list_issues"]  # no match: input order
     assert rank_tools("hello", tools, 2, min_score=1) == []
     print("tool selection self-check passed")
+

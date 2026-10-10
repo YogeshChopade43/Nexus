@@ -61,7 +61,11 @@ describe('Message', () => {
       />,
     );
     expect(screen.getByRole('group', { name: 'Approval needed' })).toHaveTextContent('Slack·Send');  // shown as app · action
-    expect(screen.getByText(/"text": "hi"/)).toBeInTheDocument();
+    // Arguments read as labelled fields, not JSON.
+    const card = screen.getByRole('group', { name: 'Approval needed' });
+    expect(card).toHaveTextContent('Text');
+    expect(card).toHaveTextContent('hi');
+    expect(card).not.toHaveTextContent('{');
     fireEvent.click(screen.getByText('Deny'));
     expect(onApprove).toHaveBeenCalledWith(false);
   });

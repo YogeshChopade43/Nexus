@@ -304,7 +304,9 @@ def test_personal_questions_get_the_who_am_i_tool():
              ("github__list_branches", "List branches in a GitHub repository"),
              ("github__get_me", "Get details of the authenticated GitHub user")]
     assert "github__get_me" in rank_tools("What are my github repo names?", tools, 2, min_score=1)
-    assert "github__get_me" not in rank_tools("search github repos about llm agents", tools, 2, min_score=1)
+    # No keyword detection: any phrasing or language gets it (one small tool per app).
+    assert "github__get_me" in rank_tools("¿cuáles son mis repositorios de github?", tools, 2, min_score=1)
+    assert "github__get_me" in rank_tools("list branches", tools, 2, min_score=1)
 
 
 def test_naming_an_app_prefers_that_apps_tools():
@@ -314,7 +316,7 @@ def test_naming_an_app_prefers_that_apps_tools():
              ("notion__notion-get-users", "List users; use 'self' to get the current user"),
              ("github__search_repositories", "Find GitHub repositories by name, description or topics"),
              ("github__get_me", "Get details of the authenticated GitHub user")]
-    assert rank_tools("search github for mcp servers", tools, 1, min_score=1) == ["github__search_repositories"]
+    assert rank_tools("search github for mcp servers", tools, 1, min_score=1)[0] == "github__search_repositories"
     mine = rank_tools("What are my github repo names?", tools, 2, min_score=1)
     assert "github__get_me" in mine and "notion__notion-get-users" not in mine
 
@@ -345,7 +347,13 @@ def test_tool_errors_reach_the_model_verbatim_with_a_no_guessing_rule():
 
 def test_reminder_in_chat_becomes_a_workflow_after_approval(client, llm, monkeypatch):
     """'Remind me ... every day at 11:57 pm' -> the agent proposes a workflow, you approve, it's created and switched on."""
+    from app import knowledge
     from app.workflows import drafting
+
+    async def says_where(llm, task, description):
+        return False
+
+    monkeypatch.setattr(knowledge, "alert_channel_missing", says_where)
 
     async def draft(description):
         return {"name": "Medicine reminder", "description": description, "warnings": [], "edges": [{"source": "t", "target": "n"}],
@@ -359,7 +367,7 @@ def test_reminder_in_chat_becomes_a_workflow_after_approval(client, llm, monkeyp
         {"content": "Done: your reminder is set.", "tool_calls": []} if m[-1]["role"] == "tool"
         else ("nexus__create_workflow", {"description": "Every day at 11:57 pm, remind me to take my medicines"}))
     sid = new_session(client)
-    asked = client.post("/api/agent/run", json={"message": "Remind me to take my medicines every day at 11:57 pm",
+    asked = client.post("/api/agent/run", json={"message": "Remind me with a pop-up to take my medicines every day at 11:57 pm",
                                                 "session_id": sid}).json()
     assert asked["status"] == "needs_approval" and asked["pending_action"]["tool"] == "nexus__create_workflow"
     done = client.post(f"/api/agent/sessions/{sid}/approval", json={"approved": True}).json()
@@ -395,3 +403,79 @@ def test_mentioning_an_app_points_the_agent_at_it(client, llm, monkeypatch):
         assert "Other Echo" in call["messages"][0]["content"] and "resume.pdf" in call["messages"][0]["content"]
     finally:
         client.delete(f"/api/mcp/servers/{other['id']}")
+
+
+def test_my_things_get_the_who_am_i_tool_even_without_naming_the_app():
+    """'what are my repo names ?' never says GitHub and shares no word with get_me, yet needs it: without it the
+    agent searched users for the literal word 'my' and answered with a stranger's repository."""
+    from app.agent.tool_selection import rank_tools
+
+    tools = [("github__search_repositories", "Find GitHub repositories by name, description or topics"),
+             ("github__pull_request_review_write", "Create a review. Reviews are submitted as the authenticated user"),
+             ("github__search_users", "Find GitHub users by username"),
+             ("github__get_me", "Get details of the authenticated GitHub user")]
+    picked = rank_tools("what are my repo names ?", tools, 2, min_score=1)
+    assert "github__get_me" in picked
+    assert "github__pull_request_review_write" not in picked  # mentions the user in passing; not a who-am-I tool
+
+
+def test_step_summaries_read_like_sentences_not_json():
+    import json as _json
+
+    summary = BaseAgent._summarize_tool_result
+    found = {"total_count": 12, "incomplete_results": False,
+             "items": [{"full_name": "YogeshChopade43/Nexus", "id": 1}, {"full_name": "YogeshChopade43/notes", "id": 2}]}
+    assert summary("github__search_repositories", {"text": _json.dumps(found)}) == \
+        "2 of 12 results: YogeshChopade43/Nexus, YogeshChopade43/notes"
+    me = {"login": "YogeshChopade43", "name": "Yogesh Chopade", "avatar_url": "https://x", "public_repos": 4}
+    assert summary("github__get_me", {"text": _json.dumps(me)}) == "Login: YogeshChopade43 · Name: Yogesh Chopade"
+    assert summary("x__list", {"text": _json.dumps([{"title": "A"}, {"title": "B"}, {"title": "C"}, {"title": "D"}])}) == \
+        "4 results: A, B, C…"
+    assert summary("x__say", {"text": "Sent the message."}) == "Sent the message."
+    assert summary("x__empty", {"text": _json.dumps({"items": []})}) == "No results"
+
+
+def test_missing_required_values_go_back_to_the_model_with_a_way_forward():
+    """GitHub search was called without its required 'query'; the agent then told the user to rephrase. Nexus now
+    catches the gap before calling the app and points the model at filling it in or asking with a question card."""
+    calls = []
+
+    class Search(Dummy):
+        @property
+        def parameters_schema(self):
+            return {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}
+
+        async def execute(self, parameters):
+            calls.append(parameters)
+            return {"text": "found"}
+
+    registry = ToolRegistry()
+    registry.register(Search("search_repositories", "Search repositories"))
+
+    def script(messages, tools):
+        if messages[-1]["role"] == "tool":
+            return {"content": "ok", "tool_calls": []}
+        return ("app__search_repositories", {})
+
+    llm = ScriptedLLM(script)
+    agent = BaseAgent(registry, {"app": True})
+    agent.can_ask = True
+    run(agent, "what are the repositories names?", llm)
+    reply = llm.calls[-1]["messages"][-1]["content"]
+    assert calls == []  # the app was never called with a broken request
+    assert "query" in reply and "nexus_ask_user" in reply
+
+
+def test_after_a_tool_error_the_model_may_ask_instead_of_giving_up():
+    class Failing(Dummy):
+        async def execute(self, parameters):
+            raise RuntimeError("Not Found")
+
+    registry = ToolRegistry()
+    registry.register(Failing("get_repo", "Get a repository"))
+    llm = ScriptedLLM(lambda m, t: {"content": "ok", "tool_calls": []} if m[-1]["role"] == "tool" else ("app__get_repo", {}))
+    agent = BaseAgent(registry, {"app": True})
+    agent.can_ask = True
+    run(agent, "show the repo", llm)
+    reply = llm.calls[-1]["messages"][-1]["content"]
+    assert "Not Found" in reply and "nexus_ask_user" in reply

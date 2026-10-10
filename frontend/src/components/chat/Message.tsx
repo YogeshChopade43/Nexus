@@ -4,9 +4,11 @@ import { Copy, Bot, AlertCircle, CheckCircle2, Info, Ban, Loader2, ShieldQuestio
 import { Markdown } from './Markdown';
 import { Sources } from './Sources';
 import { ToolName } from './ToolName';
+import { AnsweredQuestions, QuestionCard } from './QuestionCard';
+import { ApprovalDetails } from './ApprovalDetails';
 import { Button } from '../ui/Button';
 import { Tooltip } from '../ui/Tooltip';
-import type { ChatMessage, AgentEvent } from '../../types/chat';
+import type { QuestionAnswers, ChatMessage, AgentEvent } from '../../types/chat';
 import type { ReactNode } from 'react';
 
 const EVENT_ICONS: Record<string, React.ElementType> = {
@@ -118,6 +120,8 @@ interface MessageProps {
   onRetry?: () => void;
   /** Set on the last question: change it and ask again. */
   onEdit?: (text: string) => void;
+  /** Set only on the message whose question cards are still current. */
+  onAnswer?: (answers: QuestionAnswers) => void;
 }
 
 const numberFormat = new Intl.NumberFormat();
@@ -129,13 +133,16 @@ function usageText(usage: NonNullable<ChatMessage['usage']>): string {
   return parts.join(' · ');
 }
 
-export function Message({ message, onCopy, onApprove, onRetry, onEdit }: MessageProps) {
+export function Message({ message, onCopy, onApprove, onRetry, onEdit, onAnswer }: MessageProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const isUser = message.role === 'user';
   const running = message.status === 'running';
   const pending = message.status === 'needs_approval' ? message.pendingAction : undefined;
-  const visibleEvents = (message.events ?? []).filter(e => e.type !== 'intent_no_match');
+  const asking = message.status === 'needs_input' ? message.pendingQuestion : undefined;
+  const answered = (message.events ?? []).filter(e => e.type === 'user_answered')
+    .map(e => e.answers as QuestionAnswers);
+  const visibleEvents = (message.events ?? []).filter(e => e.type !== 'intent_no_match' && e.type !== 'user_answered');
 
   return (
     <div
@@ -182,12 +189,13 @@ export function Message({ message, onCopy, onApprove, onRetry, onEdit }: Message
               ))}
             </ul>
           )}
+          {answered.map((answers, i) => <AnsweredQuestions key={i} answers={answers} />)}
           {running && !message.content ? (
             <div className="flex items-center gap-2 text-sm text-nexus-text-secondary">
               <span>Nexus is thinking</span>
               <span className="thinking-dots text-nexus-text-secondary/50"><span>.</span><span>.</span><span>.</span></span>
             </div>
-          ) : !pending && (editing ? (
+          ) : !pending && !asking && (editing ? (
             <form className="space-y-2 min-w-[16rem]" onSubmit={(e) => { e.preventDefault(); setEditing(false); onEdit?.(draft); }}>
               <textarea value={draft} onChange={(e) => setDraft(e.target.value)} rows={3} aria-label="Edit message" autoFocus
                 className="w-full rounded-lg p-2 text-sm text-nexus-text bg-nexus-bg-secondary border border-nexus-border focus:outline-none focus:ring-2 focus:ring-nexus-accent" />
@@ -204,19 +212,18 @@ export function Message({ message, onCopy, onApprove, onRetry, onEdit }: Message
           {!isUser && !running && message.citations && message.citations.length > 0 && (
             <Sources citations={message.citations} />
           )}
+          {asking && (onAnswer
+            ? <QuestionCard questions={asking.questions} onSubmit={onAnswer} />
+            : <p className="text-xs text-nexus-text-muted">These questions are no longer waiting.</p>)}
           {pending && (
-            <div className="text-sm space-y-2" role="group" aria-label="Approval needed">
-              <div className="flex items-center gap-2 font-medium text-nexus-text">
-                <ShieldQuestion className="w-4 h-4 text-amber-400" />
-                Nexus wants to use <ToolName name={pending.tool} />
+            <div className="text-sm space-y-3 sm:min-w-[22rem]" role="group" aria-label="Approval needed">
+              <div className="flex items-start gap-2 font-medium text-nexus-text">
+                <ShieldQuestion className="w-4 h-4 mt-0.5 text-amber-400 flex-shrink-0" />
+                <span>Nexus wants to use <ToolName name={pending.tool} /></span>
               </div>
-              {Object.keys(pending.arguments ?? {}).length > 0 && (
-                <pre className="text-xs text-nexus-text-secondary bg-nexus-bg-tertiary/50 rounded p-2 overflow-x-auto max-h-48">
-                  {JSON.stringify(pending.arguments, null, 2)}
-                </pre>
-              )}
+              <ApprovalDetails arguments={pending.arguments} />
               {onApprove ? (
-                <div className="flex gap-2">
+                <div className="flex items-center gap-2">
                   <Button size="sm" onClick={() => onApprove(true)}>Approve</Button>
                   <Button size="sm" variant="secondary" onClick={() => onApprove(false)}>Deny</Button>
                 </div>

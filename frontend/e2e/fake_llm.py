@@ -22,6 +22,22 @@ class Handler(BaseHTTPRequestHandler):
         question = next((m.get("content") or "" for m in reversed(messages) if m.get("role") == "user"), "")
         if "slow" in question:
             time.sleep(3)
+        # Question cards: "ask me" with the question tool on offer asks where a reminder should go.
+        tools = [t.get("function", {}).get("name") for t in body.get("tools") or []]
+        last = messages[-1] if messages else {}
+        if "nexus_ask_user" in tools and "ask me" in question.lower() and last.get("role") != "tool":
+            card = {"questions": [{"question": "Where should the reminder reach you?", "header": "Alerts", "options": [
+                {"label": "Nexus pop-up", "description": "Shows in Nexus while it's open"},
+                {"label": "Email", "description": "A message in your inbox"}]}]}
+            call = {"id": "call_ask", "type": "function", "function": {"name": "nexus_ask_user", "arguments": json.dumps(card)}}
+            return self._json({"model": "fake-gpt", "usage": {"prompt_tokens": 100, "completion_tokens": 20},
+                               "choices": [{"message": {"role": "assistant", "content": None, "tool_calls": [call]},
+                                            "finish_reason": "tool_calls"}]})
+        if last.get("role") == "tool" and "The user answered" in (last.get("content") or ""):
+            return self._json({"model": "fake-gpt", "usage": {"prompt_tokens": 100, "completion_tokens": 20},
+                               "choices": [{"message": {"role": "assistant",
+                                                        "content": "You chose: " + last["content"].split("\n", 1)[1]},
+                                            "finish_reason": "stop"}]})
         # With document sources in the prompt, answer from the first one and cite it.
         sources = next((m.get("content") for m in messages if "<sources>" in (m.get("content") or "")), None)
         if sources:
@@ -40,6 +56,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         reply = {"model": "fake-gpt", "choices": [{"message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
                  "usage": {"prompt_tokens": 100, "completion_tokens": 20}}
+        data = json.dumps(reply).encode()
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _json(self, reply):
         data = json.dumps(reply).encode()
         self.send_response(200)
         self.send_header("content-type", "application/json")

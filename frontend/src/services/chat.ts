@@ -1,5 +1,5 @@
 import { api } from './api';
-import type { AgentRunRequest, AgentRunResponse, AgentSession, AgentStreamEvent, ChatSettings } from '../types/chat';
+import type { AgentRunRequest, AgentRunResponse, AgentSession, AgentStreamEvent, ChatSettings, QuestionAnswers } from '../types/chat';
 import type { Workflow } from '../types/workflow';
 
 type OnEvent = (event: AgentStreamEvent) => void;
@@ -16,6 +16,11 @@ export const chatService = {
   /** Approve or deny the waiting tool call; the rest of the reply streams like a normal one. */
   streamApproval(sessionId: string, approved: boolean, onEvent: OnEvent, signal?: AbortSignal): Promise<void> {
     return api.stream<AgentStreamEvent>(`/api/agent/sessions/${sessionId}/approval/stream`, { approved }, onEvent, undefined, undefined, signal);
+  },
+
+  /** Answer the question cards; the rest of the reply streams like a normal one. */
+  streamAnswers(sessionId: string, answers: QuestionAnswers, onEvent: OnEvent, signal?: AbortSignal): Promise<void> {
+    return api.stream<AgentStreamEvent>(`/api/agent/sessions/${sessionId}/answer/stream`, { answers }, onEvent, undefined, undefined, signal);
   },
 
   /** Drop the last user message and everything after it; returns that message's text. */

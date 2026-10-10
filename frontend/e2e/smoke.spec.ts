@@ -126,6 +126,15 @@ test('chat: Markdown replies, cost, retry, edit, stop and search', async ({ page
   await log.getByRole('button', { name: /\[1\] policy\.md/ }).click();
   await expect(log.getByRole('dialog', { name: 'Source' })).toContainText('Shipping to Pune');
 
+  // Question cards: the reply pauses to ask, then continues with the answer.
+  await input.fill('Remind me daily to stretch, ask me where');
+  await input.press('Enter');
+  const card = log.getByRole('group', { name: 'Questions from Nexus' });
+  await expect(card).toContainText('Where should the reminder reach you?');
+  await card.getByRole('radio', { name: 'Nexus pop-up' }).check();
+  await card.getByRole('button', { name: 'Send answers' }).click();
+  await expect(log.getByText(/You chose: - Where should the reminder reach you\? → Nexus pop-up/)).toBeVisible();
+
   // Search past conversations by message text.
   await page.getByRole('button', { name: 'Conversations' }).click();
   await page.getByLabel('Search conversations').fill('hello again');

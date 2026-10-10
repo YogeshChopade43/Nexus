@@ -5,8 +5,11 @@ Document search lives in ``app.rag``; its tool is registered here alongside the 
 """
 from __future__ import annotations
 
+import json
+import re
+
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional
 
 from app.core.database import get_connection, log_activity
 from app.tools.base import Tool
@@ -127,6 +130,25 @@ class Notify(_BuiltIn):
         return {"text": f"Notified: {title}", "data": {"title": title}}
 
 
+async def alert_channel_missing(llm: Any, task: str, description: str) -> bool:
+    """Does this workflow alert the user without saying where? The model reads the request (any wording or
+    language) instead of keyword lists. An unreadable answer counts as missing: asking beats guessing."""
+    prompt = (f"The user asked: {task}\nThe workflow to create: {description}\n\n"
+              "Does this workflow alert or remind the user? If it does, does the request say where the alert should "
+              "reach them (for example a pop-up, email, a chat app or their phone)? Reply with only JSON: "
+              '{"alerts_user": true or false, "says_where": true or false}')
+    try:
+        reply = await llm.chat(messages=[{"role": "system", "content": "You classify requests. Reply with JSON only."},
+                                         {"role": "user", "content": prompt}])
+        found = re.search(r"\{.*\}", reply.get("content") or "", re.DOTALL)
+        verdict = json.loads(found.group(0)) if found else None
+    except Exception:  # no answer, or not JSON
+        verdict = None
+    if not isinstance(verdict, dict):
+        return True
+    return bool(verdict.get("alerts_user")) and not bool(verdict.get("says_where"))
+
+
 class CreateWorkflow(_BuiltIn):
     """Turns "remind me every day at 9" in chat into a scheduled workflow. Asks first: it adds an automation."""
     read_only = False
@@ -140,6 +162,18 @@ class CreateWorkflow(_BuiltIn):
                                            "user's words, e.g. 'Every day at 11:57 pm, remind me to take my medicines'"}},
             "required": ["description"],
         })
+
+    async def precheck(self, arguments: dict[str, Any], context: dict[str, Any]) -> Optional[str]:
+        """Before the approval card: a reminder whose alert channel nobody chose goes back to the agent to ask."""
+        if context["asked"]:
+            return None
+        if not await alert_channel_missing(context["llm"], context["task"], str(arguments.get("description") or "")):
+            return None
+        options = ["'Nexus pop-up' (the notification bell, plus a desktop pop-up while Nexus is open)"]
+        options += [f"'{app.replace('_', ' ').title()}'" for app in context["apps"]]
+        return ("Not created yet: ask the user where the alert should reach them first, with nexus_ask_user "
+                f"(header 'Alerts'). Options: {', '.join(options)}; they can also type their own. Then call "
+                "create_workflow again with their choice written into the description.")
 
     async def execute(self, parameters: dict[str, Any]) -> dict[str, Any]:
         from app.api.routes.workflows import create_workflow
