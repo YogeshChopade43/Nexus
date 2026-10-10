@@ -1,25 +1,75 @@
 # Nexus
 
-Nexus is a local agent runtime that connects natural-language requests and automated workflows to the tools of your apps. Apps are connected through **MCP servers** (Model Context Protocol): add any server and its tools become available to the chat agent and to workflows. Nexus has no per-app code.
+**Your private AI assistant that works with your apps, reads your documents and runs your routines, self-hosted in one container.**
+
+Ask in plain words: *"What are my open GitHub pull requests?"*, *"What does my contract say about notice periods?"*, *"Remind me to take my medicines every day at 2 pm."* Nexus asks when it's unsure, shows what it's about to do, and acts only when you approve.
+
+[![CI](https://github.com/YogeshChopade43/Nexus/actions/workflows/ci.yml/badge.svg)](https://github.com/YogeshChopade43/Nexus/actions/workflows/ci.yml)
+![Python 3.11](https://img.shields.io/badge/python-3.11-3776AB)
+![React 18](https://img.shields.io/badge/react-18-61DAFB)
+![MCP](https://img.shields.io/badge/MCP-apps-7C3AED)
+![Self-hosted](https://img.shields.io/badge/self--hosted-private-10B981)
+
+<!-- DEMO: record a 20-40 s GIF of chat -> question card -> approve -> reminder pop-up, save it as
+     docs/images/demo.gif and uncomment the line below. A demo is the most important part of this page. -->
+<!-- ![Nexus demo: a reminder created from chat](docs/images/demo.gif) -->
+
+## What it does
+
+- **Connect your apps in a click.** A built-in **Marketplace** of 13,000+ hosted MCP servers from verified publishers (Notion, GitHub, Linear, Stripe, Figma, Supabase…), with *Official* and *Verified domain* badges, logos, and one-click sign-in.
+- **Chat that gets things done.** The agent uses your apps' tools, asks follow-up questions as clickable cards when it's unsure, and shows an **Approve** card before anything that changes your data.
+- **Answers from your documents.** Upload PDFs, Word, Excel and Markdown files. Hybrid search (keywords plus meaning, then reranking) runs **locally**, and every answer cites the passages it used.
+- **Workflows and reminders.** Say *"every weekday at 9, summarise my new issues"* in chat and Nexus builds the workflow, or design one visually with schedules, app events, webhooks and AI steps. Reminders pop up on your desktop.
+- **Private by default.** Your database, documents and search models stay on your machine. Use OpenAI, Anthropic, OpenRouter, Groq or Grok, or **run the AI fully offline with Ollama**.
+- **Made for daily use.** Ctrl+K search across everything, `@`-mention an app or document, starter prompts, token and cost tracking, a dark or light theme, and it works on phones.
+
+<!-- SCREENSHOTS: save these in docs/images/ and uncomment the table.
+| Chat with your apps | Marketplace | Documents with sources |
+|---|---|---|
+| ![Chat](docs/images/chat.png) | ![Marketplace](docs/images/marketplace.png) | ![Sources](docs/images/sources.png) |
+-->
 
 ## Quick start
 
-```powershell
-python start.py          # first run sets up backend/.venv and node_modules, then starts both
+**With Docker** (one container, nothing else to install):
+
+```bash
+git clone https://github.com/YogeshChopade43/Nexus.git
+cd Nexus
+docker compose up --build
 ```
 
-Open http://localhost:5173. Or with Docker (one container, port 8000):
+Open **http://localhost:8000**, follow the *Getting started* checklist to add an AI provider, then connect an app from the Marketplace.
 
-```powershell
-docker compose up --build    # then open http://localhost:8000
+**For development** (Python 3.11 and Node.js 20):
+
+```bash
+python start.py    # first run sets up backend/.venv and node_modules, then starts both; open http://localhost:5173
 ```
 
-## Requirements
+> Nexus is single-user for now and has no login, so keep it on your own machine. Docker binds it to `127.0.0.1` only.
+
+## Why Nexus?
+
+| | **Nexus** | Automation tools (n8n, Zapier) | Chat UIs (Open WebUI, LibreChat) | Hosted assistants (ChatGPT, Claude) |
+|---|---|---|---|---|
+| Chat with your apps | ✅ | Partly (agent nodes) | Partly (tool plugins) | ✅ |
+| Workflows from plain language | ✅ | Partly | ❌ | Limited |
+| Your documents, searched locally | ✅ | ❌ | ✅ | Cloud only |
+| One-click app marketplace | ✅ (MCP Registry) | ✅ (own integrations) | ❌ | ✅ |
+| Asks first, approves before acting | ✅ | n/a | Partly | ✅ |
+| Self-hosted and offline-capable | ✅ | n8n only | ✅ | ❌ |
+
+Nexus is for people who want one private place where their assistant, their documents and their routines live together, without stitching three tools together.
+
+## Development setup
+
+### Requirements
 
 - Python 3.10 or newer (3.11 recommended; the MCP SDK requires 3.10+)
 - Node.js 20 or newer (for the frontend)
 
-## Backend
+### Backend
 
 From the repository root:
 
@@ -34,7 +84,7 @@ uvicorn app.main:app --reload --port 8000
 
 If `NEXUS_SECRET_KEY` is not set, a development key is generated in `data/.nexus_secret_key`; set your own in `.env` for anything long-lived. Keep it stable: it encrypts MCP server secrets and LLM API keys. The API listens on `http://localhost:8000`. The default database is `backend/data/nexus.db`; set `DATABASE_PATH` to change it.
 
-## Frontend
+### Frontend
 
 ```powershell
 cd frontend
