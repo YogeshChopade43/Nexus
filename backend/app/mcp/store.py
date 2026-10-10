@@ -1,6 +1,8 @@
 """Persistence for configured MCP servers. Secrets (env, headers) are encrypted at rest."""
 from __future__ import annotations
 
+import os
+
 import json
 import re
 from dataclasses import dataclass, field
@@ -27,6 +29,7 @@ class ServerConfig:
     created_at: str = ""
     tool_policies: dict[str, str] = field(default_factory=dict)  # remote tool name -> allow | ask | block
     signed_in: bool = False  # holds OAuth tokens from a hosted-server sign-in
+    registry_name: str = ""  # the MCP Registry listing it was installed from (Marketplace)
 
     def public(self) -> dict[str, Any]:
         """API view: secret values are never returned, only their names."""
@@ -44,7 +47,14 @@ class ServerConfig:
             "created_at": self.created_at,
             "tool_policies": self.tool_policies,
             "signed_in": self.signed_in,
+            "registry_name": self.registry_name,
         }
+
+
+def local_servers_allowed() -> bool:
+    """Nexus connects to hosted MCP servers only. Launching local ones (code execution on this machine) stays
+    behind this switch, which only the test suite turns on (its fixture servers are local programs)."""
+    return os.getenv("NEXUS_ALLOW_LOCAL_SERVERS", "").lower() == "true"
 
 
 def init_table(conn) -> None:
@@ -69,6 +79,8 @@ def init_table(conn) -> None:
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(mcp_servers)").fetchall()}
     if "tool_policies" not in columns:
         conn.execute("ALTER TABLE mcp_servers ADD COLUMN tool_policies TEXT DEFAULT '{}'")
+    if "registry_name" not in columns:
+        conn.execute("ALTER TABLE mcp_servers ADD COLUMN registry_name TEXT DEFAULT ''")
 
 
 def _from_row(row: Any) -> ServerConfig:
@@ -86,6 +98,7 @@ def _from_row(row: Any) -> ServerConfig:
         created_at=row["created_at"] or "",
         tool_policies=json.loads(row["tool_policies"] or "{}") if "tool_policies" in row.keys() else {},
         signed_in=bool(decrypt_config(row["oauth"]).get("tokens")) if "oauth" in row.keys() and row["oauth"] else False,
+        registry_name=(row["registry_name"] or "") if "registry_name" in row.keys() else "",
     )
 
 
@@ -125,14 +138,15 @@ def create_server(data: dict[str, Any]) -> ServerConfig:
         taken = {r["slug"] for r in conn.execute("SELECT slug FROM mcp_servers").fetchall()}
         cursor = conn.execute(
             """
-            INSERT INTO mcp_servers (slug, name, transport, command, args, env, url, headers, enabled, tool_policies)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO mcp_servers (slug, name, transport, command, args, env, url, headers, enabled, tool_policies,
+                                     registry_name)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 slugify(data["name"], taken), data["name"], data["transport"], data.get("command", ""),
                 json.dumps(data.get("args", [])), encrypt_config(data.get("env", {})), data.get("url", ""),
                 encrypt_config(data.get("headers", {})), int(data.get("enabled", True)),
-                json.dumps(data.get("tool_policies") or {}),
+                json.dumps(data.get("tool_policies") or {}), data.get("registry_name", ""),
             ),
         )
         conn.commit()

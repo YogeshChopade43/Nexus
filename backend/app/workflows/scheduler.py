@@ -128,6 +128,10 @@ def start_scheduler() -> None:
     # Daily cleanup of old runs and activity, also once shortly after startup.
     _scheduler.add_job(_cleanup, IntervalTrigger(hours=24), id="cleanup", replace_existing=True,
                        next_run_time=datetime.now(timezone.utc) + timedelta(minutes=1))
+    from app.mcp import registry
+
+    if registry.auto_sync_enabled():  # Marketplace: refresh the MCP Registry copy daily
+        _scheduler.add_job(registry.sync, IntervalTrigger(hours=24), id="registry-sync", replace_existing=True)
     logger.info("Workflow scheduler started with %d job(s)", len(_scheduler.get_jobs()))
 
 

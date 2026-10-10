@@ -24,18 +24,30 @@ def _words(text: str) -> set[str]:
     return words
 
 
+PERSONAL = re.compile(r"\b(my|me|mine|myself|i|i'm|i've)\b", re.IGNORECASE)
+WHO_AM_I_NAME = re.compile(r"(^|[-_])(get[-_]?me|whoami|who[-_]am[-_]i|get[-_]?self|current[-_]?user)$", re.IGNORECASE)
+WHO_AM_I_TEXT = re.compile(r"\b(authenticated|signed[- ]in|logged[- ]in|current) (\w+ )?(user|account)\b", re.IGNORECASE)
+
+
 def rank_tools(query: str, tools: list[tuple[str, str]], limit: int, min_score: int = 0) -> list[str]:
     """Names of the ``limit`` tools whose name/description best match ``query`` (ties keep input order).
 
     ``min_score=1`` leaves out tools that share no word with the query."""
     wanted = _words(query)
+    personal = bool(PERSONAL.search(query))
+    # Apps the request names ("github"): their tools outrank others that merely share a word with it.
+    named = {name.partition("__")[0] for name, _ in tools if wanted & _words(name.partition("__")[0])}
     scored = []
     for index, (name, description) in enumerate(tools):
         server, _, tool = name.partition("__")
         # OpenAPI-generated servers name tools "API-post-search": the HTTP method says nothing about intent.
         tool = re.sub(r"^api[-_](get|post|put|patch|delete)[-_]", "", tool or name, flags=re.IGNORECASE)
         name_words = _words(tool)
-        score = 2 * len(wanted & name_words) + len(wanted & _words(description)) + (1 if wanted & _words(server) else 0)
+        score = 2 * len(wanted & name_words) + len(wanted & _words(description)) + (5 if server in named else 0)
+        # "my repos": that app's who-am-I tool, so the agent looks the account up instead of guessing its name.
+        if (score and personal and (server in named or not named)
+                and (WHO_AM_I_NAME.search(tool) or WHO_AM_I_TEXT.search(description))):
+            score += 100
         if score >= min_score:
             scored.append((-score, index, name))
     return [name for _, _, name in sorted(scored)[:limit]]

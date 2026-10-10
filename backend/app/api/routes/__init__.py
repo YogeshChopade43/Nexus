@@ -12,3 +12,4 @@ from app.api.routes.webhooks import router as webhooks_router
 from app.api.routes.dashboard import router as dashboard_router
 from app.api.routes.knowledge import router as knowledge_router
 from app.api.routes.rag import router as rag_router
+from app.api.routes.marketplace import router as marketplace_router

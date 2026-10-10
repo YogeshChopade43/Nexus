@@ -3,6 +3,7 @@ import type { McpLogs, McpServer, McpServerInput } from '../types/mcp';
 
 export const mcpService = {
   list: () => api.get<McpServer[]>('/api/mcp/servers/'),
+  get: (id: number) => api.get<McpServer>(`/api/mcp/servers/${id}`),
   create: (input: McpServerInput) => api.post<McpServer>('/api/mcp/servers/', input),
   update: (id: number, input: Partial<McpServerInput>) => api.patch<McpServer>(`/api/mcp/servers/${id}`, input),
   restart: (id: number) => api.post<McpServer>(`/api/mcp/servers/${id}/restart`),

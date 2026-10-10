@@ -207,6 +207,45 @@ MIGRATIONS: list[str] = [
     """,
     # 8: answer feedback (thumbs up/down) removed
     "DROP TABLE IF EXISTS answer_feedback",
+    # 9: Marketplace: a local copy of the MCP Registry (docs/superpowers/specs/2026-10-09-mcp-marketplace-design.md)
+    """
+    CREATE TABLE registry_servers (
+        name TEXT PRIMARY KEY, title TEXT, description TEXT NOT NULL DEFAULT '', version TEXT,
+        icon_url TEXT, repository_url TEXT, website_url TEXT,
+        install_json TEXT, kind TEXT, match_key TEXT, updated_at TEXT
+    );
+    CREATE INDEX registry_servers_match ON registry_servers(match_key);
+    CREATE VIRTUAL TABLE registry_fts USING fts5(name, title, description, tokenize = 'porter unicode61');
+    CREATE TABLE registry_sync (
+        id INTEGER PRIMARY KEY CHECK (id = 1), last_synced_at TEXT, status TEXT, error TEXT, count INTEGER
+    )
+    """,
+    # 10: Marketplace "Official" badge (filled by registry.backfill_official for rows stored before it)
+    "ALTER TABLE registry_servers ADD COLUMN official INTEGER",
+    # 11: Marketplace front page: test/staging/empty listings flagged; title index for duplicate checks
+    "ALTER TABLE registry_servers ADD COLUMN junk INTEGER; CREATE INDEX registry_servers_title ON registry_servers(title)",
+    # 12: registry_servers gets an explicit INTEGER PRIMARY KEY (same values as the old implicit rowids, which
+    # registry_fts is joined on): implicit rowids may be renumbered by VACUUM, desyncing the search index.
+    """
+    CREATE TABLE registry_servers_new (
+        id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, title TEXT, description TEXT NOT NULL DEFAULT '',
+        version TEXT, icon_url TEXT, repository_url TEXT, website_url TEXT, install_json TEXT, kind TEXT,
+        match_key TEXT, updated_at TEXT, official INTEGER, junk INTEGER
+    );
+    INSERT INTO registry_servers_new (id, name, title, description, version, icon_url, repository_url, website_url,
+                                      install_json, kind, match_key, updated_at, official, junk)
+        SELECT rowid, name, title, description, version, icon_url, repository_url, website_url, install_json, kind,
+               match_key, updated_at, official, junk FROM registry_servers;
+    DROP TABLE registry_servers;
+    ALTER TABLE registry_servers_new RENAME TO registry_servers;
+    CREATE INDEX registry_servers_match ON registry_servers(match_key);
+    CREATE INDEX registry_servers_title ON registry_servers(title)
+    """,
+    # 13: hosted MCP servers only: listings Nexus would have to run on this computer are dropped
+    """
+    DELETE FROM registry_fts WHERE rowid IN (SELECT id FROM registry_servers WHERE kind IS NOT 'hosted');
+    DELETE FROM registry_servers WHERE kind IS NOT 'hosted'
+    """,
 ]
 
 

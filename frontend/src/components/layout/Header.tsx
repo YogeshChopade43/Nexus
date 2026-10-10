@@ -1,9 +1,10 @@
 import { cn } from '../../lib/utils';
-import { Menu, Sun, Moon, Monitor } from 'lucide-react';
+import { Menu, Sun, Moon, Monitor, Search } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Dropdown, DropdownItem } from '../ui/Dropdown';
 import { useSettings } from '../../hooks/useSettings';
 import { NotificationBell } from './NotificationBell';
+import { OPEN_SEARCH_EVENT } from './CommandPalette';
 
 interface HeaderProps {
   onMenuClick?: () => void;
@@ -46,6 +47,11 @@ export function Header({ onMenuClick, title }: HeaderProps) {
       </div>
 
       <div className="flex items-center gap-2">
+        <Button variant="ghost" size="sm" aria-label="Search (Ctrl+K)" title="Search (Ctrl+K)"
+          onClick={() => window.dispatchEvent(new Event(OPEN_SEARCH_EVENT))} className="gap-1.5">
+          <Search className="w-5 h-5" />
+          <kbd className="hidden md:inline text-[10px] text-nexus-text-muted border border-nexus-border rounded px-1">Ctrl K</kbd>
+        </Button>
         <Dropdown
           trigger={
             <Button variant="ghost" size="sm" aria-label="Theme">

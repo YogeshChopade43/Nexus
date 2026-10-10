@@ -38,6 +38,7 @@ export default defineConfig({
         NEXUS_SECRET_KEY: 'e2e-secret',
         NEXUS_RAG_EMBEDDER: 'fake', // deterministic stand-in models: no 220 MB download in tests
         NEXUS_RAG_RERANKER: 'fake',
+        NEXUS_REGISTRY_URL: `http://127.0.0.1:${LLM_PORT}`, // fake MCP Registry for the Marketplace
         CORS_ORIGINS: `http://localhost:${WEB_PORT}`,
       },
       reuseExistingServer: false,

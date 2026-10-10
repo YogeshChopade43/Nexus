@@ -1,10 +1,7 @@
 export interface UserSettings {
   theme: 'dark' | 'light' | 'system';
-  language: string;
   timezone: string;
   notifications: NotificationSettings;
-  privacy: PrivacySettings;
-  editor: EditorSettings;
   /** Runs and activity older than this are deleted daily; 0 keeps everything. */
   retentionDays: number;
   notificationsReadAt: string | null;
@@ -17,27 +14,8 @@ export interface UserSettings {
 }
 
 export interface NotificationSettings {
-  email: boolean;
-  push: boolean;
-  workflowCompletion: boolean;
+  /** Failed workflow runs show in the notification bell. */
   workflowFailure: boolean;
-  appUpdates: boolean;
-  mentions: boolean;
-}
-
-export interface PrivacySettings {
-  analytics: boolean;
-  crashReporting: boolean;
-  dataSharing: boolean;
-}
-
-export interface EditorSettings {
-  fontSize: number;
-  fontFamily: string;
-  tabSize: number;
-  wordWrap: boolean;
-  minimap: boolean;
-  lineNumbers: boolean;
 }
 
 export interface ApiSettings {

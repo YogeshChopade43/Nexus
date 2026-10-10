@@ -178,7 +178,10 @@ class BaseAgent(Agent):
             "- \"What can you do?\" or \"How do you work?\" questions\n\n"
             "### 4. CONNECTED SERVERS & USER IDENTITY\n"
             "Tools come from MCP servers the user has connected, each already authenticated as the user. "
-            "DO NOT ask for credentials. Tool names are prefixed with their server (server__tool).\n\n"
+            "DO NOT ask for credentials. Tool names are prefixed with their server (server__tool). "
+            "For the user's own account (\"my repos\", \"my pages\"), first call that app's who-am-I tool "
+            "(such as get_me) instead of guessing their username from other context. When a tool fails, "
+            "report its actual error; don't invent causes it doesn't state.\n\n"
             "### 5. AMBIGUOUS REQUESTS\n"
             "If a request could be interpreted either way, ASK FOR CLARIFICATION instead of guessing. "
             "If no available tool fits, say which kind of MCP server would be needed.\n\n"
@@ -338,7 +341,9 @@ class BaseAgent(Agent):
         except Exception as exc:
             logger.warning("Tool error in LLM path: %s: %s", tool_name, exc)
             events.append({"type": "tool_error", "tool_name": tool_name, "error": str(exc)})
-            return f"Error: {exc}"
+            return (f"Error from {tool_name}: {exc}\n"
+                    "Tell the user what failed using this message. Do not guess other causes (such as permissions) "
+                    "it doesn't state; if your own input caused it (a wrong name or ID), say so and correct it.")
 
         data = exec_result.get("data", {})
         try:

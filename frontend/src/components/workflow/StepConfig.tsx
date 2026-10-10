@@ -193,7 +193,7 @@ export function StepConfig({ node, onConfig, tools, llmProviders, sources, workf
         <div className="space-y-3">
           {!tool && (
             <p className="text-xs text-nexus-warning">
-              The MCP server for <code>{String(c.tool ?? 'this tool')}</code> is not connected. Check it on the MCP Servers page.
+              The MCP server for <code>{String(c.tool ?? 'this tool')}</code> is not connected. Check it in the Marketplace.
             </p>
           )}
           <ParameterForm

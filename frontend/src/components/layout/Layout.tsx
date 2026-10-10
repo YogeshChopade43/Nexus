@@ -3,6 +3,8 @@ import type { ReactNode } from 'react';
 import { cn } from '../../lib/utils';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
+import { CommandPalette } from './CommandPalette';
+import { useChatContext } from '../../hooks/useChatContext';
 
 interface LayoutProps {
   sidebarCollapsed?: boolean;
@@ -12,6 +14,7 @@ interface LayoutProps {
 
 export function Layout({ sidebarCollapsed = false, onSidebarToggle, children }: LayoutProps) {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const { openSession } = useChatContext();
 
   return (
     <div className="min-h-screen bg-nexus-bg">
@@ -40,6 +43,8 @@ export function Layout({ sidebarCollapsed = false, onSidebarToggle, children }: 
           </div>
         </main>
       </div>
+
+      <CommandPalette onOpenChat={(id) => void openSession(id)} />
 
       {mobileSidebarOpen && (
         <div

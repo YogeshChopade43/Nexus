@@ -2,6 +2,7 @@ import { useRef, useEffect, useImperativeHandle, forwardRef } from 'react';
 import { Bot } from 'lucide-react';
 import { ScrollArea } from '../ui/ScrollArea';
 import { Message } from './Message';
+import { StarterPrompts } from './StarterPrompts';
 import type { ChatMessage } from '../../types/chat';
 
 export interface MessageListProps {
@@ -10,6 +11,8 @@ export interface MessageListProps {
   onApprove?: (approved: boolean) => void;
   onRetry?: () => void;
   onEdit?: (text: string) => void;
+  /** Offer starter prompts in an empty chat; picking one sends it. */
+  onPickPrompt?: (text: string) => void;
   autoScroll?: boolean;
 }
 
@@ -19,7 +22,7 @@ export interface MessageListRef {
 }
 
 export const MessageList = forwardRef<MessageListRef, MessageListProps>(
-  ({ messages, onCopy, onApprove, onRetry, onEdit, autoScroll = true }, ref) => {
+  ({ messages, onCopy, onApprove, onRetry, onEdit, onPickPrompt, autoScroll = true }, ref) => {
     const lastUser = messages.map(m => m.role).lastIndexOf('user');
     const lastAssistant = messages.map(m => m.role).lastIndexOf('assistant');
     const scrollAreaRef = useRef<HTMLDivElement>(null);
@@ -46,10 +49,11 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(
         <div className="w-20 h-20 rounded-full bg-nexus-accent-dim flex items-center justify-center mb-6">
           <Bot className="w-10 h-10 text-nexus-accent/70" />
         </div>
-        <h3 className="text-xl font-semibold text-nexus-text mb-2">No messages yet</h3>
+        <h3 className="text-xl font-semibold text-nexus-text mb-2">How can I help?</h3>
         <p className="text-sm text-nexus-text-secondary max-w-sm text-center">
-          Start a conversation by typing a message below. Ask Nexus to list GitHub pull requests, check Grafana logs, or send a Slack message.
+          Ask anything, or work with your connected apps and documents. Try one of these:
         </p>
+        {onPickPrompt && <StarterPrompts onPick={onPickPrompt} />}
       </div>
     );
     }

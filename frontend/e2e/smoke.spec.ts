@@ -20,12 +20,16 @@ test('run a workflow and use the server catalog', async ({ page }) => {
   await expect(trace.getByText('Completed').first()).toBeVisible({ timeout: 15_000 });
   await trace.getByRole('button', { name: 'Close modal' }).click();
 
-  // Servers: the catalog fills in the add form.
-  await page.getByRole('link', { name: 'MCP Servers' }).click();
-  await page.getByRole('button', { name: 'Catalog' }).click();
-  await page.getByRole('button', { name: /^Time/ }).click();
-  await expect(page.getByLabel('Arguments')).toHaveValue('mcp-server-time');
-  await page.getByRole('button', { name: 'Cancel' }).click();
+  // Marketplace: find a listing from the (fake) MCP Registry and install it.
+  await page.getByRole('link', { name: 'Marketplace' }).click();
+  await page.getByRole('button', { name: 'Refresh' }).click();
+  await page.getByLabel('Search servers').fill('demo');
+  await page.getByRole('button', { name: /E2E Demo/ }).click();
+  const listing = page.getByRole('dialog', { name: 'E2E Demo' });
+  await listing.getByRole('button', { name: 'Install' }).click();
+  await expect(listing.getByRole('button', { name: 'Remove server' })).toBeVisible({ timeout: 15_000 });
+  await listing.getByRole('button', { name: 'Close modal' }).click();
+  await expect(page.getByText('Installed', { exact: true }).last()).toBeVisible();
 
   // Knowledge: create a library, add a document, wait until it's ready, find a passage.
   await page.getByRole('link', { name: 'Knowledge' }).click();

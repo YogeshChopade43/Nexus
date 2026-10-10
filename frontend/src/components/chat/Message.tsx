@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { Copy, Bot, AlertCircle, CheckCircle2, Info, Ban, Loader2, ShieldQuestion, RotateCcw, Pencil, Gauge } from 'lucide-react';
 import { Markdown } from './Markdown';
 import { Sources } from './Sources';
+import { ToolName } from './ToolName';
 import { Button } from '../ui/Button';
 import { Tooltip } from '../ui/Tooltip';
 import type { ChatMessage, AgentEvent } from '../../types/chat';
@@ -44,8 +45,7 @@ function renderEvent(event: AgentEvent): ReactNode {
         <div className="flex items-start gap-2.5">
           <Icon className={`w-4 h-4 mt-0.5 ${colorClass}`} />
           <div className="flex-1 min-w-0">
-            <span className="font-medium text-nexus-text">{toolName}</span>
-            {appId && <span className="text-xs text-nexus-text-muted"> ({appId})</span>}
+            <ToolName name={toolName} />
             {summary && (
               <p className="text-sm text-nexus-text-secondary mt-0.5">{summary}</p>
             )}
@@ -62,8 +62,8 @@ function renderEvent(event: AgentEvent): ReactNode {
         <div className="flex items-start gap-2.5">
           <Icon className={`w-4 h-4 mt-0.5 ${colorClass}`} />
           <div className="flex-1">
-            <span className="font-medium text-nexus-text">{toolName}</span>
-            {error && <span className="text-sm text-nexus-text-secondary ml-2">— {error}</span>}
+            <ToolName name={toolName} />
+            {error && <p className="text-sm text-nexus-text-secondary mt-0.5">{error}</p>}
           </div>
         </div>
       );
@@ -176,7 +176,7 @@ export function Message({ message, onCopy, onApprove, onRetry, onEdit }: Message
                   {a.state === 'running' && <Loader2 className="w-3.5 h-3.5 animate-spin text-nexus-accent" />}
                   {a.state === 'ok' && <CheckCircle2 className="w-3.5 h-3.5 text-green-400" />}
                   {a.state === 'failed' && <AlertCircle className="w-3.5 h-3.5 text-red-400" />}
-                  <code>{a.tool}</code>
+                  <ToolName name={a.tool} />
                   {a.summary && <span className="truncate text-nexus-text-muted">— {a.summary}</span>}
                 </li>
               ))}
@@ -208,7 +208,7 @@ export function Message({ message, onCopy, onApprove, onRetry, onEdit }: Message
             <div className="text-sm space-y-2" role="group" aria-label="Approval needed">
               <div className="flex items-center gap-2 font-medium text-nexus-text">
                 <ShieldQuestion className="w-4 h-4 text-amber-400" />
-                Nexus wants to run <code className="text-nexus-accent">{pending.tool}</code>
+                Nexus wants to use <ToolName name={pending.tool} />
               </div>
               {Object.keys(pending.arguments ?? {}).length > 0 && (
                 <pre className="text-xs text-nexus-text-secondary bg-nexus-bg-tertiary/50 rounded p-2 overflow-x-auto max-h-48">

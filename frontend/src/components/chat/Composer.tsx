@@ -1,8 +1,10 @@
 import { useState, useRef, useEffect, KeyboardEvent } from 'react';
 import { Button } from '../ui/Button';
-import { Paperclip, Send, Sparkles, Square, X } from 'lucide-react';
+import { AppWindow, FileText, Paperclip, Send, Square, X } from 'lucide-react';
 import { Textarea } from '../ui/Input';
 import type { ChatAttachment } from '../../types/chat';
+import { cn } from '../../lib/utils';
+import { matchTargets, mentionAt, mentionTargets, type MentionTarget } from './mentions';
 
 const MAX_FILES = 10;
 const MAX_FILE_BYTES = 20_000_000;
@@ -27,6 +29,32 @@ export function Composer({ onSend, disabled, placeholder = 'Message Agent...', m
   const [fileError, setFileError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // "@" mentions: apps and documents to point the agent at.
+  const [targets, setTargets] = useState<MentionTarget[]>([]);
+  const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
+  const [active, setActive] = useState(0);
+  const options = mention ? matchTargets(targets, mention.query) : [];
+
+  const change = (text: string, caret: number) => {
+    setValue(text);
+    const found = mentionAt(text, caret);
+    setMention(found);
+    setActive(0);
+    if (found) void mentionTargets().then(setTargets);
+  };
+
+  const pick = (target: MentionTarget) => {
+    if (!mention) return;
+    const caret = mention.start + 1 + mention.query.length;
+    const next = `${value.slice(0, mention.start)}@${target.label} ${value.slice(caret)}`;
+    setValue(next);
+    setMention(null);
+    requestAnimationFrame(() => {
+      const at = mention.start + target.label.length + 2;
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(at, at);
+    });
+  };
 
   const addFiles = async (picked: FileList | null) => {
     setFileError(null);
@@ -45,6 +73,23 @@ export function Composer({ onSend, disabled, placeholder = 'Message Agent...', m
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (options.length > 0) {  // the suggestion list has the keyboard while it's open
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        setActive(i => (i + (e.key === 'ArrowDown' ? 1 : options.length - 1)) % options.length);
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        pick(options[active] ?? options[0]);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setMention(null);
+        return;
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSubmit();
@@ -58,6 +103,7 @@ export function Composer({ onSend, disabled, placeholder = 'Message Agent...', m
 
     onSend(trimmed, files.flatMap(f => ('inline' in f ? [f.inline] : [])), files.flatMap(f => ('upload' in f ? [f.upload] : [])));
     setValue('');
+    setMention(null);
     setFiles([]);
     setFileError(null);
     textareaRef.current?.focus();
@@ -100,10 +146,28 @@ export function Composer({ onSend, disabled, placeholder = 'Message Agent...', m
           <Paperclip className="w-5 h-5" />
         </Button>
         <div className="flex-1 relative">
+          {options.length > 0 && (
+            <ul role="listbox" aria-label="Mention an app or document"
+              className="absolute bottom-full mb-2 left-0 w-full max-w-sm rounded-lg border border-nexus-border bg-nexus-bg-secondary shadow-lg py-1 z-20">
+              {options.map((target, i) => {
+                const Icon = target.kind === 'app' ? AppWindow : FileText;
+                return (
+                  <li key={`${target.kind}-${target.label}`} role="option" aria-selected={i === active}
+                    onMouseDown={(e) => e.preventDefault()} onClick={() => pick(target)}
+                    className={cn('flex items-center gap-2 px-3 py-1.5 text-sm cursor-pointer',
+                      i === active ? 'bg-nexus-bg-tertiary text-nexus-text' : 'text-nexus-text-secondary')}>
+                    <Icon className="w-4 h-4 flex-shrink-0" aria-hidden />
+                    <span className="truncate">{target.label}</span>
+                    <span className="ml-auto text-xs text-nexus-text-muted">{target.kind === 'app' ? 'App' : 'Document'}</span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
           <Textarea
             ref={textareaRef}
             value={value}
-            onChange={(e) => setValue(e.target.value)}
+            onChange={(e) => change(e.target.value, e.target.selectionStart ?? e.target.value.length)}
             onKeyDown={handleKeyDown}
             placeholder={placeholder}
             disabled={disabled}
@@ -137,11 +201,7 @@ export function Composer({ onSend, disabled, placeholder = 'Message Agent...', m
       </div>
 
       <div className="flex items-center justify-between mt-2 text-xs text-nexus-text-muted">
-        <span>Press Enter to send, Shift+Enter for new line</span>
-        <span className="flex items-center gap-2">
-          <Sparkles className="w-3.5 h-3.5" />
-          <span>Powered by Nexus AI</span>
-        </span>
+        <span>Enter to send · Shift+Enter for a new line · @ to mention an app or document</span>
       </div>
     </div>
   );

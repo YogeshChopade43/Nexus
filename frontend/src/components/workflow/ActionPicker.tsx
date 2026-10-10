@@ -137,7 +137,7 @@ export function ActionPicker({ servers, onPick, onClose, toolsOnly }: ActionPick
                 <div className="px-2 pb-2">
                   {!connected && (
                     <p className="px-1 pb-2 text-xs text-nexus-text-muted">
-                      Not connected, so its actions can't be added. <Link to="/servers" className="underline">Check MCP Servers</Link>
+                      Not connected, so its actions can't be added. <Link to="/servers" className="underline">Check the Marketplace</Link>
                     </p>
                   )}
                   <div className={cn(!connected && 'opacity-50 pointer-events-none')}>

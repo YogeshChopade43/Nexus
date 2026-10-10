@@ -71,6 +71,13 @@ def read_log_tail(slug: str, max_bytes: int = 32_000) -> str:
         return handle.read().decode("utf-8", errors="replace")
 
 
+def server_said(slug: str) -> str:
+    """The last line a local server wrote to its error output in its latest run (why it stopped, usually)."""
+    latest = read_log_tail(slug, 8_000).rsplit("--- ", 1)[-1].split("---", 1)[-1]  # after the last "starting" marker
+    lines = [line.strip() for line in latest.splitlines() if line.strip()]
+    return lines[-1][:300] if lines else ""
+
+
 class _TokenStorage:
     """Keeps a hosted server's OAuth tokens and client registration in the database, encrypted."""
 
@@ -297,6 +304,9 @@ class MCPManager:
     def _target(self, runtime: _Runtime, stack: AsyncExitStack) -> Any:
         config = runtime.config
         if config.transport == "stdio":
+            if not store.local_servers_allowed():
+                raise RuntimeError("Local MCP servers are turned off: Nexus connects to hosted servers only. "
+                                   "Remove this one and install the app's hosted server from the Marketplace.")
             path = log_path(config.slug)
             if path.exists() and path.stat().st_size > MAX_LOG_BYTES:
                 path.unlink()
@@ -347,12 +357,14 @@ class MCPManager:
             callback_handler=callback,
         )
 
-    def complete_sign_in(self, state: str, code: str) -> bool:
-        """Hand the authorization code from the OAuth callback to the server waiting for it."""
+    def complete_sign_in(self, state: str, code: str, iss: Optional[str] = None) -> bool:
+        """Hand the authorization code from the OAuth callback to the server waiting for it. ``iss`` is the
+        RFC 9207 issuer some servers (hosted Notion) send back; the SDK rejects the sign-in without it.
+        Must run on the event loop (the callback route is async) so the waiting connection wakes up."""
         for runtime in self._runtimes.values():
             future = runtime.auth_future
             if runtime.auth_state and runtime.auth_state == state and future and not future.done():
-                future.set_result(AuthorizationCodeResult(code=code, state=state))
+                future.set_result(AuthorizationCodeResult(code=code, state=state, iss=iss or None))
                 return True
         return False
 
@@ -428,6 +440,8 @@ class MCPManager:
                 raise
             except BaseException as exc:  # ExceptionGroup from the SDK's task groups included
                 runtime.error = _describe(exc)
+                if runtime.config.transport == "stdio" and (said := server_said(runtime.config.slug)):
+                    runtime.error = f"{runtime.error}. The server said: {said}"  # e.g. "API_KEY ... is required"
                 logger.warning("MCP server %s failed: %s", runtime.config.slug, runtime.error)
             finally:
                 runtime.client = runtime.connect_deadline = runtime.connected_since = None

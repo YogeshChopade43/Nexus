@@ -127,8 +127,37 @@ class Notify(_BuiltIn):
         return {"text": f"Notified: {title}", "data": {"title": title}}
 
 
+class CreateWorkflow(_BuiltIn):
+    """Turns "remind me every day at 9" in chat into a scheduled workflow. Asks first: it adds an automation."""
+    read_only = False
+    policy = "ask"
+
+    def __init__(self) -> None:
+        super().__init__("create_workflow", "Create and switch on an automation from a plain-language description: "
+                         "reminders, schedules ('every weekday at 9am') or app automations. The user approves it first.", {
+            "type": "object",
+            "properties": {"description": {"type": "string", "description": "What should happen and when, in the "
+                                           "user's words, e.g. 'Every day at 11:57 pm, remind me to take my medicines'"}},
+            "required": ["description"],
+        })
+
+    async def execute(self, parameters: dict[str, Any]) -> dict[str, Any]:
+        from app.api.routes.workflows import create_workflow
+        from app.models.workflow import WorkflowCreate
+        from app.workflows import drafting
+        from app.workflows.scheduler import next_run_time
+
+        draft = await drafting.draft_workflow(str(parameters.get("description") or "").strip())
+        workflow = create_workflow(WorkflowCreate(name=draft["name"], description=draft["description"],
+                                                  nodes=draft["nodes"], edges=draft["edges"], isActive=True))
+        next_run = next_run_time(workflow.id)
+        text = (f"Created and switched on the workflow '{workflow.name}'."
+                + (f" Next run: {next_run}." if next_run else "") + " It's on the Workflows page, where it can be changed.")
+        return {"text": text, "data": {"workflow_id": workflow.id, "name": workflow.name, "next_run_at": next_run}}
+
+
 def register_builtin_tools(registry) -> None:
     from app.rag.tool import SearchDocuments
 
-    for tool in (SearchDocuments(), Remember(), Forget(), Notify()):
+    for tool in (SearchDocuments(), Remember(), Forget(), Notify(), CreateWorkflow()):
         registry.register(tool)

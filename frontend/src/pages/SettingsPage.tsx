@@ -33,7 +33,6 @@ export function SettingsPage() {
   const [searchParams] = useSearchParams();
   const requested = tabs.find(t => t.id === searchParams.get('tab'))?.id;
   const [activeTab, setActiveTab] = useState<TabId>(requested ?? 'general');
-  const [language, setLanguage] = useState('');
   const [timezone, setTimezone] = useState('');
   const [retentionDays, setRetentionDays] = useState('30');
   const [tokenLimit, setTokenLimit] = useState('0');
@@ -42,7 +41,6 @@ export function SettingsPage() {
   useEffect(() => {
     settingsService.getSettings()
       .then(s => {
-        setLanguage(s.user.language);
         setTimezone(s.user.timezone);
         setRetentionDays(String(s.user.retentionDays ?? 30));
         setTokenLimit(String(s.user.dailyTokenLimit ?? 0));
@@ -54,7 +52,7 @@ export function SettingsPage() {
     setSaveState('saving');
     try {
       await settingsService.updateUserSettings({
-        language, timezone, theme,
+        timezone, theme,
         retentionDays: Math.max(0, Number(retentionDays) || 0),
         dailyTokenLimit: Math.max(0, Number(tokenLimit) || 0),
       });
@@ -132,7 +130,6 @@ export function SettingsPage() {
                 <Separator />
 
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <Input label="Language" placeholder="en-US" value={language} onChange={(e) => { setLanguage(e.target.value); setSaveState('idle'); }} />
                   <div className="w-full">
                     <label htmlFor="timezone" className="block text-sm font-medium text-nexus-text-secondary mb-1.5">Timezone</label>
                     <TimezoneSelect

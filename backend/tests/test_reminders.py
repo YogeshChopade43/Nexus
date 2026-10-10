@@ -44,3 +44,11 @@ def test_trigger_without_timezone_uses_the_settings_timezone(client):
     assert client.get(f"/api/workflows/{wf['id']}").json()["trigger_config"]["timezone"] == "Asia/Kolkata"
     preview = client.post("/api/workflows/recurrence/preview", json={"frequency": "day", "at": "23:57", "timezone": None})
     assert preview.json()["next_runs"][0].endswith("+05:30")
+
+
+def test_settings_only_hold_what_nexus_uses(client):
+    """Options nothing reads confuse people: language, privacy, editor and unused notification toggles are gone."""
+    settings = client.get("/api/settings/user").json()
+    for unused in ("language", "privacy", "editor"):
+        assert unused not in settings
+    assert settings["notifications"] == {"workflowFailure": True}

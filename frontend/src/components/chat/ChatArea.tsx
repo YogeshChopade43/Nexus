@@ -1,9 +1,10 @@
 import { useRef, useCallback, useEffect, useState } from 'react';
 import { cn } from '../../lib/utils';
 import { MessageList, MessageListRef } from './MessageList';
+import { GettingStarted } from './GettingStarted';
 import { Composer } from './Composer';
 import { Button } from '../ui/Button';
-import { Bot, Plus, Settings, Sparkles, AlertCircle, Workflow, History, SlidersHorizontal } from 'lucide-react';
+import { Bot, Plus, AlertCircle, Workflow, History, SlidersHorizontal } from 'lucide-react';
 import { ChatSettingsModal } from './ChatSettingsModal';
 import { ConversationPanel } from './ConversationPanel';
 import { useChatContext } from '../../hooks/useChatContext';
@@ -75,7 +76,7 @@ export function ChatArea({ className }: ChatAreaProps) {
             <h2 className="font-semibold text-nexus-text">Nexus Agent</h2>
             <p className="text-xs text-nexus-text-secondary">
               {toolCount === null ? 'MCP tools unavailable' : (
-                <>{toolCount} tool(s) from <Link to="/servers" className="underline">MCP servers</Link></>
+                <>{toolCount} tool(s) from <Link to="/servers" className="underline">your apps</Link></>
               )}
             </p>
           </div>
@@ -150,6 +151,7 @@ export function ChatArea({ className }: ChatAreaProps) {
         </div>
       )}
 
+      {messages.length === 0 && <GettingStarted hasLLM={hasLLM} />}
       <MessageList
         ref={messageListRef}
         messages={messages}
@@ -157,27 +159,9 @@ export function ChatArea({ className }: ChatAreaProps) {
         onApprove={sending ? undefined : (approved) => void answerApproval(approved)}
         onRetry={sending || !sessionId ? undefined : () => void retry()}
         onEdit={sending || !sessionId ? undefined : (text) => void retry(text)}
+        onPickPrompt={hasLLM && !sending ? (text) => void handleSend(text, [], []) : undefined}
         autoScroll={true}
       />
-      {!hasLLM && messages.length === 0 && (
-        <div className="flex-1 flex items-center justify-center p-6">
-          <div className="max-w-sm text-center space-y-4">
-            <div className="w-16 h-16 rounded-2xl bg-nexus-accent-dim flex items-center justify-center mx-auto">
-              <Sparkles className="w-8 h-8 text-nexus-accent" />
-            </div>
-            <div>
-              <h3 className="text-lg font-semibold text-nexus-text">No LLM Provider Configured</h3>
-              <p className="text-sm text-nexus-text-secondary mt-1">
-                Configure an AI provider in Settings to start chatting with Nexus.
-              </p>
-            </div>
-            <Link to="/settings" className="inline-flex items-center gap-2 px-4 py-2 bg-nexus-accent text-nexus-bg rounded-lg text-sm font-medium hover:opacity-90 transition-opacity">
-              <Settings className="w-4 h-4" />
-              Go to Settings
-            </Link>
-          </div>
-        </div>
-      )}
       <Composer
         onSend={handleSend}
         disabled={sending || !hasLLM || awaiting}

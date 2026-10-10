@@ -28,7 +28,7 @@ from app.rag.models import DEFAULT_WORKSPACE
 from app.rag.retrieve import retrieve
 from app.rag.tool import has_readable_documents, rag_turn, readable_document_names
 from app.llm.metering import usage_scope, usage_total
-from app.mcp import server_states
+from app.mcp import server_states, store
 from app.llm.utils import get_active_llm_provider, get_default_llm_provider
 from app.models.agent import (
     AgentRunRequest,
@@ -199,6 +199,11 @@ def _chat_settings(session: dict[str, Any], req: AgentRunRequest) -> ChatSetting
     return ChatSettings(**((session.get("metadata") or {}).get("settings") or {}))
 
 
+# Messages that ask for something scheduled or automatic: only these get the create-workflow tool.
+AUTOMATION_REQUEST = re.compile(
+    r"\b(remind|reminder|schedule|automat\w*|workflow|every (day|weekday|week|month|morning|evening|night|hour|monday|"
+    r"tuesday|wednesday|thursday|friday|saturday|sunday|\d+)|daily|weekly|monthly|each (day|morning|week))\b", re.IGNORECASE)
+
 class _Prepared:
     """Everything one agent turn needs, shared by /run, /run/stream and /approval."""
 
@@ -220,6 +225,13 @@ class _Prepared:
             allowed = set(self.settings.servers) | {BUILTIN_APP}
             self.available = [n for n in self.available if self.tools_by_name[n].app_id in allowed]
         self.document_names = readable_document_names(DEFAULT_WORKSPACE, session_id)
+        # "@Notion ..." / "@resume.pdf": the user pointed at an app (only its tools, plus Nexus's own) or a document.
+        lowered = self.task.lower()
+        self.mentioned_apps = [s for s in store.list_servers() if s.enabled and f"@{s.name.lower()}" in lowered]
+        self.mentioned_documents = [d for d in self.document_names if f"@{d.lower()}" in lowered]
+        if self.mentioned_apps:
+            pointed = {s.slug for s in self.mentioned_apps} | {BUILTIN_APP}
+            self.available = [n for n in self.available if self.tools_by_name[n].app_id in pointed]
         if not self.document_names:
             self.available = [n for n in self.available if n != f"{BUILTIN_APP}__search_documents"]
         # Memory tools only when asked: offering tools sends the reply down the tool-calling path,
@@ -227,6 +239,8 @@ class _Prepared:
         self.available = [n for n in self.available if n != f"{BUILTIN_APP}__notify"]  # a workflow step, not for chat
         if not re.search(r"remember|forget|memor", self.task, re.IGNORECASE):
             self.available = [n for n in self.available if n not in (f"{BUILTIN_APP}__remember", f"{BUILTIN_APP}__forget")]
+        if not AUTOMATION_REQUEST.search(self.task):  # "remind me every day at 9", "every weekday send me..."
+            self.available = [n for n in self.available if n != f"{BUILTIN_APP}__create_workflow"]
         self.history: list[dict[str, Any]] = []
         self.summary = ""
 
@@ -268,6 +282,10 @@ class _Prepared:
                 "experience, plans) or anything these documents may cover. Search with a full question or several "
                 "keywords and synonyms, and search again with different words if the first results don't answer "
                 "the question. Cite the numbered sources you use like [1].")
+        if self.mentioned_apps or self.mentioned_documents:
+            pointed = [f"the app {s.name} (use its tools)" for s in self.mentioned_apps] + [
+                f"the document {d} (search it with {BUILTIN_APP}__search_documents)" for d in self.mentioned_documents]
+            parts.append("## The user pointed you at\n" + "; ".join(pointed) + ". Use these for this message.")
         if self.settings.instructions.strip():
             parts.append(f"## Instructions for this conversation\n{self.settings.instructions.strip()}")
         if self.summary:

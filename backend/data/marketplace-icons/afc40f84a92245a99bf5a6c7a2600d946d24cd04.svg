@@ -1,0 +1,16 @@
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="1Social">
+  <!-- Amber squircle filling the whole tile — no charcoal ground, so favicons carry no dark
+       frame. The four corners are transparent; browser tabs show no frame, and the iOS/Android
+       icon masks crop the corners anyway. Colours are the brand's dark-palette hexes. -->
+  <path fill="#e3a63c" d="M26 0 H102 A26 26 0 0 1 128 26 V102 A26 26 0 0 1 102 128 H26 A26 26 0 0 1 0 102 V26 A26 26 0 0 1 26 0 Z"/>
+  <!-- "1S" monogram in the ground colour, scaled up to fill the tile: a solid 1 and a curved S.
+       Font-free (shapes only) so it rasterises without a typeface. -->
+  <g transform="translate(64 64) scale(0.84) translate(-61 -62)" fill="#1b1815">
+    <polygon points="40,28 40,46 27,51"/>
+    <rect x="40" y="28" width="12" height="58"/>
+    <rect x="30" y="86" width="28" height="10"/>
+  </g>
+  <path transform="translate(64 64) scale(0.84) translate(-61 -62)"
+        d="M66 82 C66 96 96 94 96 78 C96 64 66 66 66 50 C66 34 96 32 96 46"
+        fill="none" stroke="#1b1815" stroke-width="13" stroke-linecap="butt"/>
+</svg>

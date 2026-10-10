@@ -118,3 +118,58 @@ def test_tool_view_has_display_hints(client, server):
     tools = {t["remote_name"]: t for t in client.get(f"/api/mcp/servers/{server['id']}").json()["tools"]}
     assert tools["echo"]["required"] == ["text"] and tools["list_items"]["required"] == []
     assert {"title", "read_only", "destructive"} <= tools["echo"].keys()
+
+
+def test_sign_in_passes_the_issuer_through(client, monkeypatch):
+    """RFC 9207 servers (hosted Notion) send iss with the code; the SDK refuses the sign-in without it."""
+    config = store.create_server({"name": "Issuer", "transport": "http", "url": "https://example.invalid/mcp", "enabled": False})
+
+    async def flow():
+        runtime = _Runtime(config=config)
+        mcp_manager._runtimes[config.id] = runtime
+        try:
+            provider = mcp_manager._oauth(runtime)
+            await provider.context.redirect_handler("https://auth.example/authorize?state=s1")
+            waiting = asyncio.create_task(provider.context.callback_handler())
+            await asyncio.sleep(0)
+            assert mcp_manager.complete_sign_in("s1", "code", iss="https://auth.example") is True
+            assert (await waiting).iss == "https://auth.example"
+        finally:
+            mcp_manager._runtimes.pop(config.id, None)
+
+    asyncio.run(flow())
+    client.delete(f"/api/mcp/servers/{config.id}")
+
+    seen = []
+    monkeypatch.setattr(mcp_manager, "complete_sign_in", lambda state, code, iss=None: seen.append((state, code, iss)) or True)
+    page = client.get("/api/mcp/servers/oauth/callback", params={"code": "c", "state": "s", "iss": "https://auth.example"})
+    assert "Signed in" in page.text and seen == [("s", "c", "https://auth.example")]
+
+
+def test_failed_local_server_says_why(client):
+    """'Connection closed' alone is useless: the server's own last error line explains it (a missing API key)."""
+    import sys
+
+    from app.mcp.manager import server_said
+
+    script = "import sys; print('starting up', file=sys.stderr); print('Error: FOO_API_KEY environment variable is required', file=sys.stderr); sys.exit(1)"
+    created = client.post("/api/mcp/servers/", json={"name": "Says Why", "transport": "stdio",
+                                                      "command": sys.executable, "args": ["-c", script]}).json()
+    try:
+        assert created["status"] == "error"
+        assert "FOO_API_KEY environment variable is required" in created["error"]
+        assert server_said(created["slug"]) == "Error: FOO_API_KEY environment variable is required"
+    finally:
+        client.delete(f"/api/mcp/servers/{created['id']}")
+
+
+def test_local_servers_are_refused(client, monkeypatch):
+    """Nexus connects to hosted servers only; it never launches programs on this computer."""
+    monkeypatch.delenv("NEXUS_ALLOW_LOCAL_SERVERS", raising=False)
+    response = client.post("/api/mcp/servers/", json={"name": "Local", "transport": "stdio", "command": "npx", "args": ["x"]})
+    assert response.status_code == 422 and "hosted" in response.json()["detail"]
+    hosted = client.post("/api/mcp/servers/", json={"name": "Remote", "transport": "http",
+                                                     "url": "https://example.invalid/mcp", "enabled": False})
+    assert hosted.status_code == 200
+    assert client.patch(f"/api/mcp/servers/{hosted.json()['id']}", json={"transport": "stdio", "command": "npx"}).status_code == 422
+    client.delete(f"/api/mcp/servers/{hosted.json()['id']}")

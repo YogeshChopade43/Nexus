@@ -57,30 +57,16 @@ DEFAULT_USER_SETTINGS = {
     "ragRerank": True,  # rerank document search results with the local cross-encoder
     "dailyTokenLimit": 0,  # AI tokens per day (UTC) across chat and workflows; 0 = no limit
     "llmPrices": {},  # model -> {"input": $, "output": $} per million tokens, for cost estimates
-    "language": "en-US",
     "timezone": "UTC",  # IANA name; schedules without their own timezone use it
-    "notifications": {
-        "email": True,
-        "push": True,
-        "workflowCompletion": True,
-        "workflowFailure": True,
-        "appUpdates": True,
-        "mentions": True,
-    },
-    "privacy": {
-        "analytics": True,
-        "crashReporting": True,
-        "dataSharing": False,
-    },
-    "editor": {
-        "fontSize": 14,
-        "fontFamily": "monospace",
-        "tabSize": 2,
-        "wordWrap": True,
-        "minimap": False,
-        "lineNumbers": True,
-    },
+    "notifications": {"workflowFailure": True},  # failed runs show in the bell
 }
+
+
+def _known(settings: dict[str, Any], defaults: dict[str, Any] = DEFAULT_USER_SETTINGS) -> dict[str, Any]:
+    """Only settings Nexus uses: options removed from the app (language, privacy, editor...) stay out."""
+    return {key: _known(value, defaults[key]) if isinstance(defaults[key], dict) and isinstance(value, dict)
+            and key != "llmPrices" else value
+            for key, value in settings.items() if key in defaults}
 
 
 DEFAULT_API_SETTINGS = {"baseUrl": "http://localhost:8000", "timeout": 30, "retries": 3}
@@ -114,7 +100,7 @@ def _read_user_settings(conn) -> dict[str, Any]:
     if row:
         _deep_merge(merged, _load_json(row.get("settings"), {}))
     merged["timezone"] = normalize_timezone(merged.get("timezone"))
-    return merged
+    return _known(merged)
 
 
 @router.get("/")

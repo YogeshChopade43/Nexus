@@ -18,6 +18,7 @@ from app.api.routes import (
     dashboard_router,
     knowledge_router,
     rag_router,
+    marketplace_router,
     mcp_router,
     health_router,
     llm_router,
@@ -31,6 +32,7 @@ from app.mcp import mcp_manager, server_availability
 from app.tools import get_tool_registry
 from app.workflows.engine import mark_interrupted_runs, resume_interrupted_runs
 from app.workflows.scheduler import start_scheduler, stop_scheduler
+from app.mcp import registry
 
 configure_logging()
 logger = logging.getLogger("nexus")
@@ -63,6 +65,8 @@ async def lifespan(app: FastAPI):
     # Servers connect in the background; startup doesn't wait for slow npx/uvx launches.
     await mcp_manager.start_all()
     start_scheduler()
+    registry.backfill_flags()
+    registry.sync_if_stale()  # Marketplace listings: background, never blocks startup
     resuming = None
     if interrupted and os.getenv("NEXUS_RESUME_RUNS", "true").lower() != "false":
         resuming = asyncio.create_task(_resume(interrupted))
@@ -72,6 +76,7 @@ async def lifespan(app: FastAPI):
         if resuming:
             resuming.cancel()
         await rag_worker.stop()
+        await registry.stop_sync()
         stop_scheduler()
         await mcp_manager.stop_all()
 
@@ -120,6 +125,7 @@ def create_app() -> FastAPI:
         dashboard_router,
         knowledge_router,
         rag_router,
+        marketplace_router,
         mcp_router,
         agent_router,
         workflows_router,

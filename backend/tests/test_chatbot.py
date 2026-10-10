@@ -294,3 +294,104 @@ def test_plain_chat_streams_when_no_tools_apply(client, llm, monkeypatch):
         events = [json.loads(line[6:]) for line in r.iter_lines() if line.startswith("data: ")]
     assert [e["text"] for e in events if e["type"] == "delta"] == ["Str", "eam", "ed"]
     assert not any(c["kind"] == "tools" for c in llm.calls)
+
+
+def test_personal_questions_get_the_who_am_i_tool():
+    """'my repos' needs the account's own name: guessing it from other context (a resume) gets it wrong."""
+    from app.agent.tool_selection import rank_tools
+
+    tools = [("github__search_repositories", "Find GitHub repositories by name, description or topics"),
+             ("github__list_branches", "List branches in a GitHub repository"),
+             ("github__get_me", "Get details of the authenticated GitHub user")]
+    assert "github__get_me" in rank_tools("What are my github repo names?", tools, 2, min_score=1)
+    assert "github__get_me" not in rank_tools("search github repos about llm agents", tools, 2, min_score=1)
+
+
+def test_naming_an_app_prefers_that_apps_tools():
+    from app.agent.tool_selection import rank_tools
+
+    tools = [("notion__notion-search", "Search the user's Notion workspace and connected sources such as Slack, GitHub"),
+             ("notion__notion-get-users", "List users; use 'self' to get the current user"),
+             ("github__search_repositories", "Find GitHub repositories by name, description or topics"),
+             ("github__get_me", "Get details of the authenticated GitHub user")]
+    assert rank_tools("search github for mcp servers", tools, 1, min_score=1) == ["github__search_repositories"]
+    mine = rank_tools("What are my github repo names?", tools, 2, min_score=1)
+    assert "github__get_me" in mine and "notion__notion-get-users" not in mine
+
+
+def test_tool_errors_reach_the_model_verbatim_with_a_no_guessing_rule():
+    """A failed GitHub search was explained to the user as a 'permission issue' when the real error said the user
+    didn't exist: the model gets the exact error and is told to report it, not speculate."""
+
+    class Failing(Dummy):
+        async def execute(self, parameters):
+            raise RuntimeError("Validation Failed: the listed users cannot be searched")
+
+    registry = ToolRegistry()
+    registry.register(Failing("search_repos", "Search repositories"))
+
+    def script(messages, tools):
+        if messages[-1]["role"] == "tool":
+            return {"content": "done", "tool_calls": []}
+        return ("app__search_repos", {})
+
+    llm = ScriptedLLM(script)
+    result = run(BaseAgent(registry, {"app": True}), "search repos please", llm)
+    tool_reply = llm.calls[-1]["messages"][-1]["content"]
+    assert "Validation Failed: the listed users cannot be searched" in tool_reply
+    assert "do not guess" in tool_reply.lower()
+    assert any(e["type"] == "tool_error" for e in result["events"])
+
+
+def test_reminder_in_chat_becomes_a_workflow_after_approval(client, llm, monkeypatch):
+    """'Remind me ... every day at 11:57 pm' -> the agent proposes a workflow, you approve, it's created and switched on."""
+    from app.workflows import drafting
+
+    async def draft(description):
+        return {"name": "Medicine reminder", "description": description, "warnings": [], "edges": [{"source": "t", "target": "n"}],
+                "nodes": [{"id": "t", "type": "trigger", "config": {"trigger_type": "recurrence", "frequency": "day",
+                                                                     "at": "23:57", "timezone": "Asia/Kolkata"}},
+                          {"id": "n", "type": "action", "config": {"tool": "nexus__notify",
+                                                                   "parameters": {"title": "Take your medicines"}}}]}
+
+    monkeypatch.setattr(drafting, "draft_workflow", draft)
+    llm.script = lambda m, t: (
+        {"content": "Done: your reminder is set.", "tool_calls": []} if m[-1]["role"] == "tool"
+        else ("nexus__create_workflow", {"description": "Every day at 11:57 pm, remind me to take my medicines"}))
+    sid = new_session(client)
+    asked = client.post("/api/agent/run", json={"message": "Remind me to take my medicines every day at 11:57 pm",
+                                                "session_id": sid}).json()
+    assert asked["status"] == "needs_approval" and asked["pending_action"]["tool"] == "nexus__create_workflow"
+    done = client.post(f"/api/agent/sessions/{sid}/approval", json={"approved": True}).json()
+    assert done["status"] == "completed"
+    created = next(w for w in client.get("/api/workflows").json() if w["name"] == "Medicine reminder")
+    assert created["isActive"] is True
+    assert created["trigger_config"]["next_run_at"]
+    client.delete(f"/api/workflows/{created['id']}")
+
+
+def test_create_workflow_is_only_offered_for_automation_requests(client, llm):
+    client.post("/api/agent/run", json={"message": "what is the capital of France", "session_id": new_session(client)})
+    offered = [t for c in llm.calls if c["kind"] == "tools" for t in c["tools"]]
+    assert "nexus__create_workflow" not in offered
+    llm.calls.clear()
+    client.post("/api/agent/run", json={"message": "every weekday at 9 send me a summary", "session_id": new_session(client)})
+    assert "nexus__create_workflow" in next(c for c in llm.calls if c["kind"] == "tools")["tools"]
+
+
+def test_mentioning_an_app_points_the_agent_at_it(client, llm, monkeypatch):
+    """'@Other Echo ...' offers only that app's tools (plus Nexus's own), and the instructions name what was meant."""
+    import app.api.routes.agent as agent_route
+
+    other = client.post("/api/mcp/servers", json={"name": "Other Echo", "transport": "stdio", "command": sys.executable,
+                                                   "args": [FIXTURE]}).json()
+    monkeypatch.setattr(agent_route, "readable_document_names", lambda *a, **k: ["resume.pdf"])
+    try:
+        client.post("/api/agent/run", json={"message": "@Other Echo echo hello and check @resume.pdf",
+                                            "session_id": new_session(client)})
+        call = next(c for c in llm.calls if c["kind"] == "tools")
+        assert any(t.startswith("other_echo__") for t in call["tools"])
+        assert not any(t.startswith("chat_echo__") for t in call["tools"])
+        assert "Other Echo" in call["messages"][0]["content"] and "resume.pdf" in call["messages"][0]["content"]
+    finally:
+        client.delete(f"/api/mcp/servers/{other['id']}")

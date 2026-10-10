@@ -53,8 +53,21 @@ class Handler(BaseHTTPRequestHandler):
         except (ConnectionAbortedError, BrokenPipeError, ConnectionResetError):
             pass  # the Stop test cancels requests mid-reply
 
-    def do_GET(self):  # health check for Playwright's webServer
-        self.send_response(200)
+    def do_GET(self):
+        if self.path.startswith("/v0/servers"):  # stands in for the MCP Registry (Marketplace)
+            port = self.server.server_address[1]
+            listing = {"server": {"name": "io.e2e/demo", "title": "E2E Demo", "description": "A demo server for the browser tests",
+                                  "version": "1.0.0", "remotes": [{"type": "streamable-http", "url": f"http://127.0.0.1:{port}/mcp"}]},
+                       "_meta": {"io.modelcontextprotocol.registry/official": {"status": "active", "isLatest": True,
+                                                                               "updatedAt": "2026-10-09T00:00:00Z"}}}
+            data = json.dumps({"servers": [listing], "metadata": {"count": 1}}).encode()
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        self.send_response(200)  # health check for Playwright's webServer
         self.end_headers()
         self.wfile.write(b"ok")
 

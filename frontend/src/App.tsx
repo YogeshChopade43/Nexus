@@ -6,7 +6,7 @@ import { ChatArea } from './components/chat'
 import { ChatProvider } from './hooks/useChatContext'
 
 // Pages other than chat load on first visit, keeping the initial download small.
-const ServersPage = lazy(() => import('./components/servers/ServersPage').then(m => ({ default: m.ServersPage })))
+const MarketplacePage = lazy(() => import('./components/marketplace/MarketplacePage').then(m => ({ default: m.MarketplacePage })))
 const WorkflowPage = lazy(() => import('./components/workflow').then(m => ({ default: m.WorkflowPage })))
 const ActivityPage = lazy(() => import('./components/activity').then(m => ({ default: m.ActivityPage })))
 const DashboardPage = lazy(() => import('./components/dashboard/DashboardPage').then(m => ({ default: m.DashboardPage })))
@@ -23,7 +23,7 @@ function App() {
           <Suspense fallback={<p className="text-sm text-nexus-text-muted">Loading…</p>}>
             <Routes>
               <Route path="/" element={<ChatArea />} />
-              <Route path="/servers" element={<ServersPage />} />
+              <Route path="/servers" element={<MarketplacePage />} />
               <Route path="/apps" element={<Navigate to="/servers" replace />} />
               <Route path="/workflows" element={<WorkflowPage />} />
               <Route path="/activity" element={<ActivityPage />} />

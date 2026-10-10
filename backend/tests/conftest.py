@@ -7,5 +7,7 @@ os.environ["DATABASE_PATH"] = os.path.join(_tmp, "nexus.db")
 os.environ["NEXUS_SECRET_KEY"] = "test-secret"
 os.environ["RATE_LIMIT"] = "10000/minute"
 os.environ["NEXUS_ALLOW_REMOTE_STDIO"] = "true"  # TestClient's host is not localhost
+os.environ["NEXUS_ALLOW_LOCAL_SERVERS"] = "true"  # fixture MCP servers are local programs (app: hosted only)
 os.environ["NEXUS_RAG_EMBEDDER"] = "fake"  # tests never download models (see app/rag/embeddings.py)
 os.environ["NEXUS_RAG_RERANKER"] = "fake"
+os.environ["NEXUS_REGISTRY_SYNC"] = "off"  # no background MCP Registry syncs (tests sync a fake on demand)

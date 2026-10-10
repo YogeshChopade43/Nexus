@@ -34,6 +34,8 @@ export interface McpServer {
   blocked_tools: McpTool[];
   /** Overrides keyed by the server's own tool name; unset tools use the default policy. */
   tool_policies: Record<string, ToolPolicy>;
+  /** The Marketplace listing it was installed from, if any. */
+  registry_name?: string;
   /** Holds tokens from signing in to a hosted server. */
   signed_in: boolean;
   /** While status is needs_auth: the page to open to sign in. */

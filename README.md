@@ -17,8 +17,7 @@ docker compose up --build    # then open http://localhost:8000
 ## Requirements
 
 - Python 3.10 or newer (3.11 recommended; the MCP SDK requires 3.10+)
-- Node.js 20 or newer (for the frontend, and for `npx`-launched MCP servers)
-- `uv`/`uvx` if you use Python-based MCP servers
+- Node.js 20 or newer (for the frontend)
 
 ## Backend
 
@@ -45,26 +44,25 @@ npm run dev
 
 The client calls `http://localhost:8000` by default; set `VITE_API_URL` in `frontend/.env` to override it.
 
-## Connecting apps with MCP servers
+## Connecting apps: the Marketplace (MCP servers)
 
-Open **MCP Servers** and click **Add server**:
+Nexus connects to **hosted** MCP servers only: it never launches programs on your computer. Open **Marketplace** to browse hosted servers from verified publishers (who proved to the [MCP Registry](https://registry.modelcontextprotocol.io) that they own their domain), plus a hand-picked **Featured** shelf. Nexus keeps a local copy of the listings (synced in the background at startup when older than a day, then daily, or with **Refresh**), so search is instant, matches descriptions too, and works offline. Open a listing, fill in the settings it asks for (API keys are masked and stored encrypted) and click **Install**; servers that use sign-in then show **Sign in to …**. Installed servers are managed from the same panel (filter **Installed**). `NEXUS_REGISTRY_URL` points at another registry; `NEXUS_REGISTRY_SYNC=off` turns off automatic syncs.
 
-- **Local command (stdio)**: Nexus launches the server as a subprocess. Example: command `npx`, arguments `-y @notionhq/notion-mcp-server`, environment `NOTION_TOKEN=...`.
-- **Remote URL (streamable HTTP)**: Nexus connects to a hosted server. Example: URL `https://api.githubcopilot.com/mcp/`, header `Authorization: Bearer ghp_...`.
+For a hosted server that isn't listed, click **Add custom server** and give its URL (and headers, such as `Authorization: Bearer ...`, if it uses an API key instead of sign-in).
 
-Environment values and headers are stored encrypted and never returned by the API. Tools are named `<server>__<tool>`; tool results are available in workflows as `{{ steps.<id>.text }}` and, when the result is JSON, `{{ steps.<id>.data }}`. Nexus reconnects automatically if a server exits or the connection drops.
+Headers are stored encrypted and never returned by the API. Tools are named `<server>__<tool>`; tool results are available in workflows as `{{ steps.<id>.text }}` and, when the result is JSON, `{{ steps.<id>.data }}`. Nexus reconnects automatically if a server exits or the connection drops.
 
-- **Catalog** prefills the form for popular servers. **Import** reads an existing config from Claude Desktop, Claude Code (`.mcp.json`, `~/.claude.json`), Cursor or VS Code.
+- **Import config** reads an existing config from Claude Desktop, Claude Code (`.mcp.json`, `~/.claude.json`), Cursor or VS Code; local (command) servers in it are skipped.
 - **Sign-in (OAuth)**: hosted servers that require it (Notion, Linear, Sentry, …) show **Sign in**; tokens are stored encrypted and refreshed automatically. The sign-in page returns to `NEXUS_PUBLIC_URL/api/mcp/servers/oauth/callback` (default `http://localhost:8000`); set `NEXUS_PUBLIC_URL` if the browser reaches the backend at another address.
 - **Tool policies**: per tool, Allow (runs), Ask (the chat agent asks you first) or Block (hidden). Tools that change things default to Ask.
-- **Logs**: each server shows connection events, call counts, and for local servers their own error output (saved under `data/mcp-logs/`). Tool lists refresh automatically when a server announces a change.
+- **Logs**: each server shows connection events and call counts. Tool lists refresh automatically when a server announces a change.
 
-Security: launching commands is code execution. The backend binds to `127.0.0.1` by default and accepts command-launched servers only from localhost requests. `NEXUS_ALLOW_REMOTE_STDIO=true` disables that check; only set it behind your own authentication.
+Security: Nexus refuses to create or start local (command) MCP servers. The code that runs them is kept only for the test suite's fixture servers, behind `NEXUS_ALLOW_LOCAL_SERVERS=true`; don't set it in a real install.
 
 ## Chat
 
 - Replies are Markdown (tables with Copy / CSV, code blocks with Copy) and stream as they are written. **Stop** cuts a reply short and keeps what was said; **Retry** asks again; **Edit** changes your last question and asks again. Each reply shows its tokens, and its cost once prices are entered on the Dashboard.
-- **Tool choice**: with more than 24 tools connected, each message is offered the most relevant ones plus a `nexus_find_tools` tool to fetch others. The agent takes up to 10 rounds of tool calls per message. Large tool results aren't cut off: the agent reads the rest with `nexus_read_result`.
+- **Tool choice**: each message is offered Nexus's own tools plus the app tools whose names or descriptions share a word with it (up to 24), and a `nexus_find_tools` tool to fetch others; small talk sends no app tools. The agent takes up to 10 rounds of tool calls per message. Large tool results aren't cut off: the agent reads the rest with `nexus_read_result`.
 - **Long chats** keep the last 20 messages verbatim and a running summary of earlier ones.
 - **Chat settings** (sliders icon): which MCP servers this chat may use, standing instructions, and temperature. Saved with the conversation.
 - **Conversations** (clock icon): search past chats by title or message text.

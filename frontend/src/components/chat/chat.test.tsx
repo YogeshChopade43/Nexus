@@ -60,7 +60,7 @@ describe('Message', () => {
         onApprove={onApprove}
       />,
     );
-    expect(screen.getByRole('group', { name: 'Approval needed' })).toHaveTextContent('slack__send');
+    expect(screen.getByRole('group', { name: 'Approval needed' })).toHaveTextContent('Slack·Send');  // shown as app · action
     expect(screen.getByText(/"text": "hi"/)).toBeInTheDocument();
     fireEvent.click(screen.getByText('Deny'));
     expect(onApprove).toHaveBeenCalledWith(false);
@@ -74,7 +74,7 @@ describe('Message', () => {
 
   test('a running reply shows live tool activity', () => {
     render(<Message message={{ ...base, status: 'running', activity: [{ tool: 'notion__search', state: 'running' }, { tool: 'echo', state: 'ok', summary: 'done' }] }} />);
-    expect(screen.getByRole('list', { name: 'Tool activity' })).toHaveTextContent('notion__search');
+    expect(screen.getByRole('list', { name: 'Tool activity' })).toHaveTextContent('Notion·Search');
     expect(screen.getByText('Nexus is thinking')).toBeInTheDocument();
   });
 

@@ -53,10 +53,12 @@ class ServerPatch(BaseModel):
 
 
 def _require_local_for_stdio(request: Request, transport: str) -> None:
-    """Launching commands is code execution: only allow it from this machine."""
-    if transport != "stdio" or os.getenv("NEXUS_ALLOW_REMOTE_STDIO", "").lower() == "true":
+    if transport != "stdio":
         return
-    require_local(request, "Local (command) MCP servers can only be configured from the machine running Nexus.")
+    if not store.local_servers_allowed():
+        raise HTTPException(status_code=422, detail="Nexus connects to hosted MCP servers only: add the server's URL.")
+    if os.getenv("NEXUS_ALLOW_REMOTE_STDIO", "").lower() != "true":
+        require_local(request, "Local (command) MCP servers can only be configured from the machine running Nexus.")
 
 
 def _view(config: store.ServerConfig) -> dict[str, Any]:
@@ -69,11 +71,13 @@ def list_servers() -> list[dict[str, Any]]:
 
 
 @router.get("/oauth/callback", response_class=HTMLResponse)
-def oauth_callback(code: str = "", state: str = "", error: str = "", error_description: str = "") -> HTMLResponse:
-    """Where the browser lands after signing in to a hosted MCP server."""
+async def oauth_callback(code: str = "", state: str = "", iss: str = "", error: str = "",
+                         error_description: str = "") -> HTMLResponse:
+    """Where the browser lands after signing in to a hosted MCP server. Async: the code is handed to a
+    connection waiting on the event loop, which a worker thread can't wake safely."""
     if error:
         message = f"Sign-in failed: {error_description or error}"
-    elif code and state and mcp_manager.complete_sign_in(state, code):
+    elif code and state and mcp_manager.complete_sign_in(state, code, iss=iss or None):
         message = "Signed in. Nexus is connecting to the server; you can close this tab."
     else:
         message = "This sign-in link has expired. Go back to Nexus and click Sign in again."
