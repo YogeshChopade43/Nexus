@@ -52,11 +52,11 @@ export function StarterPrompts({ onPick }: { onPick: (text: string) => void }) {
 
   if (prompts.length === 0) return null;
   return (
-    <div className="mt-6 grid gap-2 sm:grid-cols-2 w-full max-w-xl">
+    <div className="mt-7 flex w-full max-w-xl flex-wrap justify-center gap-2">
       {prompts.map(prompt => (
         <button key={prompt} type="button" onClick={() => onPick(prompt)}
-          className="flex items-start gap-2 text-left text-sm px-3 py-2 rounded-lg border border-nexus-border bg-nexus-bg-secondary text-nexus-text-secondary hover:border-nexus-accent hover:text-nexus-text">
-          <Sparkles className="w-4 h-4 mt-0.5 flex-shrink-0 text-nexus-accent" aria-hidden />
+          className="group flex w-full items-start gap-2.5 rounded-lg sm:w-[calc(50%-0.25rem)] border border-nexus-border bg-nexus-bg-secondary px-3.5 py-3 text-left text-[13px] text-nexus-text-secondary shadow-surface transition-colors hover:border-nexus-border-hover hover:bg-nexus-bg-tertiary hover:text-nexus-text">
+          <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-nexus-text-muted transition-colors group-hover:text-nexus-accent-text" aria-hidden />
           <span>{prompt}</span>
         </button>
       ))}

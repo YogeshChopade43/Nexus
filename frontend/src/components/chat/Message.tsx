@@ -1,3 +1,5 @@
+import { MentionText, useMentionLabels } from './MentionText';
+import { Logo } from '../layout/Sidebar';
 import { cn, formatRelativeTime } from '../../lib/utils';
 import { useState } from 'react';
 import { Copy, Bot, AlertCircle, CheckCircle2, Info, Ban, Loader2, ShieldQuestion, RotateCcw, Pencil, Gauge } from 'lucide-react';
@@ -137,6 +139,7 @@ export function Message({ message, onCopy, onApprove, onRetry, onEdit, onAnswer 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const isUser = message.role === 'user';
+  const mentionLabels = useMentionLabels(isUser ? message.content : '');
   const running = message.status === 'running';
   const pending = message.status === 'needs_approval' ? message.pendingAction : undefined;
   const asking = message.status === 'needs_input' ? message.pendingQuestion : undefined;
@@ -147,40 +150,34 @@ export function Message({ message, onCopy, onApprove, onRetry, onEdit, onAnswer 
   return (
     <div
       className={cn(
-        'flex gap-3 animate-slide-up',
+        'group/message flex gap-3 animate-slide-up',
         isUser && 'flex-row-reverse'
       )}
       data-message-id={message.id}
     >
       {!isUser && (
-        <div className="w-8 h-8 rounded-full bg-nexus-accent-dim flex items-center justify-center flex-shrink-0 mt-1">
-          <svg className="w-5 h-5 text-nexus-accent" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M12 2a8 8 0 018 8H4a8 8 0 018-8z" />
-            <path d="M12 14v4" />
-            <path d="M12 22v-4" />
-          </svg>
-        </div>
+        <Logo className="mt-0.5 h-7 w-7 shrink-0" />
       )}
 
       <div
         className={cn(
           // Your messages hug the right edge next to your avatar; replies take the width they need.
-          isUser ? 'max-w-[85%] min-w-0 text-right' : 'flex-1 max-w-[85%] min-w-0'
+          isUser ? 'max-w-[85%] min-w-0 text-right' : 'flex-1 min-w-0'
         )}
       >
         <div
           className={cn(
-            'inline-block max-w-full px-4 py-2.5 rounded-2xl text-left',
+            'inline-block max-w-full text-left',
             isUser
-              ? 'bg-nexus-accent text-nexus-bg rounded-tr-none'
-              : 'bg-nexus-bg-secondary border-nexus-border rounded-tl-none'
+              ? 'rounded-2xl rounded-br-md bg-nexus-bg-tertiary px-4 py-2.5 text-nexus-text'
+              : 'w-full pt-0.5'
           )}
         >
           {message.activity && message.activity.length > 0 && (
             <ul className="mb-1.5 space-y-1 text-xs" aria-label="Tool activity">
               {message.activity.map((a, i) => (
                 <li key={i} className="flex items-center gap-1.5 text-nexus-text-secondary">
-                  {a.state === 'running' && <Loader2 className="w-3.5 h-3.5 animate-spin text-nexus-accent" />}
+                  {a.state === 'running' && <Loader2 className="w-3.5 h-3.5 animate-spin text-nexus-accent-text" />}
                   {a.state === 'ok' && <CheckCircle2 className="w-3.5 h-3.5 text-green-400" />}
                   {a.state === 'failed' && <AlertCircle className="w-3.5 h-3.5 text-red-400" />}
                   <ToolName name={a.tool} />
@@ -198,14 +195,14 @@ export function Message({ message, onCopy, onApprove, onRetry, onEdit, onAnswer 
           ) : !pending && !asking && (editing ? (
             <form className="space-y-2 min-w-[16rem]" onSubmit={(e) => { e.preventDefault(); setEditing(false); onEdit?.(draft); }}>
               <textarea value={draft} onChange={(e) => setDraft(e.target.value)} rows={3} aria-label="Edit message" autoFocus
-                className="w-full rounded-lg p-2 text-sm text-nexus-text bg-nexus-bg-secondary border border-nexus-border focus:outline-none focus:ring-2 focus:ring-nexus-accent" />
+                className="w-full rounded-lg p-2 text-sm text-nexus-text bg-nexus-bg-secondary border border-nexus-border focus:outline-none focus:ring-2 focus:ring-nexus-accent/25" />
               <div className="flex justify-end gap-2">
                 <Button type="button" size="sm" variant="ghost" onClick={() => setEditing(false)}>Cancel</Button>
                 <Button type="submit" size="sm" variant="secondary" disabled={!draft.trim()}>Send</Button>
               </div>
             </form>
           ) : isUser ? (
-            <div className="whitespace-pre-wrap break-words text-sm">{message.content}</div>
+            <div className="whitespace-pre-wrap break-words text-sm"><MentionText text={message.content} labels={mentionLabels} /></div>
           ) : (
             <Markdown text={message.content} />
           ))}
@@ -216,7 +213,7 @@ export function Message({ message, onCopy, onApprove, onRetry, onEdit, onAnswer 
             ? <QuestionCard questions={asking.questions} onSubmit={onAnswer} />
             : <p className="text-xs text-nexus-text-muted">These questions are no longer waiting.</p>)}
           {pending && (
-            <div className="text-sm space-y-3 sm:min-w-[22rem]" role="group" aria-label="Approval needed">
+            <div className="mt-2 space-y-3 rounded-xl border border-nexus-warning/30 bg-nexus-bg-secondary p-4 text-sm shadow-surface sm:max-w-lg" role="group" aria-label="Approval needed">
               <div className="flex items-start gap-2 font-medium text-nexus-text">
                 <ShieldQuestion className="w-4 h-4 mt-0.5 text-amber-400 flex-shrink-0" />
                 <span>Nexus wants to use <ToolName name={pending.tool} /></span>
@@ -234,7 +231,8 @@ export function Message({ message, onCopy, onApprove, onRetry, onEdit, onAnswer 
           )}
         </div>
 
-        <div className="flex items-center gap-2 mt-1.5 text-xs text-nexus-text-muted">
+        <div className={cn('mt-1.5 flex items-center gap-1 text-xs text-nexus-text-muted transition-opacity',
+          'opacity-60 group-hover/message:opacity-100 focus-within:opacity-100', isUser && 'justify-end')}>
           <time dateTime={message.timestamp} className={cn(isUser && 'ml-auto')}>
             {formatRelativeTime(message.timestamp)}
           </time>
@@ -243,16 +241,16 @@ export function Message({ message, onCopy, onApprove, onRetry, onEdit, onAnswer 
           )}
           {onRetry && (
             <Tooltip content="Ask again">
-              <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={onRetry} aria-label="Retry">
-                <RotateCcw className="w-4 h-4" />
+              <Button variant="ghost" size="sm" className="h-6 w-6 px-0" onClick={onRetry} aria-label="Retry">
+                <RotateCcw className="w-3.5 h-3.5" />
               </Button>
             </Tooltip>
           )}
           {onEdit && !editing && (
             <Tooltip content="Edit and ask again">
-              <Button variant="ghost" size="sm" className="h-6 w-6 p-0" aria-label="Edit message"
+              <Button variant="ghost" size="sm" className="h-6 w-6 px-0" aria-label="Edit message"
                 onClick={() => { setDraft(message.content.replace(/\n\n📎 .*$/s, '')); setEditing(true); }}>
-                <Pencil className="w-4 h-4" />
+                <Pencil className="w-3.5 h-3.5" />
               </Button>
             </Tooltip>
           )}
@@ -261,11 +259,11 @@ export function Message({ message, onCopy, onApprove, onRetry, onEdit, onAnswer 
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-6 w-6 p-0"
+                className="h-6 w-6 px-0"
                 onClick={() => onCopy?.(message.content)}
                 aria-label="Copy message"
               >
-                <Copy className="w-4 h-4" />
+                <Copy className="w-3.5 h-3.5" />
               </Button>
             </Tooltip>
           )}
@@ -282,14 +280,6 @@ export function Message({ message, onCopy, onApprove, onRetry, onEdit, onAnswer 
         )}
       </div>
 
-      {isUser && (
-        <div className="w-8 h-8 rounded-full bg-nexus-bg-tertiary flex items-center justify-center flex-shrink-0 mt-1">
-          <svg className="w-5 h-5 text-nexus-text-secondary" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-            <circle cx="12" cy="7" r="4" />
-          </svg>
-        </div>
-      )}
     </div>
   );
 }

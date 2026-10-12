@@ -28,7 +28,7 @@ export class ErrorBoundary extends Component<Props, State> {
         <p className="text-sm text-nexus-text-secondary break-words">{this.state.error.message}</p>
         <button
           onClick={() => this.setState({ error: null })}
-          className="px-4 py-2 rounded-lg bg-nexus-accent text-nexus-bg text-sm font-medium"
+          className="px-4 py-2 rounded-lg bg-nexus-accent text-nexus-on-accent text-sm font-medium"
         >
           Try again
         </button>

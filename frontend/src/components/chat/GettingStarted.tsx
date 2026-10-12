@@ -37,9 +37,9 @@ export function GettingStarted({ hasLLM }: { hasLLM: boolean }) {
   };
 
   return (
-    <section aria-label="Getting started" className="mx-auto mt-4 w-full max-w-xl rounded-xl border border-nexus-border bg-nexus-bg-secondary p-4">
+    <section aria-label="Getting started" className="mx-auto mt-8 w-full max-w-xl rounded-xl border border-nexus-border bg-nexus-bg-secondary p-4 text-left shadow-surface">
       <div className="flex items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold text-nexus-text">Getting started</h2>
+        <h2 className="text-[13px] font-semibold text-nexus-text">Getting started</h2>
         <span className="flex items-center gap-2 text-xs text-nexus-text-muted">
           {done} of {steps.length} done
           <button type="button" onClick={hide} aria-label="Hide getting started" className="hover:text-nexus-text">
@@ -52,9 +52,9 @@ export function GettingStarted({ hasLLM }: { hasLLM: boolean }) {
           const Icon = step.done ? CheckCircle2 : Circle;
           const body = (
             <>
-              <Icon className={step.done ? 'w-5 h-5 text-green-500 flex-shrink-0' : 'w-5 h-5 text-nexus-text-muted flex-shrink-0'} aria-hidden />
+              <Icon className={step.done ? 'mt-px h-4 w-4 shrink-0 text-nexus-success' : 'mt-px h-4 w-4 shrink-0 text-nexus-text-muted'} aria-hidden />
               <span className="min-w-0">
-                <span className={step.done ? 'block text-sm text-nexus-text-muted line-through' : 'block text-sm font-medium text-nexus-text'}>
+                <span className={step.done ? 'block text-[13px] text-nexus-text-muted line-through' : 'block text-[13px] font-medium text-nexus-text'}>
                   {step.label}
                 </span>
                 {!step.done && <span className="block text-xs text-nexus-text-secondary">{step.detail}</span>}
@@ -64,7 +64,7 @@ export function GettingStarted({ hasLLM }: { hasLLM: boolean }) {
           return (
             <li key={step.label}>
               {step.to && !step.done
-                ? <Link to={step.to} className="flex items-start gap-2.5 rounded-lg p-1.5 -m-1.5 hover:bg-nexus-bg-tertiary">{body}</Link>
+                ? <Link to={step.to} className="-m-1.5 flex items-start gap-2.5 rounded-lg p-1.5 hover:bg-nexus-bg-tertiary hover:no-underline">{body}</Link>
                 : <div className="flex items-start gap-2.5">{body}</div>}
             </li>
           );

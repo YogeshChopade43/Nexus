@@ -89,7 +89,7 @@ export function NotificationBell() {
         )}
       </Button>
       {open && (
-        <div className="absolute right-0 mt-2 w-80 max-w-[calc(100vw-2rem)] rounded-xl border border-nexus-border bg-nexus-bg-secondary shadow-lg z-50" role="dialog" aria-label="Notifications">
+        <div className="absolute right-0 mt-2 w-80 max-w-[calc(100vw-2rem)] rounded-xl border border-nexus-border bg-nexus-bg-secondary shadow-pop z-50" role="dialog" aria-label="Notifications">
           <div className="px-4 py-3 border-b border-nexus-border text-sm font-medium text-nexus-text">Notifications</div>
           {permission === 'default' && (
             <div className="px-4 py-2 border-b border-nexus-border text-xs text-nexus-text-secondary flex items-center gap-2">
@@ -109,9 +109,9 @@ export function NotificationBell() {
                     className={cn('w-full text-left px-4 py-3 flex gap-2.5 hover:bg-nexus-bg-tertiary', item.unread && 'bg-nexus-accent/5')}
                   >
                     {item.type === 'reminder'
-                      ? <AlarmClock className="w-4 h-4 mt-0.5 text-nexus-accent flex-shrink-0" />
+                      ? <AlarmClock className="w-4 h-4 mt-0.5 text-nexus-accent-text flex-shrink-0" />
                       : item.type === 'workflow_resumed'
-                        ? <RotateCcw className="w-4 h-4 mt-0.5 text-nexus-accent flex-shrink-0" />
+                        ? <RotateCcw className="w-4 h-4 mt-0.5 text-nexus-accent-text flex-shrink-0" />
                         : <AlertCircle className="w-4 h-4 mt-0.5 text-red-400 flex-shrink-0" />}
                     <span className="min-w-0">
                       <span className="block text-sm text-nexus-text">{item.title}</span>
@@ -129,8 +129,8 @@ export function NotificationBell() {
         <div className="fixed bottom-4 right-4 left-4 sm:left-auto sm:w-80 z-[60] space-y-2">
           {popups.map(p => (
             <div key={p.id} role="alertdialog" aria-labelledby={`reminder-${p.id}`}
-              className="rounded-xl border border-nexus-accent bg-nexus-bg-secondary shadow-xl p-4 flex gap-3">
-              <AlarmClock className="w-5 h-5 text-nexus-accent flex-shrink-0 mt-0.5" />
+              className="rounded-xl border border-nexus-accent bg-nexus-bg-secondary shadow-pop p-4 flex gap-3">
+              <AlarmClock className="w-5 h-5 text-nexus-accent-text flex-shrink-0 mt-0.5" />
               <div className="flex-1 min-w-0">
                 <p id={`reminder-${p.id}`} className="text-sm font-semibold text-nexus-text">{p.title}</p>
                 {p.description && <p className="text-sm text-nexus-text-secondary mt-0.5">{p.description}</p>}

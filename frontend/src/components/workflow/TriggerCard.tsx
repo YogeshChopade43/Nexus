@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, X } from 'lucide-react';
+import { Clock, Inbox, MousePointerClick, Plus, Webhook, X } from 'lucide-react';
 import { cn, getErrorMessage } from '../../lib/utils';
 import { workflowService } from '../../services/workflow';
 import { api } from '../../services/api';
@@ -11,10 +11,10 @@ import type { McpServer } from '../../types/mcp';
 import type { AppWebhookSetup, Frequency, ManualInput, ToolDefinition, TriggerTypeInfo, Weekday, WorkflowNode } from '../../types/workflow';
 
 const TYPES = [
-  { id: 'manual', label: 'Manually', icon: '👆', help: 'Run with the Run button, optionally asking for inputs' },
-  { id: 'recurrence', label: 'Recurrence', icon: '🔁', help: 'Run on a schedule: every N minutes, daily, weekly, monthly' },
-  { id: 'poll', label: 'When something new appears in an app', icon: '📥', help: 'Check an app regularly and run once per new item' },
-  { id: 'webhook', label: 'When a webhook is called', icon: '🌐', help: 'Run when another system calls a secret URL' },
+  { id: 'manual', label: 'Manually', icon: MousePointerClick, help: 'Run with the Run button, optionally asking for inputs' },
+  { id: 'recurrence', label: 'Recurrence', icon: Clock, help: 'Run on a schedule: every N minutes, daily, weekly, monthly' },
+  { id: 'poll', label: 'When something new appears in an app', icon: Inbox, help: 'Check an app regularly and run once per new item' },
+  { id: 'webhook', label: 'When a webhook is called', icon: Webhook, help: 'Run when another system calls a secret URL' },
 ] as const;
 
 const MORE = [
@@ -127,7 +127,7 @@ function RecurrenceForm({ config, onConfig }: { config: Record<string, unknown>;
               return (
                 <button key={day} type="button" aria-pressed={on}
                   onClick={() => onConfig({ weekdays: on ? weekdays.filter(d => d !== day) : WEEKDAYS.filter(d => d === day || weekdays.includes(d)) })}
-                  className={cn('px-2.5 py-1 rounded text-xs border', on ? 'bg-nexus-accent text-nexus-bg border-nexus-accent' : 'border-nexus-border text-nexus-text-secondary')}>
+                  className={cn('px-2.5 py-1 rounded text-xs border', on ? 'bg-nexus-accent text-nexus-on-accent border-nexus-accent' : 'border-nexus-border text-nexus-text-secondary')}>
                   {day[0].toUpperCase() + day.slice(1)}
                 </button>
               );
@@ -174,7 +174,7 @@ function ManualInputsForm({ config, onConfig }: { config: Record<string, unknown
       ))}
       {inputs.length < 20 && (
         <button onClick={() => onConfig({ inputs: [...inputs, { name: `input_${inputs.length + 1}`, type: 'text', required: false, default: '' }] })}
-          className="text-xs text-nexus-accent flex items-center gap-1"><Plus className="w-3 h-3" /> Add an input</button>
+          className="text-xs text-nexus-accent-text flex items-center gap-1"><Plus className="w-3 h-3" /> Add an input</button>
       )}
     </div>
   );
@@ -266,7 +266,7 @@ function AppEventSetup({ appId }: { appId: string }) {
   const url = `${api.getBaseUrl()}/api/webhooks/apps/${appId || '<app>'}`;
   return (
     <div className="rounded-lg border border-nexus-border p-3 space-y-2 text-xs text-nexus-text-secondary">
-      <p>The app must send its webhooks to <code className="text-nexus-accent break-all">{url}</code></p>
+      <p>The app must send its webhooks to <code className="text-nexus-accent-text break-all">{url}</code></p>
       <p className="text-nexus-text-muted">If Nexus runs on your computer, apps on the internet can only reach it through a tunnel (for example <code>cloudflared tunnel --url {api.getBaseUrl()}</code>); use the tunnel's address instead of localhost.</p>
       {app ? (
         <>
@@ -316,9 +316,13 @@ export function TriggerCard({ trigger, onChange, servers, tools, triggerTypes, w
       <div className="grid gap-2 sm:grid-cols-2">
         {TYPES.map(t => (
           <button key={t.id} onClick={() => type !== t.id && setType(t.id)} aria-pressed={type === t.id}
-            className={cn('text-left p-2.5 rounded-lg border', type === t.id ? 'border-nexus-accent bg-nexus-accent-dim' : 'border-nexus-border hover:bg-nexus-bg-tertiary')}>
-            <div className="text-sm text-nexus-text">{t.icon} {t.label}</div>
-            <div className="text-xs text-nexus-text-muted">{t.help}</div>
+            className={cn('flex items-start gap-2.5 rounded-lg border p-3 text-left transition-colors',
+              type === t.id ? 'border-nexus-accent/60 bg-nexus-accent/5 ring-1 ring-inset ring-nexus-accent/30' : 'border-nexus-border hover:border-nexus-border-hover hover:bg-nexus-bg-tertiary/50')}>
+            <t.icon className={cn('mt-0.5 h-4 w-4 shrink-0', type === t.id ? 'text-nexus-accent-text' : 'text-nexus-text-muted')} aria-hidden />
+            <span className="min-w-0">
+              <span className="block text-[13px] font-medium text-nexus-text">{t.label}</span>
+              <span className="block text-xs text-nexus-text-muted">{t.help}</span>
+            </span>
           </button>
         ))}
       </div>

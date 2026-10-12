@@ -17,16 +17,14 @@ interface LLMSettingsProps {
   testChat: (providerId: number, message: string) => Promise<{ content: string | null; error: string | null }>;
 }
 
-const PROVIDER_ICONS: Record<string, string> = {
-  openai: "🤖",
-  anthropic: "🦊",
-  ollama: "🦙",
-  grok: "🔮",
-  litellm: "🔗",
-  huggingface: "🧠",
-  groq: "⚡",
-  openrouter: "🌐",
-};
+/** A provider's monogram tile (no third-party logos to keep in sync). */
+function ProviderMark({ name }: { name: string }) {
+  return (
+    <span aria-hidden className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-nexus-border bg-nexus-bg-tertiary text-sm font-semibold uppercase text-nexus-text-secondary">
+      {name.slice(0, 2)}
+    </span>
+  );
+}
 
 export function LLMSettings({
   configs,
@@ -84,15 +82,15 @@ export function LLMSettings({
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-xl font-semibold text-nexus-text">LLM Providers</h2>
-          <p className="text-sm text-nexus-text-secondary mt-1">
-            Configure AI models for Nexus
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h2 className="text-[15px] font-semibold text-nexus-text">AI providers</h2>
+          <p className="mt-0.5 text-[13px] text-nexus-text-secondary">
+            The models Nexus thinks with: OpenAI, Anthropic, OpenRouter, Groq, Grok, or Ollama on your own machine.
           </p>
         </div>
-        <Button onClick={() => setShowForm(!showForm)} className="gap-1.5">
-          <Plus className="w-4 h-4" />
+        <Button size="sm" onClick={() => setShowForm(!showForm)}>
+          <Plus className="w-3.5 h-3.5" />
           Add Provider
         </Button>
       </div>
@@ -114,7 +112,7 @@ export function LLMSettings({
                     const info = providerInfo.find(p => p.name === providerName);
                     setFormModel(info?.models[0] || "");
                   }}
-                  className="w-full px-3 py-2 rounded-lg bg-nexus-bg-secondary border border-nexus-border text-nexus-text focus:outline-none focus:ring-2 focus:ring-nexus-accent focus:border-transparent"
+                  className="w-full px-3 py-2 rounded-lg bg-nexus-bg-secondary border border-nexus-border text-nexus-text focus:outline-none focus:ring-2 focus:ring-nexus-accent/25 focus:border-nexus-accent"
                 >
                   <option value="">Select a provider...</option>
                   {providerInfo.map(p => (
@@ -134,7 +132,7 @@ export function LLMSettings({
                   onChange={e => setFormModel(e.target.value)}
                   disabled={!selectedProvider}
                   placeholder="Model name"
-                  className="w-full px-3 py-2 rounded-lg bg-nexus-bg-secondary border border-nexus-border text-nexus-text focus:outline-none focus:ring-2 focus:ring-nexus-accent focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="w-full px-3 py-2 rounded-lg bg-nexus-bg-secondary border border-nexus-border text-nexus-text focus:outline-none focus:ring-2 focus:ring-nexus-accent/25 focus:border-nexus-accent disabled:opacity-50 disabled:cursor-not-allowed"
                 />
                 <datalist id="llm-model-suggestions">
                   {(selectedProviderInfo?.models || []).map(m => (
@@ -194,9 +192,9 @@ export function LLMSettings({
       ) : (
         <div className="grid gap-4">
           {configs.map(config => (
-            <div key={config.id} className="bg-nexus-bg-tertiary/50 border-nexus-border border rounded-lg p-4">
+            <div key={config.id} className="rounded-lg border border-nexus-border bg-nexus-bg-secondary p-4 shadow-surface">
               <div className="flex items-start gap-3">
-                <span className="text-2xl">{PROVIDER_ICONS[config.provider_name] || "📦"}</span>
+                <ProviderMark name={config.provider_name} />
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
                     <span className="font-medium text-nexus-text">{getProviderLabel(config.provider_name)}</span>

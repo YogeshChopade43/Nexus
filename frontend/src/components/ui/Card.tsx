@@ -9,9 +9,9 @@ interface CardProps extends HTMLAttributes<HTMLDivElement> {
 export const Card = forwardRef<HTMLDivElement, CardProps>(
   ({ className, variant = 'default', padding = 'md', children, ...props }, ref) => {
     const variants = {
-      default: 'bg-nexus-bg-secondary border-nexus-border',
-      hover: 'bg-nexus-bg-secondary border-nexus-border hover:border-nexus-border-hover transition-colors duration-150',
-      glass: 'bg-nexus-bg-secondary/80 backdrop-blur-sm border-nexus-border',
+      default: 'bg-nexus-bg-secondary border border-nexus-border shadow-surface',
+      hover: 'bg-nexus-bg-secondary border border-nexus-border shadow-surface hover:border-nexus-border-hover transition-colors duration-150',
+      glass: 'bg-nexus-bg-secondary/80 backdrop-blur border border-nexus-border shadow-surface',
     };
 
     const paddings = {
@@ -47,7 +47,7 @@ CardHeader.displayName = 'CardHeader';
 
 export const CardTitle = forwardRef<HTMLHeadingElement, HTMLAttributes<HTMLHeadingElement>>(
   ({ className, children, ...props }, ref) => (
-    <h3 ref={ref} className={cn('text-lg font-semibold text-nexus-text', className)} {...props}>
+    <h3 ref={ref} className={cn('text-[15px] font-semibold text-nexus-text', className)} {...props}>
       {children}
     </h3>
   )

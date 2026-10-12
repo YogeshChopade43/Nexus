@@ -1,3 +1,4 @@
+import { fieldClass } from '../ui/Input';
 import { useRef } from 'react';
 import { cn } from '../../lib/utils';
 import { DynamicContent } from './DynamicContent';
@@ -26,8 +27,7 @@ function JsonField({ value, onChange, placeholder, label }: { value: unknown; on
   );
 }
 
-export const fieldClass =
-  'w-full px-3 py-2 rounded-lg bg-nexus-bg-tertiary border border-nexus-border text-sm text-nexus-text focus:outline-none focus:ring-2 focus:ring-nexus-accent';
+export { fieldClass } from '../ui/Input';
 
 export function FieldLabel({ children, hint }: { children: React.ReactNode; hint?: string }) {
   return (

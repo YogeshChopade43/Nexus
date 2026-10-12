@@ -1,3 +1,4 @@
+import { PageHeader } from '../components/ui/PageHeader';
 import { useEffect, useState } from 'react';
 import { cn } from '../lib/utils';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/Card';
@@ -64,15 +65,12 @@ export function SettingsPage() {
 
   return (
     <div className="space-y-6 max-w-4xl">
-      <div>
-        <h1 className="text-2xl font-bold text-nexus-text">Settings</h1>
-        <p className="text-nexus-text-secondary mt-1">Manage your preferences and configuration</p>
-      </div>
+      <PageHeader title="Settings" description="AI providers, your timezone and notifications, appearance and data." />
 
       <div className="grid gap-6 lg:grid-cols-4">
         <aside className="lg:col-span-1">
-          <Card>
-            <nav className="p-2 space-y-1" aria-label="Settings sections">
+          <Card padding="none">
+            <nav className="p-1.5 space-y-0.5" aria-label="Settings sections">
               {tabs.map(tab => {
                 const Icon = tab.icon;
                 return (
@@ -80,15 +78,14 @@ export function SettingsPage() {
                     key={tab.id}
                     onClick={() => setActiveTab(tab.id)}
                     className={cn(
-                      'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all duration-150',
-                      'focus:outline-none focus:ring-2 focus:ring-nexus-accent',
+                      'flex h-8 w-full items-center gap-2.5 rounded-md px-2.5 text-[13px] font-medium transition-colors',
                       activeTab === tab.id
-                        ? 'bg-nexus-accent-dim text-nexus-accent'
-                        : 'text-nexus-text-secondary hover:bg-nexus-bg-tertiary hover:text-nexus-text'
+                        ? 'bg-nexus-bg-tertiary text-nexus-text'
+                        : 'text-nexus-text-secondary hover:bg-nexus-bg-tertiary/60 hover:text-nexus-text'
                     )}
                     aria-current={activeTab === tab.id ? 'page' : undefined}
                   >
-                    <Icon className="w-5 h-5 flex-shrink-0" />
+                    <Icon className={cn('h-4 w-4 flex-shrink-0', activeTab === tab.id ? 'text-nexus-accent-text' : 'text-nexus-text-muted')} />
                     {tab.label}
                   </button>
                 );
@@ -162,7 +159,7 @@ export function SettingsPage() {
                 </div>
                 <div className="flex items-center gap-3">
                   <Button size="sm" onClick={saveGeneral} loading={saveState === 'saving'}>Save</Button>
-                  {saveState === 'saved' && <span className="text-xs text-nexus-accent">Saved</span>}
+                  {saveState === 'saved' && <span className="text-xs text-nexus-accent-text">Saved</span>}
                   {saveState === 'error' && <span className="text-xs text-nexus-danger">Could not save settings</span>}
                 </div>
               </CardContent>
@@ -181,7 +178,7 @@ export function SettingsPage() {
                 <a
                   href={`${api.getBaseUrl()}/api/settings/backup`}
                   download
-                  className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-nexus-accent text-nexus-bg text-sm font-medium hover:opacity-90"
+                  className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-nexus-accent text-nexus-on-accent text-sm font-medium hover:opacity-90"
                 >
                   <Download className="w-4 h-4" /> Download backup
                 </a>

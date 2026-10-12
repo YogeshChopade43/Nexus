@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { LogIn, RefreshCw, Trash2 } from 'lucide-react';
+import { CheckCircle2, LogIn, RefreshCw, Trash2, XCircle } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { cn, formatRelativeTime, getErrorMessage } from '../../lib/utils';
 import { mcpService } from '../../services/mcp';
@@ -116,7 +116,7 @@ export function InstalledServer({ server: initial, onChanged }: {
           <p className="text-sm text-nexus-text">One more step: sign in to {server.name} so Nexus can use it.</p>
           {server.auth_url ? (
             <a href={server.auth_url} target="_blank" rel="noreferrer"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-nexus-accent text-nexus-bg text-sm font-medium hover:opacity-90">
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-nexus-accent text-nexus-on-accent text-sm font-medium hover:opacity-90">
               <LogIn className="w-4 h-4" /> Sign in to {server.name}
             </a>
           ) : <p className="text-xs text-nexus-text-muted">Preparing the sign-in page…</p>}
@@ -129,7 +129,7 @@ export function InstalledServer({ server: initial, onChanged }: {
       {error && <p role="alert" className="text-sm text-nexus-danger">{error}</p>}
       {check && check !== 'running' && (
         <p role="status" className={cn('text-sm', check.ok ? 'text-green-500' : 'text-nexus-danger')}>
-          {check.ok ? '✓ ' : '✗ '}{check.message}
+          {check.ok ? <CheckCircle2 className="mr-1 inline h-3.5 w-3.5 align-[-2px]" aria-hidden /> : <XCircle className="mr-1 inline h-3.5 w-3.5 align-[-2px]" aria-hidden />}{check.message}
         </p>
       )}
 
@@ -161,7 +161,7 @@ export function InstalledServer({ server: initial, onChanged }: {
             {tools.map(tool => (
               <li key={tool.name} className={cn('p-2 rounded border border-nexus-border', tool.policy === 'block' && 'opacity-60')}>
                 <div className="flex items-center justify-between gap-2">
-                  <code className="text-xs text-nexus-accent truncate">{tool.name}</code>
+                  <code className="text-xs text-nexus-accent-text truncate">{tool.name}</code>
                   <select value={tool.policy} disabled={busy} aria-label={`Policy for ${tool.name}`}
                     onChange={(e) => void act(() => mcpService.update(server.id, {
                       tool_policies: { ...server.tool_policies, [tool.remote_name]: e.target.value as ToolPolicy },

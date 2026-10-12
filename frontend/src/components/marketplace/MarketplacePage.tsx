@@ -1,5 +1,7 @@
+import { EmptyState, PageHeader, SegmentedControl } from '../ui/PageHeader';
+import { fieldClass } from '../ui/Input';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertCircle, Plus, RefreshCw, Search, Upload } from 'lucide-react';
+import { AlertCircle, Plus, RefreshCw, Search, Upload, Store } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { cn, formatRelativeTime, getErrorMessage } from '../../lib/utils';
 import { marketplaceService, PAGE_SIZE } from '../../services/marketplace';
@@ -29,16 +31,16 @@ function StatusLine({ status }: { status: SyncStatus | null }) {
 function ServerCard({ card, onOpen }: { card: MarketCard; onOpen: () => void }) {
   return (
     <button type="button" onClick={onOpen}
-      className="text-left rounded-xl border border-nexus-border bg-nexus-bg-secondary p-4 hover:border-nexus-accent transition-colors flex gap-3 min-w-0">
-      <Logo card={card} className="w-10 h-10" />
+      className="group flex min-w-0 gap-3 rounded-xl border border-nexus-border bg-nexus-bg-secondary p-4 text-left shadow-surface transition-[border-color,background-color,transform] duration-150 hover:-translate-y-px hover:border-nexus-border-hover hover:bg-nexus-bg-tertiary/40">
+      <Logo card={card} className="h-10 w-10" />
       <span className="min-w-0 flex-1">
-        <span className="block font-medium text-nexus-text truncate">{card.title}</span>
-        <span className="block text-xs text-nexus-text-muted truncate">{card.publisher}</span>
-        <span className="block text-sm text-nexus-text-secondary mt-1 line-clamp-2">{card.description}</span>
-        <span className="flex flex-wrap gap-1.5 mt-2 text-xs">
+        <span className="block truncate text-[13px] font-semibold text-nexus-text">{card.title}</span>
+        <span className="block truncate text-xs text-nexus-text-muted">{card.publisher}</span>
+        <span className="mt-1.5 line-clamp-2 block text-[13px] leading-snug text-nexus-text-secondary">{card.description}</span>
+        <span className="mt-2.5 flex flex-wrap gap-1.5 text-xs">
           <PublisherBadge card={card} />
           {card.installed_server_id !== null && (
-            <span className="px-1.5 py-0.5 rounded bg-green-500/15 text-green-500 inline-flex items-center gap-1">
+            <span className="inline-flex items-center gap-1 rounded-md bg-nexus-success/10 px-1.5 py-px text-[11px] font-medium text-green-700 ring-1 ring-inset ring-nexus-success/25 dark:text-green-400">
               {card.status && <span role="img" aria-label={`Status: ${card.status}`} title={card.status} className={cn('w-1.5 h-1.5 rounded-full', STATUS_DOTS[card.status])} />}
               Installed
             </span>
@@ -134,43 +136,30 @@ export function MarketplacePage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-nexus-text">Marketplace</h1>
-          <p className="text-nexus-text-secondary mt-1">
-            Hosted MCP servers from verified publishers in the official MCP Registry. Installed servers give their tools to the agent and to workflows.
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button variant="secondary" className="gap-1.5" onClick={() => setImporting(true)}><Upload className="w-4 h-4" /> Import config</Button>
-          <Button variant="secondary" className="gap-1.5" onClick={() => setAdding(true)}><Plus className="w-4 h-4" /> Add custom server</Button>
-        </div>
-      </div>
+      <PageHeader title="Marketplace"
+        description="Hosted MCP servers from verified publishers in the official MCP Registry. Installed servers give their tools to the agent and to workflows."
+        actions={<>
+          <Button variant="secondary" size="sm" onClick={() => setImporting(true)}><Upload className="w-3.5 h-3.5" /> Import config</Button>
+          <Button variant="secondary" size="sm" onClick={() => setAdding(true)}><Plus className="w-3.5 h-3.5" /> Add custom server</Button>
+        </>} />
 
       <div className="space-y-3">
         <div className="flex flex-col sm:flex-row gap-2">
           <div className="relative flex-1">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-nexus-text-muted" />
-            <input value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Search servers" placeholder="Search servers"
-              className="w-full pl-9 pr-3 py-2 rounded-lg bg-nexus-bg-secondary border border-nexus-border text-nexus-text placeholder-nexus-text-muted focus:outline-none focus:ring-2 focus:ring-nexus-accent" />
+            <input value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Search servers" placeholder="Search apps: Notion, GitHub, Stripe…"
+              className={cn(fieldClass, 'pl-9')} />
           </div>
           <select value={sort} onChange={(e) => setSort(e.target.value as MarketSort)} aria-label="Sort"
-            className="px-3 py-2 rounded-lg bg-nexus-bg-secondary border border-nexus-border text-nexus-text">
+            className={cn(fieldClass, 'sm:w-48')}>
             <option value="relevance">Best match</option>
             <option value="updated">Recently updated</option>
           </select>
         </div>
         <div className="flex flex-wrap items-center gap-2 justify-between">
-          <div role="radiogroup" aria-label="Show" className="flex flex-wrap gap-1.5">
-            {KINDS.map(k => (
-              <button key={k.id} type="button" role="radio" aria-checked={kind === k.id} onClick={() => setKind(k.id)}
-                className={cn('px-3 py-1 rounded-full text-sm border', kind === k.id
-                  ? 'bg-nexus-accent text-white border-nexus-accent'
-                  : 'border-nexus-border text-nexus-text-secondary hover:text-nexus-text')}>
-                {k.label}
-              </button>
-            ))}
-            <label className="flex items-center gap-1.5 text-sm text-nexus-text-secondary ml-1"
+          <div className="flex flex-wrap items-center gap-3">
+            <SegmentedControl label="Show" value={kind} onChange={setKind} options={KINDS.map(k => ({ value: k.id, label: k.label }))} />
+            <label className="flex items-center gap-1.5 text-[13px] text-nexus-text-secondary"
               title="From the app maker's own verified domain (matched automatically)">
               <input type="checkbox" checked={official} onChange={(e) => setOfficial(e.target.checked)} />
               Official only
@@ -189,20 +178,20 @@ export function MarketplacePage() {
 
       {showFeatured && (
         <section aria-label="Featured" className="space-y-2">
-          <h2 className="text-sm font-semibold text-nexus-text">Featured</h2>
+          <h2 className="text-xs font-medium uppercase tracking-wider text-nexus-text-muted">Featured</h2>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {featured.map(card => <ServerCard key={card.name} card={card} onOpen={() => setSelected(card)} />)}
           </div>
-          <h2 className="text-sm font-semibold text-nexus-text pt-3">All servers</h2>
+          <h2 className="pt-4 text-xs font-medium uppercase tracking-wider text-nexus-text-muted">All servers</h2>
         </section>
       )}
 
       {items.length === 0 && !loading ? (
-        <p className="text-sm text-nexus-text-muted text-center py-10">
-          {status?.status === 'syncing' && status.count === 0
+        <EmptyState icon={kind === 'installed' ? Store : Search}
+          title={status?.status === 'syncing' && status.count === 0
             ? 'Downloading the MCP Registry for the first time…'
-            : kind === 'installed' ? 'No servers installed yet.' : 'No servers match.'}
-        </p>
+            : kind === 'installed' ? 'No servers installed yet' : 'No servers match'}
+          description={kind === 'installed' ? 'Install one from All to give the agent and workflows its tools.' : 'Try another name, or turn off "Official only".'} />
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {items.map(card => (
@@ -212,7 +201,7 @@ export function MarketplacePage() {
       )}
       {more && (
         <div className="text-center">
-          <Button variant="secondary" onClick={() => void load(items.length)} disabled={loading}>Load more</Button>
+          <Button variant="secondary" size="sm" onClick={() => void load(items.length)} disabled={loading}>Load more</Button>
         </div>
       )}
 

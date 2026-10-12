@@ -67,39 +67,34 @@ export function ChatArea({ className }: ChatAreaProps) {
   };
 
   return (
-    <div className={cn('relative flex flex-col h-full bg-nexus-bg-secondary border-nexus-border rounded-xl overflow-hidden', className)}>
-      <div className="p-4 border-b-nexus-border border-b flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-nexus-accent-dim flex items-center justify-center">
-            <Bot className="w-5 h-5 text-nexus-accent" />
-          </div>
-          <div>
-            <h2 className="font-semibold text-nexus-text">Nexus Agent</h2>
-            <p className="text-xs text-nexus-text-secondary">
-              {toolCount === null ? 'MCP tools unavailable' : (
-                <>{toolCount} tool(s) from <Link to="/servers" className="underline">your apps</Link></>
-              )}
-            </p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap justify-end">
+    <div className={cn('relative -mx-4 -my-4 flex h-[calc(100dvh-3.5rem)] flex-col lg:-mx-8 lg:-my-6', className)}>
+      <div className="flex items-center justify-between gap-3 border-b border-nexus-border px-4 py-2 lg:px-6">
+        <p className="hidden min-w-0 items-center gap-2 text-xs text-nexus-text-muted sm:flex">
+          <Bot className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          <span className="truncate">
+            {toolCount === null ? 'App tools unavailable' : (
+              <>{toolCount} tool(s) from <Link to="/servers">your apps</Link></>
+            )}
+          </span>
+        </p>
+        <div className="ml-auto flex items-center gap-1">
           {providers.length > 0 && (
             <select
               value={providerId ?? ''}
               onChange={(e) => setProviderId(e.target.value ? Number(e.target.value) : null)}
               aria-label="Language model"
-              className="max-w-[12rem] px-2 py-1.5 rounded-lg bg-nexus-bg-tertiary border border-nexus-border text-xs text-nexus-text focus:outline-none focus:ring-2 focus:ring-nexus-accent"
+              className="mr-1 h-8 max-w-[9rem] sm:max-w-[13rem] rounded-md border border-nexus-border bg-nexus-bg-secondary pl-2.5 text-xs text-nexus-text shadow-surface"
             >
               {providers.map(p => (
                 <option key={p.id} value={p.id}>{p.provider_name} · {p.model}</option>
               ))}
             </select>
           )}
-          <Button variant="ghost" size="sm" onClick={() => setHistoryOpen(o => !o)} aria-label="Conversations" title="Past conversations" aria-expanded={historyOpen}>
+          <Button variant="ghost" size="sm" className="w-8 px-0" onClick={() => setHistoryOpen(o => !o)} aria-label="Conversations" title="Past conversations" aria-expanded={historyOpen}>
             <History className="w-4 h-4" />
           </Button>
           <Button variant="ghost" size="sm" onClick={() => setSettingsOpen(true)} aria-label="Chat settings" title="Settings for this chat"
-            className={cn(customized && 'text-nexus-accent')}>
+            className={cn('w-8 px-0', customized && 'text-nexus-accent-text')}>
             <SlidersHorizontal className="w-4 h-4" />
           </Button>
           {sessionId && usedTools && (
@@ -111,7 +106,7 @@ export function ChatArea({ className }: ChatAreaProps) {
               className="gap-1.5"
               title="Save the tool calls from this conversation as a workflow you can re-run"
             >
-              <Workflow className="w-4 h-4" />
+              <Workflow className="w-3.5 h-3.5" />
               {converting ? 'Creating…' : 'Turn into workflow'}
             </Button>
           )}
@@ -120,10 +115,9 @@ export function ChatArea({ className }: ChatAreaProps) {
             size="sm"
             onClick={clearMessages}
             aria-label="Start a new conversation"
-            className="gap-1.5"
           >
-            <Plus className="w-4 h-4" />
-            New chat
+            <Plus className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">New chat</span>
           </Button>
         </div>
       </div>
@@ -141,19 +135,19 @@ export function ChatArea({ className }: ChatAreaProps) {
       <ChatSettingsModal open={settingsOpen} settings={settings} onSave={saveSettings} onClose={() => setSettingsOpen(false)} />
 
       {convertError && (
-        <div className="p-3 border-b-nexus-danger/30 border-b bg-red-500/5 text-sm text-nexus-danger">{convertError}</div>
+        <div className="border-b border-nexus-danger/30 bg-nexus-danger/5 px-6 py-2.5 text-[13px] text-nexus-danger">{convertError}</div>
       )}
       {error && (
-        <div className="p-3 border-b-nexus-danger/30 border-b bg-red-500/5">
+        <div className="border-b border-nexus-danger/30 bg-nexus-danger/5 px-6 py-2.5 text-[13px]">
           <div className="flex items-center gap-2 text-nexus-danger">
-            <AlertCircle className="w-5 h-5 flex-shrink-0" />
+            <AlertCircle className="w-4 h-4 flex-shrink-0" />
             <span>{error.message || error.toString() || 'Something went wrong'}</span>
           </div>
         </div>
       )}
 
-      {messages.length === 0 && <GettingStarted hasLLM={hasLLM} />}
       <MessageList
+        intro={<GettingStarted hasLLM={hasLLM} />}
         ref={messageListRef}
         messages={messages}
         onCopy={handleCopy}

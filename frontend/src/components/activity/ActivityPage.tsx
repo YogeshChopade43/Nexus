@@ -1,3 +1,4 @@
+import { PageHeader, SegmentedControl } from '../ui/PageHeader';
 import { useEffect, useState } from 'react';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
@@ -80,7 +81,7 @@ function ActivityCard({ activity }: { activity: Activity }) {
 
   return (
     <div className="flex gap-3 p-4 bg-nexus-bg-tertiary/40 border-nexus-border border rounded-lg">
-      <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${isError ? 'bg-nexus-danger/10 text-nexus-danger' : 'bg-nexus-accent-dim text-nexus-accent'}`}>
+      <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${isError ? 'bg-nexus-danger/10 text-nexus-danger' : 'bg-nexus-accent-dim text-nexus-accent-text'}`}>
         <Icon className="w-5 h-5" />
       </div>
       <div className="flex-1 min-w-0">
@@ -120,19 +121,13 @@ export function ActivityPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-nexus-text flex items-center gap-2">
-            <ActivityIcon className="w-6 h-6" />
-            Activity
-          </h1>
-          <p className="text-nexus-text-secondary mt-1">Monitor your workspace activity and events</p>
-        </div>
-        <Button variant="secondary" size="sm" onClick={() => void fetchRecent(50)} disabled={loading} className="gap-1.5">
-          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-          Refresh
-        </Button>
-      </div>
+      <PageHeader title="Activity" description="Everything that happened in your workspace: chats, approvals, workflow runs and app connections."
+        actions={
+          <Button variant="secondary" size="sm" onClick={() => void fetchRecent(50)} disabled={loading}>
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+            Refresh
+          </Button>
+        } />
 
       {error && (
         <Card className="p-4 border-nexus-danger/30 bg-red-500/5">
@@ -143,21 +138,18 @@ export function ActivityPage() {
         </Card>
       )}
 
-      <Card>
+      <Card padding="none">
         <div className="p-4 border-b-nexus-border border-b flex items-center justify-between gap-3 flex-wrap">
-          <div className="flex items-center gap-2 flex-wrap">
-            <Button variant={filter === 'all' ? 'primary' : 'secondary'} size="sm" onClick={() => setFilter('all')}>All</Button>
-            <Button variant={filter === 'messages' ? 'primary' : 'secondary'} size="sm" onClick={() => setFilter('messages')}>Messages</Button>
-            <Button variant={filter === 'apps' ? 'primary' : 'secondary'} size="sm" onClick={() => setFilter('apps')}>Apps</Button>
-            <Button variant={filter === 'workflows' ? 'primary' : 'secondary'} size="sm" onClick={() => setFilter('workflows')}>Workflows</Button>
-            <Button variant={filter === 'settings' ? 'primary' : 'secondary'} size="sm" onClick={() => setFilter('settings')}>Settings</Button>
-          </div>
-          <div className="text-sm text-nexus-text-muted">{activities.length} event(s)</div>
+          <SegmentedControl label="Show" value={filter} onChange={setFilter} options={[
+            { value: 'all', label: 'All' }, { value: 'messages', label: 'Messages' }, { value: 'apps', label: 'Apps' },
+            { value: 'workflows', label: 'Workflows' }, { value: 'settings', label: 'Settings' },
+          ]} />
+          <div className="text-xs text-nexus-text-muted">{activities.length} event(s)</div>
         </div>
 
         {loading && activities.length === 0 ? (
           <div className="h-[400px] flex items-center justify-center">
-            <RefreshCw className="w-8 h-8 animate-spin text-nexus-accent" />
+            <RefreshCw className="w-8 h-8 animate-spin text-nexus-accent-text" />
           </div>
         ) : visibleActivities.length === 0 ? (
           <div className="h-[400px] flex flex-col items-center justify-center text-center text-nexus-text-muted">

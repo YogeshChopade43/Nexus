@@ -34,3 +34,19 @@ export function matchTargets(targets: MentionTarget[], query: string, limit = 6)
   return [...hits.filter(t => t.label.toLowerCase().startsWith(q)), ...hits.filter(t => !t.label.toLowerCase().startsWith(q))]
     .slice(0, limit);
 }
+
+/** ``text`` cut into plain parts and "@Name" mentions of ``labels`` (any case, whole names only; longest name wins). */
+export function splitMentions(text: string, labels: string[]): Array<{ text: string; mention: boolean }> {
+  const names = [...new Set(labels.filter(Boolean))].sort((a, b) => b.length - a.length)
+    .map(label => label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  if (!names.length || !text.includes('@')) return [{ text, mention: false }];
+  const parts: Array<{ text: string; mention: boolean }> = [];
+  let last = 0;
+  for (const match of text.matchAll(new RegExp(`@(?:${names.join('|')})(?![\\w])`, 'gi'))) {
+    if (match.index > last) parts.push({ text: text.slice(last, match.index), mention: false });
+    parts.push({ text: match[0], mention: true });
+    last = match.index + match[0].length;
+  }
+  if (last < text.length) parts.push({ text: text.slice(last), mention: false });
+  return parts;
+}

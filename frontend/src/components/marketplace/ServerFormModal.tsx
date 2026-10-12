@@ -1,3 +1,4 @@
+import { fieldClass as inputClass } from '../ui/Input';
 import { useEffect, useState } from 'react';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
@@ -5,8 +6,7 @@ import { cn, getErrorMessage } from '../../lib/utils';
 import { mcpService } from '../../services/mcp';
 import type { McpServer, McpServerInput } from '../../types/mcp';
 
-export const inputClass =
-  'w-full px-3 py-2 rounded-lg bg-nexus-bg-tertiary border border-nexus-border text-sm text-nexus-text focus:outline-none focus:ring-2 focus:ring-nexus-accent';
+export { fieldClass as inputClass } from '../ui/Input';
 
 /** "Name: value" lines <-> object. Masked values ("***") round-trip so stored secrets are kept. */
 function fromLines(text: string): Record<string, string> {

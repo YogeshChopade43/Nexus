@@ -1,3 +1,4 @@
+import { fieldClass as inputClass } from '../ui/Input';
 import { useCallback, useEffect, useRef, useState, type DragEvent, type FormEvent } from 'react';
 import { FileText, Pencil, RotateCcw, Search, Trash2, Upload } from 'lucide-react';
 import { Button } from '../ui/Button';
@@ -6,8 +7,6 @@ import { ragService, settled } from '../../services/rag';
 import type { Library, Passage, RagDocument } from '../../types/rag';
 
 export const ACCEPT = '.pdf,.docx,.xlsx,.txt,.md,.csv,.json,.html,.htm,.log,.yaml,.yml,.xml,text/*,application/pdf';
-const inputClass =
-  'w-full px-3 py-2 rounded-lg bg-nexus-bg-tertiary border border-nexus-border text-sm text-nexus-text focus:outline-none focus:ring-2 focus:ring-nexus-accent';
 
 function StatusBadge({ doc }: { doc: RagDocument }) {
   const styles: Record<string, string> = {

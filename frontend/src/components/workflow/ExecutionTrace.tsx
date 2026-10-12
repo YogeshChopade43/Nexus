@@ -39,13 +39,13 @@ export function ExecutionTrace({ trace, autoScroll = true }: ExecutionTraceProps
       case 'start':
         return <div className="w-4 h-4 rounded-full bg-nexus-info animate-pulse" />;
       case 'complete':
-        return <CheckCircle className="w-4 h-4 text-nexus-accent" />;
+        return <CheckCircle className="w-4 h-4 text-nexus-accent-text" />;
       case 'error':
         return <XCircle className="w-4 h-4 text-nexus-danger" />;
       case 'conditional':
         return <ChevronRight className="w-4 h-4 text-nexus-warning" />;
       case 'tool_executed':
-        return <Wrench className="w-4 h-4 text-nexus-accent" />;
+        return <Wrench className="w-4 h-4 text-nexus-accent-text" />;
       default:
         return <Clock className="w-4 h-4 text-nexus-text-muted" />;
     }
@@ -86,7 +86,7 @@ export function ExecutionTrace({ trace, autoScroll = true }: ExecutionTraceProps
   }
 
   return (
-    <Card className="h-full flex flex-col">
+    <Card padding="none" className="h-full flex flex-col">
       <div className="p-4 border-b-nexus-border border-b">
         <h3 className="font-semibold text-nexus-text flex items-center gap-2">
           <Clock className="w-5 h-5" />

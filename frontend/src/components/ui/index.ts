@@ -7,3 +7,4 @@ export * from './ScrollArea';
 export * from './Tooltip';
 export * from './Dropdown';
 export * from './Modal';
+export * from './PageHeader';

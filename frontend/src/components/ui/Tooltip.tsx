@@ -1,6 +1,5 @@
-import { ReactNode, useState, useRef, useEffect } from 'react';
+import { ReactNode, useState, useRef, useEffect, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
-import { cn } from '../../lib/utils';
 
 interface TooltipProps {
   content: ReactNode;
@@ -9,65 +8,46 @@ interface TooltipProps {
   delay?: number;
 }
 
-export function Tooltip({ content, children, position = 'top', delay = 200 }: TooltipProps) {
-  const [visible, setVisible] = useState(false);
+const GAP = 6;  // px between the element and the tooltip
+
+/** A small label shown on hover or keyboard focus, placed beside the element (drawn on <body>, so nothing clips it). */
+export function Tooltip({ content, children, position = 'top', delay = 300 }: TooltipProps) {
+  const [style, setStyle] = useState<CSSProperties | null>(null);
+  const anchorRef = useRef<HTMLSpanElement>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout>>();
 
   const show = () => {
-    timeoutRef.current = setTimeout(() => setVisible(true), delay);
+    timeoutRef.current = setTimeout(() => {
+      const rect = anchorRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const placements: Record<string, CSSProperties> = {
+        top: { left: rect.left + rect.width / 2, top: rect.top - GAP, transform: 'translate(-50%, -100%)' },
+        bottom: { left: rect.left + rect.width / 2, top: rect.bottom + GAP, transform: 'translateX(-50%)' },
+        left: { left: rect.left - GAP, top: rect.top + rect.height / 2, transform: 'translate(-100%, -50%)' },
+        right: { left: rect.right + GAP, top: rect.top + rect.height / 2, transform: 'translateY(-50%)' },
+      };
+      setStyle(placements[position]);
+    }, delay);
   };
 
   const hide = () => {
     clearTimeout(timeoutRef.current);
-    setVisible(false);
+    setStyle(null);
   };
 
-  useEffect(() => {
-    return () => clearTimeout(timeoutRef.current);
-  }, []);
-
-  const positions = {
-    top: 'bottom-full left-1/2 -translate-x-1/2 mb-2',
-    bottom: 'top-full left-1/2 -translate-x-1/2 mt-2',
-    left: 'right-full top-1/2 -translate-y-1/2 mr-2',
-    right: 'left-full top-1/2 -translate-y-1/2 ml-2',
-  };
-
-  const arrows = {
-    top: 'top-full left-1/2 -translate-x-1/2 border-t-nexus-bg-tertiary',
-    bottom: 'bottom-full left-1/2 -translate-x-1/2 border-b-nexus-bg-tertiary',
-    left: 'left-full top-1/2 -translate-y-1/2 border-l-nexus-bg-tertiary',
-    right: 'right-full top-1/2 -translate-y-1/2 border-r-nexus-bg-tertiary',
-  };
+  useEffect(() => () => clearTimeout(timeoutRef.current), []);
 
   return (
     <>
-      <span
-        className="relative inline-block"
-        onMouseEnter={show}
-        onMouseLeave={hide}
-        onFocus={show}
-        onBlur={hide}
-      >
+      <span ref={anchorRef} className="relative inline-flex" onMouseEnter={show} onMouseLeave={hide} onFocus={show} onBlur={hide}>
         {children}
       </span>
-      {visible && createPortal(
-        <div
-          className={cn(
-            'fixed z-50 px-3 py-1.5 text-xs font-medium text-nexus-text bg-nexus-bg-tertiary border-nexus-border rounded-lg shadow-lg whitespace-nowrap animate-fade-in',
-            positions[position]
-          )}
-          role="tooltip"
-        >
+      {style && createPortal(
+        <div style={{ position: 'fixed', ...style }} role="tooltip"
+          className="z-[90] px-2 py-1 text-xs font-medium text-nexus-text bg-nexus-bg-secondary border border-nexus-border rounded-md shadow-pop whitespace-nowrap pointer-events-none animate-fade-in">
           {content}
-          <div
-            className={cn(
-              'absolute w-0 h-0 border-4 border-transparent',
-              arrows[position]
-            )}
-          />
         </div>,
-        document.body
+        document.body,
       )}
     </>
   );

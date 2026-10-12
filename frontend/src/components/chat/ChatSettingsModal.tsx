@@ -72,7 +72,7 @@ export function ChatSettingsModal({ open, settings, onSave, onClose }: Props) {
           <select
             value={draft.library_id ?? ''}
             onChange={(e) => setDraft({ ...draft, library_id: e.target.value ? Number(e.target.value) : null })}
-            className="w-full rounded-lg p-2 text-sm text-nexus-text bg-nexus-bg-tertiary border border-nexus-border focus:outline-none focus:ring-2 focus:ring-nexus-accent"
+            className="w-full rounded-lg p-2 text-sm text-nexus-text bg-nexus-bg-tertiary border border-nexus-border focus:outline-none focus:ring-2 focus:ring-nexus-accent/25"
           >
             <option value="">None</option>
             {libraries.map(l => <option key={l.id} value={l.id}>{l.name} ({l.ready} documents)</option>)}
@@ -87,7 +87,7 @@ export function ChatSettingsModal({ open, settings, onSave, onClose }: Props) {
             maxLength={4000}
             value={draft.instructions}
             onChange={(e) => setDraft({ ...draft, instructions: e.target.value })}
-            className="w-full rounded-lg p-2 text-sm text-nexus-text bg-nexus-bg-tertiary border border-nexus-border focus:outline-none focus:ring-2 focus:ring-nexus-accent"
+            className="w-full rounded-lg p-2 text-sm text-nexus-text bg-nexus-bg-tertiary border border-nexus-border focus:outline-none focus:ring-2 focus:ring-nexus-accent/25"
           />
         </label>
 

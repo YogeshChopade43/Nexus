@@ -1,3 +1,4 @@
+import { NodeTile } from './NodeTile';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ChevronDown, ChevronRight, Search, X } from 'lucide-react';
@@ -10,16 +11,16 @@ export type PickedAction =
   | { type: Exclude<WorkflowNodeType, 'trigger' | 'action' | 'output'>; name: string }
   | { type: 'action'; name: string; tool: string };
 
-export const BUILT_INS: Array<{ type: Exclude<WorkflowNodeType, 'trigger' | 'action' | 'output'>; name: string; description: string; icon: string }> = [
-  { type: 'llm', name: 'AI prompt', description: 'Ask the language model to write, summarize or decide', icon: '✨' },
-  { type: 'condition', name: 'Condition', description: 'Do different things depending on a value', icon: '🔀' },
-  { type: 'transform', name: 'Compose', description: 'Build text or JSON from earlier steps', icon: '🔄' },
-  { type: 'delay', name: 'Delay', description: 'Wait before continuing', icon: '⏱️' },
-  { type: 'loop', name: 'For each', description: 'Repeat steps for every item in a list', icon: '🔁' },
-  { type: 'parallel', name: 'Parallel branches', description: 'Run several sets of steps at the same time', icon: '🔀' },
-  { type: 'http', name: 'HTTP request', description: 'Call any web API (GET, POST, …)', icon: '🌐' },
-  { type: 'code', name: 'Code (JavaScript)', description: 'Reshape data with a small sandboxed script', icon: '🧩' },
-  { type: 'workflow', name: 'Run a workflow', description: 'Call another workflow and use its result', icon: '🧭' },
+export const BUILT_INS: Array<{ type: Exclude<WorkflowNodeType, 'trigger' | 'action' | 'output'>; name: string; description: string }> = [
+  { type: 'llm', name: 'AI prompt', description: 'Ask the language model to write, summarize or decide' },
+  { type: 'condition', name: 'Condition', description: 'Do different things depending on a value' },
+  { type: 'transform', name: 'Compose', description: 'Build text or JSON from earlier steps' },
+  { type: 'delay', name: 'Delay', description: 'Wait before continuing' },
+  { type: 'loop', name: 'For each', description: 'Repeat steps for every item in a list' },
+  { type: 'parallel', name: 'Parallel branches', description: 'Run several sets of steps at the same time' },
+  { type: 'http', name: 'HTTP request', description: 'Call any web API (GET, POST, …)' },
+  { type: 'code', name: 'Code (JavaScript)', description: 'Reshape data with a small sandboxed script' },
+  { type: 'workflow', name: 'Run a workflow', description: 'Call another workflow and use its result' },
 ];
 
 interface ActionPickerProps {
@@ -50,7 +51,7 @@ function ToolButton({ entry, onPick }: { entry: ToolEntry; onPick: () => void })
       type="button"
       onClick={onPick}
       title={entry.tool.remote_name}
-      className="w-full text-left px-2.5 py-2 rounded-md hover:bg-nexus-bg-tertiary focus:outline-none focus:ring-2 focus:ring-nexus-accent"
+      className="w-full text-left px-2.5 py-2 rounded-md hover:bg-nexus-bg-tertiary focus:outline-none focus:ring-2 focus:ring-nexus-accent/25"
     >
       <span className="block text-sm text-nexus-text">{entry.label}</span>
       {entry.summary && <span className="block text-xs text-nexus-text-muted line-clamp-2 mt-0.5">{entry.summary}</span>}
@@ -76,7 +77,7 @@ export function ActionPicker({ servers, onPick, onClose, toolsOnly }: ActionPick
   });
 
   return (
-    <div className="rounded-lg border border-nexus-border bg-nexus-bg-secondary shadow-lg p-3 space-y-3" role="dialog" aria-label="Choose an operation">
+    <div className="rounded-lg border border-nexus-border bg-nexus-bg-secondary shadow-pop p-3 space-y-3" role="dialog" aria-label="Choose an operation">
       <div className="flex items-center gap-2">
         <div className="relative flex-1">
           <Search className="w-4 h-4 absolute left-2.5 top-1/2 -translate-y-1/2 text-nexus-text-muted" />
@@ -86,7 +87,7 @@ export function ActionPicker({ servers, onPick, onClose, toolsOnly }: ActionPick
             onChange={(e) => setQuery(e.target.value)}
             placeholder={toolsOnly ? 'Search app operations' : 'Search apps and actions'}
             aria-label={toolsOnly ? 'Search app operations' : 'Search apps and actions'}
-            className="w-full pl-8 pr-3 py-2 rounded-lg bg-nexus-bg-tertiary border border-nexus-border text-sm text-nexus-text focus:outline-none focus:ring-2 focus:ring-nexus-accent"
+            className="w-full pl-8 pr-3 py-2 rounded-lg bg-nexus-bg-tertiary border border-nexus-border text-sm text-nexus-text focus:outline-none focus:ring-2 focus:ring-nexus-accent/25"
           />
         </div>
         <button type="button" onClick={onClose} aria-label="Close" className="text-nexus-text-muted hover:text-nexus-text"><X className="w-4 h-4" /></button>
@@ -99,7 +100,7 @@ export function ActionPicker({ servers, onPick, onClose, toolsOnly }: ActionPick
             <div className="grid gap-1 sm:grid-cols-2">
               {builtIns.map(b => (
                 <button key={b.type} type="button" onClick={() => onPick({ type: b.type, name: b.name })} className="text-left p-2 rounded hover:bg-nexus-bg-tertiary">
-                  <div className="text-sm text-nexus-text">{b.icon} {b.name}</div>
+                  <div className="flex items-center gap-2 text-[13px] font-medium text-nexus-text"><NodeTile type={b.type} size="sm" /> {b.name}</div>
                   <div className="text-xs text-nexus-text-muted">{b.description}</div>
                 </button>
               ))}

@@ -80,14 +80,14 @@ export function ConversationPanel({ sessions, currentId, onSearch, onOpen, onDel
   });
 
   return (
-    <div className="absolute right-4 top-16 z-20 w-80 max-w-[calc(100%-2rem)] rounded-xl border border-nexus-border bg-nexus-bg-secondary shadow-lg"
+    <div className="absolute right-4 top-16 z-20 w-80 max-w-[calc(100%-2rem)] rounded-xl border border-nexus-border bg-nexus-bg-secondary shadow-pop"
       role="dialog" aria-label="Conversations">
       <div className="p-2 flex items-center gap-2 border-b border-nexus-border">
         <div className="relative flex-1">
           <Search className="w-4 h-4 absolute left-2.5 top-1/2 -translate-y-1/2 text-nexus-text-muted" />
           <input autoFocus value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search conversations"
             aria-label="Search conversations"
-            className="w-full pl-8 pr-2 py-1.5 rounded-lg bg-nexus-bg-tertiary border border-nexus-border text-sm text-nexus-text focus:outline-none focus:ring-2 focus:ring-nexus-accent" />
+            className="w-full pl-8 pr-2 py-1.5 rounded-lg bg-nexus-bg-tertiary border border-nexus-border text-sm text-nexus-text focus:outline-none focus:ring-2 focus:ring-nexus-accent/25" />
         </div>
         <button type="button" onClick={() => setSelected(s => (s ? null : new Set()))}
           className="text-xs text-nexus-text-secondary hover:text-nexus-text">{selected ? 'Cancel' : 'Select'}</button>
@@ -109,12 +109,12 @@ export function ConversationPanel({ sessions, currentId, onSearch, onOpen, onDel
                   onChange={(e) => setRenaming({ id: s.session_id, title: e.target.value })}
                   onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') { cancelRename.current = true; e.currentTarget.blur(); } }}
                   onBlur={saveTitle}
-                  className="flex-1 min-w-0 mx-1 px-2 py-1.5 rounded-lg bg-nexus-bg-tertiary border border-nexus-border text-sm text-nexus-text focus:outline-none focus:ring-2 focus:ring-nexus-accent" />
+                  className="flex-1 min-w-0 mx-1 px-2 py-1.5 rounded-lg bg-nexus-bg-tertiary border border-nexus-border text-sm text-nexus-text focus:outline-none focus:ring-2 focus:ring-nexus-accent/25" />
               ) : (
                 <button type="button" onClick={() => (selected ? toggle(s.session_id) : onOpen(s.session_id))}
                   className={cn('flex-1 min-w-0 text-left px-2.5 py-2 rounded-lg hover:bg-nexus-bg-tertiary', s.session_id === currentId && 'bg-nexus-accent-dim')}>
                   <span className="flex items-center gap-1.5 text-sm text-nexus-text">
-                    {pinned && <Pin role="img" aria-label="Pinned" className="w-3 h-3 shrink-0 text-nexus-accent" />}
+                    {pinned && <Pin role="img" aria-label="Pinned" className="w-3 h-3 shrink-0 text-nexus-accent-text" />}
                     <span className="truncate">{nameOf(s)}</span>
                   </span>
                   <span className="block text-xs text-nexus-text-muted">{formatRelativeTime(s.updated_at)}</span>

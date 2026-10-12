@@ -1,3 +1,5 @@
+import { fieldClass as inputClass } from '../ui/Input';
+import { PageHeader } from '../ui/PageHeader';
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { BookOpen, Brain, Loader2, Plus, Trash2 } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/Card';
@@ -10,8 +12,6 @@ import { LibraryPanel } from './LibraryPanel';
 import type { Memory } from '../../types/knowledge';
 import type { Library, RagStatus } from '../../types/rag';
 
-const inputClass =
-  'w-full px-3 py-2 rounded-lg bg-nexus-bg-tertiary border border-nexus-border text-sm text-nexus-text focus:outline-none focus:ring-2 focus:ring-nexus-accent';
 
 export function KnowledgePage() {
   const [libraries, setLibraries] = useState<Library[]>([]);
@@ -83,16 +83,11 @@ export function KnowledgePage() {
 
   return (
     <div className="space-y-6 max-w-5xl">
-      <div>
-        <h1 className="text-2xl font-bold text-nexus-text">Knowledge</h1>
-        <p className="text-nexus-text-secondary mt-1">
-          Libraries of documents the agent searches and cites, and facts it remembers across chats.
-        </p>
-      </div>
+      <PageHeader title="Knowledge" description="Libraries of documents the agent searches and cites, and facts it remembers across chats." />
       {error && <p className="text-sm text-nexus-danger whitespace-pre-line" role="alert">{error}</p>}
       {waiting && (
         <p className="flex items-center gap-2 text-sm text-nexus-text-secondary rounded-lg border border-nexus-border p-3" role="status">
-          <Loader2 className="w-4 h-4 animate-spin text-nexus-accent" />
+          <Loader2 className="w-4 h-4 animate-spin text-nexus-accent-text" />
           Preparing the search model (first time only, about 220 MB). Your documents will be processed right after.
         </p>
       )}
@@ -118,7 +113,7 @@ export function KnowledgePage() {
                   <li key={library.id}>
                     <button type="button" onClick={() => setSelected(library.id)} aria-current={library.id === selected}
                       className={cn('w-full text-left px-3 py-2 rounded-lg text-sm',
-                        library.id === selected ? 'bg-nexus-accent-dim text-nexus-accent' : 'text-nexus-text-secondary hover:bg-nexus-bg-tertiary')}>
+                        library.id === selected ? 'bg-nexus-accent-dim text-nexus-accent-text' : 'text-nexus-text-secondary hover:bg-nexus-bg-tertiary')}>
                       <span className="block truncate">{library.name}</span>
                       <span className="block text-xs text-nexus-text-muted">{library.ready} of {library.documents} ready</span>
                     </button>
@@ -128,7 +123,7 @@ export function KnowledgePage() {
               <form onSubmit={(e) => void createLibrary(e)} className="flex gap-1.5">
                 <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="New library" maxLength={100}
                   aria-label="New library name" className={inputClass} />
-                <Button type="submit" variant="secondary" size="sm" aria-label="Create library" disabled={!newName.trim()}>
+                <Button type="submit" variant="secondary" size="sm" className="h-9 w-9 shrink-0 px-0" aria-label="Create library" disabled={!newName.trim()}>
                   <Plus className="w-4 h-4" />
                 </Button>
               </form>

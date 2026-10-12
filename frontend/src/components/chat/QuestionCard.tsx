@@ -40,9 +40,9 @@ export function QuestionCard({ questions, onSubmit, disabled }: {
         return (
           <fieldset key={q.question} className="space-y-2">
             <legend className="flex items-start gap-2 font-medium text-nexus-text">
-              <MessageCircleQuestion className="w-4 h-4 mt-0.5 text-nexus-accent flex-shrink-0" aria-hidden />
+              <MessageCircleQuestion className="w-4 h-4 mt-0.5 text-nexus-accent-text flex-shrink-0" aria-hidden />
               <span>
-                {q.header && <span className="mr-2 px-1.5 py-0.5 rounded bg-nexus-accent/15 text-nexus-accent text-xs font-semibold">{q.header}</span>}
+                {q.header && <span className="mr-2 px-1.5 py-0.5 rounded bg-nexus-accent/15 text-nexus-accent-text text-xs font-semibold">{q.header}</span>}
                 {q.question}
                 {q.multi_select && <span className="ml-1 text-xs font-normal text-nexus-text-muted">(pick any)</span>}
               </span>
@@ -69,7 +69,7 @@ export function QuestionCard({ questions, onSubmit, disabled }: {
                 onChange={(e) => setOther(prev => ({ ...prev, [q.question]: e.target.value }))}
                 onKeyDown={(e) => { if (e.key === 'Enter' && complete) { e.preventDefault(); submit(); } }}
                 placeholder="Type your answer"
-                className="w-full px-3 py-2 rounded-lg bg-nexus-bg-tertiary border border-nexus-border text-nexus-text focus:outline-none focus:ring-2 focus:ring-nexus-accent" />
+                className="w-full px-3 py-2 rounded-lg bg-nexus-bg-tertiary border border-nexus-border text-nexus-text focus:outline-none focus:ring-2 focus:ring-nexus-accent/25" />
             )}
           </fieldset>
         );
@@ -87,7 +87,7 @@ export function AnsweredQuestions({ answers }: { answers: QuestionAnswers }) {
     <ul className="mb-2 space-y-0.5 text-xs text-nexus-text-secondary" aria-label="Your answers">
       {Object.entries(answers).map(([question, answer]) => (
         <li key={question} className="flex gap-1.5">
-          <MessageCircleQuestion className="w-3.5 h-3.5 mt-0.5 text-nexus-accent flex-shrink-0" aria-hidden />
+          <MessageCircleQuestion className="w-3.5 h-3.5 mt-0.5 text-nexus-accent-text flex-shrink-0" aria-hidden />
           <span>{question} <span className="text-nexus-text">→ {Array.isArray(answer) ? answer.join(', ') : answer}</span></span>
         </li>
       ))}

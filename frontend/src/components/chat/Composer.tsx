@@ -1,10 +1,11 @@
 import { useState, useRef, useEffect, KeyboardEvent } from 'react';
 import { Button } from '../ui/Button';
-import { AppWindow, FileText, Paperclip, Send, Square, X } from 'lucide-react';
+import { AppWindow, FileText, Paperclip, ArrowUp, Square, X } from 'lucide-react';
 import { Textarea } from '../ui/Input';
 import type { ChatAttachment } from '../../types/chat';
 import { cn } from '../../lib/utils';
-import { matchTargets, mentionAt, mentionTargets, type MentionTarget } from './mentions';
+import { matchTargets, mentionAt, mentionTargets, splitMentions, type MentionTarget } from './mentions';
+import { MentionText } from './MentionText';
 
 const MAX_FILES = 10;
 const MAX_FILE_BYTES = 20_000_000;
@@ -34,6 +35,10 @@ export function Composer({ onSend, disabled, placeholder = 'Message Agent...', m
   const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
   const [active, setActive] = useState(0);
   const options = mention ? matchTargets(targets, mention.query) : [];
+  // Mentions are drawn by a copy of the text behind the (then transparent) textarea, which can't colour words itself.
+  const labels = targets.map(t => t.label);
+  const highlighted = splitMentions(value, labels).some(part => part.mention);
+  const mirrorRef = useRef<HTMLDivElement>(null);
 
   const change = (text: string, caret: number) => {
     setValue(text);
@@ -116,9 +121,10 @@ export function Composer({ onSend, disabled, placeholder = 'Message Agent...', m
   const charsRemaining = maxLength - value.length;
 
   return (
-    <div className="bg-nexus-bg-secondary border-t-nexus-border border-t p-4">
+    <div className="mx-auto w-full max-w-3xl px-4 pb-4 pt-2 lg:px-6">
+      <div className="rounded-xl border border-nexus-border bg-nexus-bg-secondary shadow-surface transition-[border-color,box-shadow] focus-within:border-nexus-accent/60 focus-within:ring-2 focus-within:ring-nexus-accent/15">
       {(files.length > 0 || fileError) && (
-        <div className="flex flex-wrap items-center gap-2 mb-2">
+        <div className="flex flex-wrap items-center gap-2 px-3 pt-3">
           {files.map((file, i) => (
             <span key={i} className="inline-flex items-center gap-1 px-2 py-1 rounded bg-nexus-bg-tertiary text-xs text-nexus-text-secondary">
               <Paperclip className="w-3 h-3" />
@@ -131,30 +137,19 @@ export function Composer({ onSend, disabled, placeholder = 'Message Agent...', m
           {fileError && <span className="text-xs text-nexus-danger">{fileError}</span>}
         </div>
       )}
-      <div className="flex items-end gap-2">
+      <div className="relative">
         <input ref={fileInputRef} type="file" multiple hidden accept=".pdf,.txt,.md,.csv,.json,.log,.yaml,.yml,.xml,.html,.py,.ts,.tsx,.js,.sql,text/*,application/pdf"
           onChange={(e) => void addFiles(e.target.files)} />
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-10 w-10 p-0 flex-shrink-0"
-          onClick={() => fileInputRef.current?.click()}
-          disabled={disabled || files.length >= MAX_FILES}
-          aria-label="Attach files"
-          title="Attach text files or PDFs (big ones go to the knowledge base)"
-        >
-          <Paperclip className="w-5 h-5" />
-        </Button>
-        <div className="flex-1 relative">
+        <div className="relative">
           {options.length > 0 && (
             <ul role="listbox" aria-label="Mention an app or document"
-              className="absolute bottom-full mb-2 left-0 w-full max-w-sm rounded-lg border border-nexus-border bg-nexus-bg-secondary shadow-lg py-1 z-20">
+              className="absolute bottom-full mb-2 left-0 w-full max-w-sm rounded-lg border border-nexus-border bg-nexus-bg-secondary shadow-pop p-1 z-20">
               {options.map((target, i) => {
                 const Icon = target.kind === 'app' ? AppWindow : FileText;
                 return (
                   <li key={`${target.kind}-${target.label}`} role="option" aria-selected={i === active}
                     onMouseDown={(e) => e.preventDefault()} onClick={() => pick(target)}
-                    className={cn('flex items-center gap-2 px-3 py-1.5 text-sm cursor-pointer',
+                    className={cn('flex h-8 items-center gap-2 rounded-md px-2 text-[13px] cursor-pointer',
                       i === active ? 'bg-nexus-bg-tertiary text-nexus-text' : 'text-nexus-text-secondary')}>
                     <Icon className="w-4 h-4 flex-shrink-0" aria-hidden />
                     <span className="truncate">{target.label}</span>
@@ -164,44 +159,66 @@ export function Composer({ onSend, disabled, placeholder = 'Message Agent...', m
               })}
             </ul>
           )}
+          {highlighted && (
+            <div ref={mirrorRef} aria-hidden
+              className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words px-3.5 pt-3 pb-1 text-sm text-nexus-text">
+              <MentionText text={value} labels={labels} />{'\n' /* a trailing newline still takes a line, as in the textarea */}
+            </div>
+          )}
           <Textarea
             ref={textareaRef}
             value={value}
+            onScroll={(e) => { if (mirrorRef.current) mirrorRef.current.scrollTop = e.currentTarget.scrollTop; }}
             onChange={(e) => change(e.target.value, e.target.selectionStart ?? e.target.value.length)}
             onKeyDown={handleKeyDown}
             placeholder={placeholder}
             disabled={disabled}
             rows={1}
-            className="resize-none pr-12 min-h-[44px] max-h-[160px] bg-nexus-bg-tertiary border-nexus-border focus:border-nexus-accent focus:ring-nexus-accent"
+            className={cn('relative block resize-none min-h-[52px] max-h-[200px] border-0 bg-transparent px-3.5 pt-3 pb-1 shadow-none hover:border-0 focus:ring-0',
+              highlighted && 'text-transparent caret-nexus-text')}
             aria-label="Message input"
             aria-describedby={charsRemaining < 100 ? 'char-count' : undefined}
           />
           {charsRemaining < 100 && (
-            <span id="char-count" className="absolute bottom-2 right-10 text-xs text-nexus-text-muted">
+            <span id="char-count" className="absolute bottom-1 right-3 text-xs text-nexus-text-muted">
               {charsRemaining}
             </span>
           )}
         </div>
+      </div>
 
+      <div className="flex items-center gap-2 px-2 pb-2">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="w-8 px-0"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={disabled || files.length >= MAX_FILES}
+          aria-label="Attach files"
+          title="Attach text files or PDFs (big ones go to the knowledge base)"
+        >
+          <Paperclip className="w-4 h-4" />
+        </Button>
+        <span className="hidden min-w-0 flex-1 truncate text-[11px] text-nexus-text-muted sm:block">
+          Enter to send · Shift+Enter for a new line · @ to mention an app or document
+        </span>
+        <span className="flex-1 sm:hidden" />
         {running && onStop ? (
-          <Button onClick={onStop} size="sm" variant="secondary" className="h-10 w-10 p-0 flex-shrink-0" aria-label="Stop" title="Stop">
-            <Square className="w-4 h-4 fill-current" />
+          <Button onClick={onStop} size="sm" variant="secondary" className="w-8 px-0" aria-label="Stop" title="Stop">
+            <Square className="w-3.5 h-3.5 fill-current" />
           </Button>
         ) : (
           <Button
             onClick={handleSubmit}
             disabled={disabled || (!value.trim() && files.length === 0)}
             size="sm"
-            className="h-10 w-10 p-0 flex-shrink-0"
+            className="w-8 px-0"
             aria-label="Send message"
           >
-            <Send className="w-5 h-5" />
+            <ArrowUp className="w-4 h-4" />
           </Button>
         )}
       </div>
-
-      <div className="flex items-center justify-between mt-2 text-xs text-nexus-text-muted">
-        <span>Enter to send · Shift+Enter for a new line · @ to mention an app or document</span>
       </div>
     </div>
   );

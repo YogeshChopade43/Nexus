@@ -48,3 +48,22 @@ test('Escape closes the suggestions', async () => {
   fireEvent.keyDown(input, { key: 'Escape' });
   expect(screen.queryByRole('listbox')).toBeNull();
 });
+
+test('mentions are split out by name, ignoring case, only as whole names', async () => {
+  const { splitMentions } = await import('./mentions');
+  expect(splitMentions('Ask @github and @GitHub Actions about @githubber', ['GitHub', 'GitHub Actions'])).toEqual([
+    { text: 'Ask ', mention: false }, { text: '@github', mention: true }, { text: ' and ', mention: false },
+    { text: '@GitHub Actions', mention: true }, { text: ' about @githubber', mention: false },
+  ]);
+  expect(splitMentions('no mentions', ['GitHub'])).toEqual([{ text: 'no mentions', mention: false }]);
+});
+
+test('a picked app is highlighted in the message box', async () => {
+  serve();
+  render(<Composer onSend={() => {}} />);
+  const input = type('Summarise @no');
+  await screen.findByRole('option', { name: /Notion/ });
+  fireEvent.keyDown(input, { key: 'Enter' });
+  const mark = await screen.findByText('@Notion', { selector: 'mark' });
+  expect(mark).toHaveAttribute('data-mention');
+});

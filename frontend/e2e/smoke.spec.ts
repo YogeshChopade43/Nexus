@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test';
 // One journey through a fresh Nexus: build and run a workflow, use the server catalog.
 test('run a workflow and use the server catalog', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: 'Nexus Agent' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'How can I help?' })).toBeVisible();
 
   // Workflows: create one through the API, run it from the list.
   const created = await page.request.post('http://localhost:8765/api/workflows', {

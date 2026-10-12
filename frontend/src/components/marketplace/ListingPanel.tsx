@@ -57,8 +57,8 @@ export function ListingPanel({ card, onClose, onChanged }: { card: MarketCard; o
           {card.description && <p className="text-sm text-nexus-text-secondary">{card.description}</p>}
           {item && (item.repository_url || item.website_url) && (
             <div className="flex flex-wrap gap-3 text-xs">
-              {item.repository_url && <a href={item.repository_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-nexus-accent hover:underline">Source <ExternalLink className="w-3 h-3" /></a>}
-              {item.website_url && <a href={item.website_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-nexus-accent hover:underline">Website <ExternalLink className="w-3 h-3" /></a>}
+              {item.repository_url && <a href={item.repository_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-nexus-accent-text hover:underline">Source <ExternalLink className="w-3 h-3" /></a>}
+              {item.website_url && <a href={item.website_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-nexus-accent-text hover:underline">Website <ExternalLink className="w-3 h-3" /></a>}
             </div>
           )}
         </div>

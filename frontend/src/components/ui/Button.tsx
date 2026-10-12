@@ -9,19 +9,23 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
   ({ className, variant = 'primary', size = 'md', loading, disabled, children, ...props }, ref) => {
-    const baseStyles = 'inline-flex items-center justify-center gap-2 font-medium rounded-lg transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-nexus-bg disabled:opacity-50 disabled:cursor-not-allowed';
+    // shadcn/ui recipe: compact, hairline-bordered secondary, quiet ghost, visible keyboard focus.
+    const baseStyles = 'inline-flex items-center justify-center gap-1.5 whitespace-nowrap font-medium rounded-md select-none '
+      + 'transition-[background-color,border-color,color,box-shadow,transform] duration-150 active:scale-[0.98] '
+      + 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nexus-accent/60 focus-visible:ring-offset-1 focus-visible:ring-offset-nexus-bg '
+      + 'disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100';
 
     const variants = {
-      primary: 'bg-nexus-accent text-nexus-bg hover:bg-nexus-accent-hover focus:ring-nexus-accent',
-      secondary: 'bg-nexus-bg-tertiary text-nexus-text hover:bg-nexus-border focus:ring-nexus-border',
-      ghost: 'bg-transparent text-nexus-text-secondary hover:bg-nexus-bg-tertiary hover:text-nexus-text focus:ring-nexus-border',
-      danger: 'bg-nexus-danger text-white hover:bg-nexus-danger-hover focus:ring-nexus-danger',
+      primary: 'bg-nexus-accent text-nexus-on-accent shadow-sm hover:bg-nexus-accent-hover',
+      secondary: 'border border-nexus-border bg-nexus-bg-secondary text-nexus-text shadow-surface hover:bg-nexus-bg-tertiary hover:border-nexus-border-hover',
+      ghost: 'bg-transparent text-nexus-text-secondary hover:bg-nexus-bg-tertiary hover:text-nexus-text',
+      danger: 'bg-nexus-danger text-white shadow-sm hover:bg-nexus-danger-hover',
     };
 
     const sizes = {
-      sm: 'px-3 py-1.5 text-sm',
-      md: 'px-4 py-2 text-sm',
-      lg: 'px-6 py-3 text-base',
+      sm: 'h-8 px-2.5 text-[13px]',
+      md: 'h-9 px-3.5 text-sm',
+      lg: 'h-10 px-5 text-sm',
     };
 
     return (

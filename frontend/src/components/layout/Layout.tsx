@@ -1,44 +1,46 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
+import { useLocation } from 'react-router-dom';
 import { cn } from '../../lib/utils';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
 import { CommandPalette } from './CommandPalette';
 import { useChatContext } from '../../hooks/useChatContext';
 
-interface LayoutProps {
-  sidebarCollapsed?: boolean;
-  onSidebarToggle?: () => void;
-  children?: ReactNode;
+const COLLAPSED_KEY = 'nexus-sidebar-collapsed';
+
+function readCollapsed(): boolean {
+  try {
+    return localStorage.getItem(COLLAPSED_KEY) === '1';
+  } catch {
+    return false;
+  }
 }
 
-export function Layout({ sidebarCollapsed = false, onSidebarToggle, children }: LayoutProps) {
-  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+export function Layout({ children }: { children?: ReactNode }) {
+  const [collapsed, setCollapsed] = useState(readCollapsed);
+  const [mobileOpen, setMobileOpen] = useState(false);
   const { openSession } = useChatContext();
+  const { pathname } = useLocation();
+
+  useEffect(() => setMobileOpen(false), [pathname]);  // a phone's menu closes once you pick a page
+
+  const toggleCollapsed = () => setCollapsed(previous => {
+    try {
+      localStorage.setItem(COLLAPSED_KEY, previous ? '0' : '1');
+    } catch {
+      // remembering is a convenience
+    }
+    return !previous;
+  });
 
   return (
     <div className="min-h-screen bg-nexus-bg">
-      <Sidebar
-        collapsed={sidebarCollapsed || mobileSidebarOpen}
-        onToggleCollapse={onSidebarToggle}
-      />
-      <div
-        className={cn(
-          'transition-all duration-300 min-h-screen',
-          sidebarCollapsed ? 'lg:ml-16' : 'lg:ml-64'
-        )}
-      >
-        <Header
-          onMenuClick={() => setMobileSidebarOpen(!mobileSidebarOpen)}
-          title={null}
-        />
-         <main
-           className={cn(
-             'pt-16 min-h-screen',
-           )}
-           role="main"
-         >
-          <div className="p-4 lg:p-6">
+      <Sidebar collapsed={collapsed} mobileOpen={mobileOpen} onToggleCollapse={toggleCollapsed} />
+      <div className={cn('flex min-h-screen flex-col transition-[margin] duration-200 ease-out', collapsed ? 'lg:ml-14' : 'lg:ml-60')}>
+        <Header onMenuClick={() => setMobileOpen(open => !open)} />
+        <main className="flex-1" role="main">
+          <div className="mx-auto w-full max-w-[1400px] p-4 lg:px-8 lg:py-6">
             {children}
           </div>
         </main>
@@ -46,12 +48,8 @@ export function Layout({ sidebarCollapsed = false, onSidebarToggle, children }: 
 
       <CommandPalette onOpenChat={(id) => void openSession(id)} />
 
-      {mobileSidebarOpen && (
-        <div
-          className="fixed inset-0 z-30 bg-black/50 lg:hidden"
-          onClick={() => setMobileSidebarOpen(false)}
-          aria-hidden="true"
-        />
+      {mobileOpen && (
+        <div className="fixed inset-0 z-30 bg-black/50 backdrop-blur-[1px] lg:hidden" onClick={() => setMobileOpen(false)} aria-hidden="true" />
       )}
     </div>
   );

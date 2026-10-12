@@ -1,13 +1,17 @@
+import { Badge } from '../ui/Badge';
+import { EmptyState, SegmentedControl } from '../ui/PageHeader';
+import { PageHeader } from '../ui/PageHeader';
 import { runState } from './runState';
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { AlertCircle, Copy, Download, Edit3, History, LayoutTemplate, Play, Plus, RotateCcw, Sparkles, Square, Upload, Zap } from 'lucide-react';
+import { AlertCircle, Copy, Download, Edit3, History, LayoutTemplate, Play, Plus, RotateCcw, Sparkles, Square, Upload, Zap, AlertTriangle } from 'lucide-react';
 import { cn, formatRelativeTime, getErrorMessage } from '../../lib/utils';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { WorkflowList } from './WorkflowList';
-import { NODE_ICONS, WorkflowBuilder, type WorkflowSaveData } from './WorkflowBuilder';
+import { WorkflowBuilder, type WorkflowSaveData } from './WorkflowBuilder';
+import { NodeTile } from './NodeTile';
 import { RunInputsModal } from './RunInputsModal';
 import { FlowEditor } from './FlowEditor';
 import { triggerSummary } from './TriggerCard';
@@ -20,17 +24,11 @@ import type {
   ExecutionTraceEntry, ManualInput, ToolDefinition, Workflow, WorkflowDraft, WorkflowExecution, WorkflowId, WorkflowTemplate, WorkflowVersion,
 } from '../../types/workflow';
 
-const STATUS_CLASSES: Record<string, string> = {
-  completed: 'bg-green-500/15 text-green-400',
-  running: 'bg-blue-500/15 text-blue-400',
-  failed: 'bg-red-500/15 text-red-400',
-  partial: 'bg-amber-500/15 text-amber-400',
-  skipped: 'bg-gray-500/15 text-gray-400',
-  cancelled: 'bg-gray-500/15 text-gray-400',
+const STATUS_VARIANTS: Record<string, 'success' | 'info' | 'danger' | 'warning' | 'default'> = {
+  completed: 'success', running: 'info', failed: 'danger', partial: 'warning', skipped: 'default', cancelled: 'default',
 };
 
 const POLL_MS = 800;
-const TONE_STYLES = { success: 'bg-green-500/15 text-green-500', danger: 'bg-red-500/15 text-red-500', default: 'bg-gray-500/15 text-gray-400' };
 
 function describeTrigger(workflow: Workflow): string {
   const t = workflow.trigger_config;
@@ -275,12 +273,9 @@ export function WorkflowPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-nexus-text">Workflows</h1>
-          <p className="text-nexus-text-secondary mt-1">Automate multi-step work with tools from your MCP servers</p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2 justify-end">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <PageHeader title="Workflows" description="Automations that run on a schedule, on app events or on demand, using your apps' tools." />
+        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
           <Button variant="secondary" size="sm" className="gap-1.5" onClick={() => workflowService.getTemplates().then(setTemplates).catch(err => setRunError(getErrorMessage(err)))}>
             <LayoutTemplate className="w-4 h-4" /> Templates
           </Button>
@@ -292,23 +287,23 @@ export function WorkflowPage() {
           </Button>
           <input ref={importRef} type="file" accept=".json,application/json" className="hidden" aria-label="Import workflow file"
             onChange={(e) => { const file = e.target.files?.[0]; e.target.value = ''; if (file) void handleImport(file); }} />
-          <Button variant="primary" onClick={() => openEditor(null)} className="gap-1.5">
-            <Plus className="w-4 h-4" /> New Workflow
+          <Button variant="primary" size="sm" onClick={() => openEditor(null)}>
+            <Plus className="w-3.5 h-3.5" /> New Workflow
           </Button>
         </div>
       </div>
 
       {(error || runError) && (
-        <Card className="p-4 border-nexus-danger/30 bg-red-500/5">
+        <Card className="border-nexus-danger/30 bg-nexus-danger/5 text-[13px]">
           <div className="flex items-center gap-2 text-nexus-danger">
-            <AlertCircle className="w-5 h-5 flex-shrink-0" />
+            <AlertCircle className="w-4 h-4 flex-shrink-0" />
             <span>{runError || error?.message}</span>
           </div>
         </Card>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-1">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(18rem,22rem)_1fr]">
+        <div>
           <WorkflowList
             workflows={workflows}
             selectedWorkflow={currentWorkflow}
@@ -322,21 +317,21 @@ export function WorkflowPage() {
           />
         </div>
 
-        <div className="lg:col-span-2 space-y-6">
+        <div className="min-w-0 space-y-6">
           {currentWorkflow ? (
             <>
-              <Card>
-                <div className="p-4 border-b border-nexus-border flex flex-wrap items-start justify-between gap-3">
+              <Card padding="none">
+                <div className="flex flex-wrap items-start justify-between gap-3 border-b border-nexus-border p-5">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <h3 className="font-semibold text-nexus-text truncate">{currentWorkflow.name}</h3>
-                      <span className={cn('px-2 py-0.5 rounded text-xs font-medium', TONE_STYLES[runState(currentWorkflow).tone])}
+                      <h3 className="truncate text-base font-semibold text-nexus-text">{currentWorkflow.name}</h3>
+                      <Badge size="sm" variant={runState(currentWorkflow).tone}
                         title={runState(currentWorkflow).label === 'Manual' ? 'Runs only when you start it' : undefined}>
                         {runState(currentWorkflow).label}
-                      </span>
+                      </Badge>
                     </div>
-                    {currentWorkflow.description && <p className="text-sm text-nexus-text-secondary mt-1">{currentWorkflow.description}</p>}
-                    <p className="text-xs text-nexus-text-muted mt-1 flex items-center gap-1"><Zap className="w-3 h-3" />{describeTrigger(currentWorkflow)}</p>
+                    {currentWorkflow.description && <p className="mt-1 text-[13px] text-nexus-text-secondary">{currentWorkflow.description}</p>}
+                    <p className="mt-2 flex items-center gap-1.5 text-xs text-nexus-text-muted"><Zap className="h-3 w-3" />{describeTrigger(currentWorkflow)}</p>
                     {currentWorkflow.trigger_status && (
                       <p className={cn('text-xs mt-0.5', currentWorkflow.trigger_status.last_error ? 'text-nexus-danger' : 'text-nexus-text-muted')}>
                         {currentWorkflow.trigger_status.last_checked_at
@@ -346,31 +341,31 @@ export function WorkflowPage() {
                       </p>
                     )}
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Button variant="primary" size="sm" onClick={() => void handleExecute(currentWorkflow)} className="gap-1.5">
-                      <Play className="w-4 h-4" /> Run
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <Button variant="primary" size="sm" onClick={() => void handleExecute(currentWorkflow)}>
+                      <Play className="w-3.5 h-3.5" /> Run
                     </Button>
                     <Button variant="secondary" size="sm" onClick={() => { setRunError(null); setRunInputOpen(true); }}>
                       Run with input
                     </Button>
                     {runState(currentWorkflow).automatic && (
-                      <Button variant="secondary" size="sm" onClick={() => void handleToggleActive(currentWorkflow)} className="gap-1.5">
-                        {currentWorkflow.isActive ? <><Square className="w-4 h-4" /> Stop</> : <><Play className="w-4 h-4" /> Start</>}
+                      <Button variant="secondary" size="sm" onClick={() => void handleToggleActive(currentWorkflow)}>
+                        {currentWorkflow.isActive ? <><Square className="w-3.5 h-3.5" /> Stop</> : <><Play className="w-3.5 h-3.5" /> Start</>}
                       </Button>
                     )}
-                    <Button variant="secondary" size="sm" onClick={() => openEditor(currentWorkflow)} className="gap-1.5">
-                      <Edit3 className="w-4 h-4" /> Edit
+                    <Button variant="secondary" size="sm" onClick={() => openEditor(currentWorkflow)}>
+                      <Edit3 className="w-3.5 h-3.5" /> Edit
                     </Button>
-                    <Button variant="ghost" size="sm" aria-label="Version history" title="Version history"
+                    <Button variant="ghost" size="sm" className="w-8 px-0" aria-label="Version history" title="Version history"
                       onClick={() => workflowService.getVersions(currentWorkflow.id).then(setVersions).catch(err => setRunError(getErrorMessage(err)))}>
                       <History className="w-4 h-4" />
                     </Button>
-                    <Button variant="ghost" size="sm" aria-label="Export" title="Export as JSON" onClick={() => void handleExport(currentWorkflow)}>
+                    <Button variant="ghost" size="sm" className="w-8 px-0" aria-label="Export" title="Export as JSON" onClick={() => void handleExport(currentWorkflow)}>
                       <Download className="w-4 h-4" />
                     </Button>
                   </div>
                 </div>
-                <div className="p-4 space-y-3">
+                <div className="space-y-3 p-5">
                   {webhookUrl && (
                     <div>
                       <p className="text-xs font-medium text-nexus-text-secondary mb-1">
@@ -388,22 +383,16 @@ export function WorkflowPage() {
                   )}
                   {currentWorkflow.warnings && currentWorkflow.warnings.length > 0 && (
                     <ul className="text-xs text-nexus-warning space-y-1">
-                      {currentWorkflow.warnings.map(w => <li key={w}>⚠ {w}</li>)}
+                      {currentWorkflow.warnings.map(w => <li key={w} className="flex items-start gap-1.5"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />{w}</li>)}
                     </ul>
                   )}
-                  <div className="flex gap-1" role="radiogroup" aria-label="Show steps as">
-                    {(['list', 'canvas'] as const).map(view => (
-                      <button key={view} type="button" role="radio" aria-checked={stepView === view} onClick={() => setStepView(view)}
-                        className={cn('px-2.5 py-1 rounded-md text-xs', stepView === view ? 'bg-nexus-accent-dim text-nexus-accent' : 'text-nexus-text-secondary hover:bg-nexus-bg-tertiary')}>
-                        {view === 'list' ? 'Steps' : 'Canvas'}
-                      </button>
-                    ))}
-                  </div>
+                  <SegmentedControl label="Show steps as" size="xs" value={stepView} onChange={setStepView}
+                    options={[{ value: 'list', label: 'Steps' }, { value: 'canvas', label: 'Canvas' }]} />
                   {stepView === 'canvas' ? <FlowEditor key={`${currentWorkflow.id}-${currentWorkflow.version}`} graph={{ nodes: currentWorkflow.nodes, edges: currentWorkflow.edges }} /> : (
                   <ol className="flex flex-wrap gap-2">
                     {currentWorkflow.nodes.map(node => (
-                      <li key={node.id} className="px-3 py-1 bg-nexus-bg-tertiary border border-nexus-border rounded-full text-sm">
-                        {NODE_ICONS[node.type] ?? '⚙️'} {node.name}
+                      <li key={node.id} className="flex items-center gap-2 rounded-lg border border-nexus-border bg-nexus-bg-secondary py-1 pl-1 pr-2.5 text-[13px] shadow-surface">
+                        <NodeTile type={node.type} size="sm" /> {node.name}
                         {node.type === 'action' && typeof node.config?.tool === 'string' && <span className="text-nexus-text-muted"> · {node.config.tool}</span>}
                       </li>
                     ))}
@@ -413,22 +402,22 @@ export function WorkflowPage() {
                 </div>
               </Card>
 
-              <Card>
-                <div className="p-4 border-b border-nexus-border flex items-center gap-2">
-                  <History className="w-4 h-4 text-nexus-text-secondary" />
-                  <h3 className="font-semibold text-nexus-text">Run history</h3>
+              <Card padding="none">
+                <div className="flex items-center gap-2 border-b border-nexus-border px-5 py-3.5">
+                  <History className="h-4 w-4 text-nexus-text-muted" />
+                  <h3 className="text-[13px] font-semibold text-nexus-text">Run history</h3>
                   <span className="text-xs text-nexus-text-muted">{runsLoading ? 'Loading…' : `${runs.length} run(s)`}</span>
                 </div>
                 {runs.length === 0 ? (
-                  <div className="p-6 text-center text-sm text-nexus-text-muted">No runs yet.</div>
+                  <EmptyState icon={Play} title="No runs yet" description="Run it now, or wait for its trigger. Each run's steps and outputs appear here." />
                 ) : (
-                  <ul className="p-4 space-y-2">
+                  <ul className="divide-y divide-nexus-border">
                     {runs.map(run => (
                       <li key={run.id}>
-                        <button onClick={() => showRun(currentWorkflow.id, run)} className="w-full text-left flex items-center justify-between gap-3 p-3 bg-nexus-bg-tertiary/50 border border-nexus-border rounded-lg hover:bg-nexus-bg-tertiary">
+                        <button onClick={() => showRun(currentWorkflow.id, run)} className="group flex w-full items-center justify-between gap-3 px-5 py-3 text-left transition-colors hover:bg-nexus-bg-tertiary/50">
                           <div className="min-w-0">
                             <div className="flex items-center gap-2">
-                              <span className={cn('px-2 py-0.5 rounded text-xs font-medium', STATUS_CLASSES[run.status] ?? 'bg-gray-500/15 text-gray-400')}>{run.status}</span>
+                              <Badge size="sm" variant={STATUS_VARIANTS[run.status] ?? 'default'}>{run.status}</Badge>
                               <span className="text-xs text-nexus-text-muted">{formatRelativeTime(run.startedAt)}</span>
                               {typeof run.input_data?.trigger === 'object' && run.input_data?.trigger !== null && (
                                 <span className="text-xs text-nexus-text-muted">· {String((run.input_data.trigger as Record<string, unknown>).type)}</span>
@@ -436,7 +425,7 @@ export function WorkflowPage() {
                             </div>
                             {run.error && <p className="text-xs text-nexus-danger mt-1 truncate">{run.error}</p>}
                           </div>
-                          <span className="text-xs text-nexus-accent flex-shrink-0">View trace</span>
+                          <span className="flex-shrink-0 text-xs text-nexus-text-muted transition-colors group-hover:text-nexus-accent-text">View trace →</span>
                         </button>
                       </li>
                     ))}
@@ -445,12 +434,8 @@ export function WorkflowPage() {
               </Card>
             </>
           ) : (
-            <Card className="h-[400px] flex items-center justify-center">
-              <div className="text-center text-nexus-text-muted">
-                <Zap className="w-12 h-12 mx-auto text-nexus-text-muted/50 mb-3" />
-                <h3 className="text-lg font-medium text-nexus-text mb-1">Select a workflow</h3>
-                <p className="text-sm">Choose a workflow from the list or create a new one</p>
-              </div>
+            <Card className="flex h-[400px] items-center justify-center">
+              <EmptyState icon={Zap} title="Select a workflow" description="Choose one from the list to see its steps and runs, or create a new one." />
             </Card>
           )}
         </div>
@@ -486,7 +471,7 @@ export function WorkflowPage() {
 
       <Modal open={runInputOpen} onClose={() => setRunInputOpen(false)} title="Run with input" size="md">
         <div className="space-y-3">
-          <p className="text-sm text-nexus-text-secondary">JSON object available to steps as <code className="text-nexus-accent">{'{{ input.<key> }}'}</code>.</p>
+          <p className="text-sm text-nexus-text-secondary">JSON object available to steps as <code className="text-nexus-accent-text">{'{{ input.<key> }}'}</code>.</p>
           <textarea rows={8} value={runInput} onChange={(e) => setRunInput(e.target.value)} className="w-full font-mono text-sm px-3 py-2 rounded-lg bg-nexus-bg-tertiary border border-nexus-border text-nexus-text" />
           <div className="flex justify-end gap-2">
             <Button variant="ghost" size="sm" onClick={() => setRunInputOpen(false)}>Cancel</Button>

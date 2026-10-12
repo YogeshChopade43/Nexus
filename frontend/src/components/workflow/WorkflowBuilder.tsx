@@ -1,5 +1,6 @@
+import { NodeTile } from './NodeTile';
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, FlaskConical, Plus, Save, Trash2, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, FlaskConical, Plus, Save, Trash2, X, Zap, AlertTriangle } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Input, Textarea } from '../ui/Input';
 import { cn, getErrorMessage } from '../../lib/utils';
@@ -26,10 +27,6 @@ export interface WorkflowSaveData {
   isActive: boolean;
 }
 
-export const NODE_ICONS: Record<WorkflowNodeType, string> = {
-  trigger: '⚡', action: '⚙️', llm: '✨', condition: '🔀', transform: '🔄', delay: '⏱️', output: '📤',
-  http: '🌐', code: '🧩', workflow: '🧭', loop: '🔁', parallel: '⫴',
-};
 
 /** Step types that can fail in ways worth handling ("If this step fails"). */
 const HANDLES_ERRORS: WorkflowNodeType[] = ['action', 'llm', 'http', 'code', 'workflow'];
@@ -166,7 +163,7 @@ export function StepDetails({ node, onConfig, ctx, sources }: {
               Continue if this step fails
             </label>
             {!node.config.on_error && (
-              <button onClick={() => onConfig({ on_error: EMPTY_GRAPH })} className="text-nexus-accent">+ If this step fails…</button>
+              <button onClick={() => onConfig({ on_error: EMPTY_GRAPH })} className="text-nexus-accent-text">+ If this step fails…</button>
             )}
           </>
         )}
@@ -179,7 +176,7 @@ export function StepDetails({ node, onConfig, ctx, sources }: {
           </label>
         )}
         {!['loop', 'parallel'].includes(node.type) && (
-          <button onClick={() => ctx.testStep(node)} disabled={test === 'running'} className="flex items-center gap-1 text-nexus-accent disabled:opacity-50">
+          <button onClick={() => ctx.testStep(node)} disabled={test === 'running'} className="flex items-center gap-1 text-nexus-accent-text disabled:opacity-50">
             <FlaskConical className="w-3.5 h-3.5" /> {test === 'running' ? 'Testing…' : 'Test step'}
           </button>
         )}
@@ -231,7 +228,7 @@ export function NestedSections({ node, onConfig, ctx, earlier, listKey, scopes }
             </div>
           ))}
         </div>
-        <button onClick={() => onConfig({ branches: [...branches, EMPTY_GRAPH] })} className="text-xs text-nexus-accent">+ Add branch</button>
+        <button onClick={() => onConfig({ branches: [...branches, EMPTY_GRAPH] })} className="text-xs text-nexus-accent-text">+ Add branch</button>
       </div>
     )}
 
@@ -285,7 +282,7 @@ function StepList({ steps, onChange, before, listKey, ctx, scopes = [] }: {
     return (
       <div className="flex justify-center">
         <button onClick={() => ctx.setPickerAt(key)} aria-label={index === steps.length ? 'Add a step' : 'Insert a step here'}
-          className="flex items-center gap-1 px-2 py-0.5 rounded-full border border-nexus-border text-xs text-nexus-text-secondary hover:text-nexus-accent hover:border-nexus-accent bg-nexus-bg-secondary">
+          className="flex items-center gap-1 px-2 py-0.5 rounded-full border border-nexus-border text-xs text-nexus-text-secondary hover:text-nexus-accent-text hover:border-nexus-accent bg-nexus-bg-secondary">
           <Plus className="w-3 h-3" />{index === steps.length && steps.length === 0 ? 'Add a step' : ''}
         </button>
       </div>
@@ -309,7 +306,7 @@ function StepList({ steps, onChange, before, listKey, ctx, scopes = [] }: {
                 <button onClick={() => ctx.setExpanded(open ? null : node.id)} aria-label={open ? 'Collapse step' : 'Expand step'} className="text-nexus-text-muted">
                   {open ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
                 </button>
-                <span aria-hidden>{NODE_ICONS[node.type] ?? '⚙️'}</span>
+                <NodeTile type={node.type} />
                 <div className="flex-1 min-w-0">
                   <input value={node.name} onChange={(e) => setNode({ name: e.target.value })} aria-label="Step name"
                     className="w-full bg-transparent text-sm font-medium text-nexus-text focus:outline-none" />
@@ -459,7 +456,7 @@ export function WorkflowBuilder({ workflow, draft, onSave, onCancel, tools, llmP
         </div>
         <Textarea label="Description" value={description} onChange={(e) => setDescription(e.target.value)} rows={2} placeholder="What this workflow does" />
         {draft?.warnings && draft.warnings.length > 0 && (
-          <ul className="text-xs text-nexus-warning space-y-0.5">{draft.warnings.map(w => <li key={w}>⚠ {w}</li>)}</ul>
+          <ul className="text-xs text-nexus-warning space-y-0.5">{draft.warnings.map(w => <li key={w} className="flex items-start gap-1.5"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />{w}</li>)}</ul>
         )}
 
         <div className="flex items-center gap-1" role="radiogroup" aria-label="Edit steps as">
@@ -469,7 +466,7 @@ export function WorkflowBuilder({ workflow, draft, onSave, onCancel, tools, llmP
               title={option === 'list' && tree === null ? "This workflow's shape can only be shown on the canvas" : undefined}
               onClick={() => setView(option)}
               className={cn('px-2.5 py-1 rounded-md text-xs disabled:opacity-40',
-                view === option ? 'bg-nexus-accent-dim text-nexus-accent' : 'text-nexus-text-secondary hover:bg-nexus-bg-tertiary')}>
+                view === option ? 'bg-nexus-accent-dim text-nexus-accent-text' : 'text-nexus-text-secondary hover:bg-nexus-bg-tertiary')}>
               {option === 'canvas' ? 'Canvas' : 'List'}
             </button>
           ))}
@@ -492,7 +489,7 @@ export function WorkflowBuilder({ workflow, draft, onSave, onCancel, tools, llmP
               <div className={cn('rounded-lg border bg-nexus-bg-secondary', expanded === tree.trigger.id ? 'border-nexus-accent' : 'border-nexus-border')}>
                 <button className="w-full flex items-center gap-2 p-2 text-left" onClick={() => setExpanded(expanded === tree.trigger!.id ? null : tree.trigger!.id)}>
                   {expanded === tree.trigger.id ? <ChevronDown className="w-4 h-4 text-nexus-text-muted" /> : <ChevronRight className="w-4 h-4 text-nexus-text-muted" />}
-                  <span aria-hidden>⚡</span>
+                  <NodeTile type="trigger" />
                   <span className="flex-1 min-w-0">
                     <span className="block text-sm font-medium text-nexus-text">Trigger</span>
                     <span className="block text-xs text-nexus-text-muted truncate">{triggerSummary(tree.trigger.config)}</span>
@@ -507,7 +504,7 @@ export function WorkflowBuilder({ workflow, draft, onSave, onCancel, tools, llmP
               </div>
             ) : (
               <button onClick={() => setTree({ ...tree, trigger: { id: 'trigger_1', type: 'trigger', name: 'Trigger', config: defaultTriggerConfig('manual') } })}
-                className="w-full p-3 rounded-lg border border-dashed border-nexus-border text-sm text-nexus-accent">⚡ Add a trigger</button>
+                className="flex w-full items-center justify-center gap-2 p-3 rounded-lg border border-dashed border-nexus-border text-sm text-nexus-accent-text"><Zap className="h-4 w-4" /> Add a trigger</button>
             )}
             <StepList steps={tree.steps} onChange={(steps) => setTree({ ...tree, steps })} before={[]} listKey="root" ctx={ctx} />
           </div>

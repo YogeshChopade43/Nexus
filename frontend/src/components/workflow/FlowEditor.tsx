@@ -4,11 +4,12 @@ import {
   type Connection, type Edge, type Node, type NodeChange, type NodeProps, type ReactFlowInstance,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { LayoutGrid, Plus, Trash2, X } from 'lucide-react';
+import { LayoutGrid, Plus, Trash2, X, Zap } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { ActionPicker, type PickedAction } from './ActionPicker';
 import { NODE_H, NODE_W, connect, earlierSteps, layout, removeNodes, wouldCycle, type Graph } from './graphEdit';
-import { NODE_ICONS, NestedSections, StepDetails, stepSummary, type BuilderContext } from './WorkflowBuilder';
+import { NestedSections, StepDetails, stepSummary, type BuilderContext } from './WorkflowBuilder';
+import { NodeTile } from './NodeTile';
 import { defaultTriggerConfig, triggerSummary } from './TriggerCard';
 import type { WorkflowNode } from '../../types/workflow';
 
@@ -28,7 +29,7 @@ function AddButton({ top, label, onClick }: { top: number; label: string; onClic
     <button type="button" aria-label={label} title={label}
       onClick={(e) => { e.stopPropagation(); onClick(); }}
       style={{ top: `${top}%` }}
-      className="nodrag nopan absolute -right-11 -translate-y-1/2 w-6 h-6 rounded-full border border-nexus-border bg-nexus-bg-secondary text-nexus-text-secondary hover:text-nexus-accent hover:border-nexus-accent flex items-center justify-center">
+      className="nodrag nopan absolute -right-11 -translate-y-1/2 w-6 h-6 rounded-full border border-nexus-border bg-nexus-bg-secondary text-nexus-text-secondary hover:text-nexus-accent-text hover:border-nexus-accent flex items-center justify-center">
       <Plus className="w-3.5 h-3.5" />
     </button>
   );
@@ -43,7 +44,7 @@ function StepNode({ data, selected }: NodeProps<Node<StepData>>) {
         selected ? 'border-nexus-accent ring-2 ring-nexus-accent/30' : 'border-nexus-border')}>
       {node.type !== 'trigger' && <Handle type="target" position={Position.Left} className={HANDLE} />}
       <div className="flex items-center gap-2 min-w-0">
-        <span aria-hidden>{NODE_ICONS[node.type] ?? '⚙️'}</span>
+        <NodeTile type={node.type} />
         <span className="text-sm font-medium text-nexus-text truncate">{node.name}</span>
       </div>
       {summary && <p className="text-xs text-nexus-text-muted truncate mt-0.5">{summary}</p>}
@@ -171,14 +172,14 @@ export function FlowEditor({ graph, onChange, ctx, renderTrigger }: FlowEditorPr
             <Panel position="top-left" className="flex gap-2">
               {!trigger && (
                 <button type="button" onClick={() => change({ nodes: [{ id: 'trigger_1', type: 'trigger', name: 'Trigger', config: defaultTriggerConfig('manual') }, ...nodes], edges })}
-                  className="px-2.5 py-1 rounded-lg border border-nexus-border bg-nexus-bg-secondary text-xs text-nexus-accent">⚡ Add trigger</button>
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-nexus-border bg-nexus-bg-secondary text-xs text-nexus-accent-text"><Zap className="h-3.5 w-3.5" /> Add trigger</button>
               )}
               <button type="button" onClick={() => { setSelectedId(null); setAdding({ source: null }); }}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-nexus-border bg-nexus-bg-secondary text-xs text-nexus-text-secondary hover:text-nexus-accent">
+                className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-nexus-border bg-nexus-bg-secondary text-xs text-nexus-text-secondary hover:text-nexus-accent-text">
                 <Plus className="w-3.5 h-3.5" /> Add step
               </button>
               <button type="button" onClick={() => change({ nodes: layout(nodes, edges, true), edges })}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-nexus-border bg-nexus-bg-secondary text-xs text-nexus-text-secondary hover:text-nexus-accent">
+                className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-nexus-border bg-nexus-bg-secondary text-xs text-nexus-text-secondary hover:text-nexus-accent-text">
                 <LayoutGrid className="w-3.5 h-3.5" /> Tidy up
               </button>
             </Panel>
@@ -196,7 +197,7 @@ export function FlowEditor({ graph, onChange, ctx, renderTrigger }: FlowEditorPr
         <section aria-label="Step settings"
           className="w-full lg:w-[420px] shrink-0 max-h-[60vh] overflow-y-auto rounded-lg border border-nexus-border bg-nexus-bg-secondary p-3 space-y-3">
           <div className="flex items-center gap-2">
-            <span aria-hidden>{NODE_ICONS[selected.type] ?? '⚙️'}</span>
+            <NodeTile type={selected.type} />
             <input value={selected.name} onChange={(e) => update({ ...selected, name: e.target.value })} aria-label="Step name"
               className="flex-1 min-w-0 bg-transparent text-sm font-medium text-nexus-text focus:outline-none" />
             <button type="button" aria-label="Delete step" className="text-nexus-text-muted hover:text-nexus-danger"

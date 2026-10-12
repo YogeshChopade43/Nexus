@@ -126,7 +126,7 @@ export function CommandPalette({ onOpenChat }: { onOpenChat: (sessionId: string)
   return (
     <div className="fixed inset-0 z-[70] flex items-start justify-center p-4 pt-[12vh] bg-black/50" onMouseDown={() => setOpen(false)}>
       <div role="dialog" aria-label="Search" onMouseDown={(e) => e.stopPropagation()}
-        className="w-full max-w-lg rounded-xl border border-nexus-border bg-nexus-bg-secondary shadow-2xl overflow-hidden">
+        className="w-full max-w-lg rounded-xl border border-nexus-border bg-nexus-bg-secondary shadow-pop overflow-hidden">
         <div className="flex items-center gap-2 px-3 border-b border-nexus-border">
           <Search className="w-4 h-4 text-nexus-text-muted" aria-hidden />
           <input ref={inputRef} role="combobox" aria-label="Search Nexus" aria-expanded aria-controls="palette-results"

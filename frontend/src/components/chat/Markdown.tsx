@@ -71,7 +71,7 @@ const components: Components = {
   table: ({ children }) => <Table>{children}</Table>,
   th: ({ children }) => <th className="px-2 py-1.5 text-left font-semibold border-b border-nexus-border bg-nexus-bg-tertiary/60">{children}</th>,
   td: ({ children }) => <td className="px-2 py-1.5 border-b border-nexus-border align-top">{children}</td>,
-  a: ({ children, href }) => <a href={href} target="_blank" rel="noreferrer" className="text-nexus-accent underline">{children}</a>,
+  a: ({ children, href }) => <a href={href} target="_blank" rel="noreferrer" className="text-nexus-accent-text underline">{children}</a>,
   code: ({ children, className }) => className
     ? <code className={className}>{children}</code>
     : <code className="px-1 py-0.5 rounded bg-nexus-bg-tertiary text-[0.85em]">{children}</code>,

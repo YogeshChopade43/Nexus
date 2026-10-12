@@ -65,13 +65,13 @@ export function Dropdown({ trigger, children, items, align = 'right' }: Dropdown
     <div
       ref={menuRef}
       style={{ position: 'fixed', top: position.top, left: position.left, right: position.right }}
-      className="z-[80] min-w-[160px] bg-nexus-bg-secondary border border-nexus-border rounded-lg shadow-lg py-1 animate-fade-in"
+      className="z-[80] min-w-[180px] bg-nexus-bg-secondary border border-nexus-border rounded-lg shadow-pop p-1 animate-fade-in"
       role="menu"
     >
       {items.map((item, index) => {
         if (item.divider) {
           return (
-            <div key={index} className="h-px bg-nexus-border my-1" role="separator" />
+            <div key={index} className="h-px bg-nexus-border -mx-1 my-1" role="separator" />
           );
         }
         return (
@@ -84,9 +84,9 @@ export function Dropdown({ trigger, children, items, align = 'right' }: Dropdown
             }}
             disabled={item.disabled}
             className={cn(
-              'w-full px-3 py-2 text-left text-sm flex items-center gap-2 transition-colors',
-              'hover:bg-nexus-bg-tertiary focus:outline-none focus:bg-nexus-bg-tertiary',
-              item.danger ? 'text-nexus-danger' : 'text-nexus-text',
+              'w-full h-8 px-2 rounded-md text-left text-[13px] flex items-center gap-2 transition-colors',
+              'hover:bg-nexus-bg-tertiary focus:outline-none focus-visible:ring-0 focus:bg-nexus-bg-tertiary',
+              item.danger ? 'text-nexus-danger' : 'text-nexus-text [&_svg]:text-nexus-text-muted',
               item.disabled ? 'opacity-50 cursor-not-allowed' : ''
             )}
             role="menuitem"

@@ -1,6 +1,11 @@
 import { forwardRef, InputHTMLAttributes, TextareaHTMLAttributes } from 'react';
 import { cn } from '../../lib/utils';
 
+/** The look of every hand-built field (inputs, selects, textareas) so they match <Input>. */
+export const fieldClass =
+  'w-full min-h-9 rounded-md border border-nexus-border bg-nexus-bg-secondary px-3 py-[7px] text-sm text-nexus-text shadow-surface '
+  + 'placeholder:text-nexus-text-muted hover:border-nexus-border-hover focus:outline-none focus:border-nexus-accent focus:ring-2 focus:ring-nexus-accent/25';
+
 export interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
   label?: string;
   error?: string;
@@ -14,7 +19,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
     return (
       <div className="w-full">
         {label && (
-          <label htmlFor={inputId} className="block text-sm font-medium text-nexus-text-secondary mb-1.5">
+          <label htmlFor={inputId} className="block text-[13px] font-medium text-nexus-text mb-1.5">
             {label}
           </label>
         )}
@@ -22,10 +27,10 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
           ref={ref}
           id={inputId}
           className={cn(
-            'w-full px-3 py-2 rounded-lg bg-nexus-bg-secondary border transition-all duration-150',
+            'w-full h-9 px-3 rounded-md bg-nexus-bg-secondary border shadow-surface transition-[border-color,box-shadow] duration-150 text-sm',
             'text-nexus-text placeholder-nexus-text-muted',
-            'focus:outline-none focus:ring-2 focus:ring-nexus-accent focus:border-transparent',
-            error ? 'border-nexus-danger focus:ring-nexus-danger' : 'border-nexus-border hover:border-nexus-border-hover',
+            'focus:outline-none focus:border-nexus-accent focus:ring-2 focus:ring-nexus-accent/25',
+            error ? 'border-nexus-danger focus:border-nexus-danger focus:ring-nexus-danger/25' : 'border-nexus-border hover:border-nexus-border-hover',
             'disabled:opacity-50 disabled:cursor-not-allowed',
             className
           )}
@@ -34,12 +39,12 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
           {...props}
         />
         {error && (
-          <p id={`${inputId}-error`} className="mt-1.5 text-sm text-nexus-danger" role="alert">
+          <p id={`${inputId}-error`} className="mt-1.5 text-xs text-nexus-danger" role="alert">
             {error}
           </p>
         )}
         {hint && !error && (
-          <p id={`${inputId}-hint`} className="mt-1.5 text-sm text-nexus-text-muted">
+          <p id={`${inputId}-hint`} className="mt-1.5 text-xs text-nexus-text-muted">
             {hint}
           </p>
         )}
@@ -63,7 +68,7 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
     return (
       <div className="w-full">
         {label && (
-          <label htmlFor={textareaId} className="block text-sm font-medium text-nexus-text-secondary mb-1.5">
+          <label htmlFor={textareaId} className="block text-[13px] font-medium text-nexus-text mb-1.5">
             {label}
           </label>
         )}
@@ -71,10 +76,10 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
           ref={ref}
           id={textareaId}
           className={cn(
-            'w-full px-3 py-2 rounded-lg bg-nexus-bg-secondary border transition-all duration-150 resize-y min-h-[80px]',
+            'w-full px-3 py-2 rounded-md bg-nexus-bg-secondary border shadow-surface transition-[border-color,box-shadow] duration-150 resize-y min-h-[80px] text-sm',
             'text-nexus-text placeholder-nexus-text-muted',
-            'focus:outline-none focus:ring-2 focus:ring-nexus-accent focus:border-transparent',
-            error ? 'border-nexus-danger focus:ring-nexus-danger' : 'border-nexus-border hover:border-nexus-border-hover',
+            'focus:outline-none focus:border-nexus-accent focus:ring-2 focus:ring-nexus-accent/25',
+            error ? 'border-nexus-danger focus:border-nexus-danger focus:ring-nexus-danger/25' : 'border-nexus-border hover:border-nexus-border-hover',
             'disabled:opacity-50 disabled:cursor-not-allowed',
             className
           )}
@@ -83,12 +88,12 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
           {...props}
         />
         {error && (
-          <p id={`${textareaId}-error`} className="mt-1.5 text-sm text-nexus-danger" role="alert">
+          <p id={`${textareaId}-error`} className="mt-1.5 text-xs text-nexus-danger" role="alert">
             {error}
           </p>
         )}
         {hint && !error && (
-          <p id={`${textareaId}-hint`} className="mt-1.5 text-sm text-nexus-text-muted">
+          <p id={`${textareaId}-hint`} className="mt-1.5 text-xs text-nexus-text-muted">
             {hint}
           </p>
         )}

@@ -12,7 +12,7 @@ export function Logo({ card, className }: { card: MarketCard; className?: string
       className={cn('rounded-lg object-contain flex-shrink-0 bg-white/5', className)} />;
   }
   return (
-    <span aria-hidden className={cn('rounded-lg bg-nexus-accent/15 text-nexus-accent font-semibold flex items-center justify-center flex-shrink-0', className)}>
+    <span aria-hidden className={cn('rounded-lg bg-nexus-accent/15 text-nexus-accent-text font-semibold flex items-center justify-center flex-shrink-0', className)}>
       {card.title.charAt(0).toUpperCase()}
     </span>
   );

@@ -94,12 +94,12 @@ export function DynamicContent({ sources, onPick }: DynamicContentProps) {
     <div className="relative">
       <button type="button" onClick={() => setOpen(v => !v)} aria-label="Insert dynamic content" aria-expanded={open}
         title="Insert data from the trigger or earlier steps"
-        className="h-full px-2 rounded-lg border border-nexus-border text-nexus-accent hover:bg-nexus-accent-dim">
+        className="h-full px-2 rounded-lg border border-nexus-border text-nexus-accent-text hover:bg-nexus-accent-dim">
         <Zap className="w-4 h-4" />
       </button>
       {open && (
         <div role="listbox" aria-label="Dynamic content"
-          className="absolute right-0 z-30 mt-1 w-72 max-h-72 overflow-y-auto rounded-lg border border-nexus-border bg-nexus-bg-secondary shadow-lg p-2">
+          className="absolute right-0 z-30 mt-1 w-72 max-h-72 overflow-y-auto rounded-lg border border-nexus-border bg-nexus-bg-secondary shadow-pop p-2">
           {entries.length === 0 ? (
             <p className="text-xs text-nexus-text-muted p-1">Nothing to insert yet. Add a trigger input or a step above this one.</p>
           ) : groups.map(group => (

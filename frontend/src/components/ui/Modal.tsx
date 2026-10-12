@@ -78,7 +78,7 @@ export function Modal({
   const modalContent = (
     <div
       ref={overlayRef}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-[2px] animate-fade-in"
       role="dialog"
       aria-modal="true"
       aria-labelledby={title ? `${id}-title` : undefined}
@@ -88,20 +88,20 @@ export function Modal({
         ref={contentRef}
         className={cn(
           // Never taller than the screen: the body scrolls, the title and close button stay reachable.
-          'w-full max-h-full flex flex-col bg-nexus-bg-secondary border-nexus-border rounded-xl shadow-xl animate-slide-up',
+          'w-full max-h-full flex flex-col bg-nexus-bg-secondary border border-nexus-border rounded-xl shadow-pop animate-slide-up',
           sizes[size]
         )}
       >
         {(title || showClose) && (
-          <div className="flex items-start justify-between p-4 border-b-nexus-border border-b">
+          <div className="flex items-start justify-between gap-4 px-5 py-4 border-b border-nexus-border">
             <div>
               {title && (
-                <h2 id={`${id}-title`} className="text-lg font-semibold text-nexus-text">
+                <h2 id={`${id}-title`} className="text-[15px] font-semibold text-nexus-text">
                   {title}
                 </h2>
               )}
               {description && (
-                <p id={`${id}-description`} className="text-sm text-nexus-text-secondary mt-1">
+                <p id={`${id}-description`} className="text-[13px] text-nexus-text-secondary mt-0.5">
                   {description}
                 </p>
               )}
@@ -112,14 +112,14 @@ export function Modal({
                 size="sm"
                 onClick={onClose}
                 aria-label="Close modal"
-                className="text-nexus-text-secondary hover:text-nexus-text"
+                className="-mr-1.5 -mt-1 w-8 px-0 text-nexus-text-muted hover:text-nexus-text"
               >
-                <X className="h-5 w-5" />
+                <X className="h-4 w-4" />
               </Button>
             )}
           </div>
         )}
-        <div className="p-4 overflow-y-auto">
+        <div className="px-5 py-4 overflow-y-auto">
           <ModalDepth.Provider value={depth}>{children}</ModalDepth.Provider>
         </div>
       </div>
