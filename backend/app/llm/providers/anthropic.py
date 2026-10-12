@@ -78,7 +78,10 @@ class AnthropicProvider(BaseLLMProvider):
             **extra,
         }
         if system:
-            body["system"] = system
+            # Cache the instructions (and, below, the tools): repeated on every call, read back at ~10% of the price.
+            body["system"] = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+        if body.get("tools"):
+            body["tools"] = [*body["tools"][:-1], {**body["tools"][-1], "cache_control": {"type": "ephemeral"}}]
         # Current Claude models reject sampling params; only send when the caller explicitly asks.
         if temperature is not None:
             body["temperature"] = temperature
@@ -148,6 +151,8 @@ class AnthropicProvider(BaseLLMProvider):
             "usage": {
                 "input_tokens": usage.get("input_tokens", 0),
                 "output_tokens": usage.get("output_tokens", 0),
+                "cache_read_input_tokens": usage.get("cache_read_input_tokens", 0),
+                "cache_creation_input_tokens": usage.get("cache_creation_input_tokens", 0),
                 "total_tokens": usage.get("input_tokens", 0) + usage.get("output_tokens", 0),
             },
         }

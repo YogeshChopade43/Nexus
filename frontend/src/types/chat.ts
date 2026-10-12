@@ -26,6 +26,10 @@ export interface ReplyUsage {
   output_tokens: number;
   estimated: boolean;
   cost: number | null;
+  /** The biggest prompt sent at once in this reply: how full the context window got. */
+  context_tokens?: number;
+  /** Prompt tokens the provider served from its cache (cheaper and faster). */
+  cached_tokens?: number;
 }
 
 /** Per-conversation options, saved with the conversation. */

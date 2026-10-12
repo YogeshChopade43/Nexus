@@ -492,3 +492,21 @@ def test_conversations_can_be_renamed_and_pinned(client):
     assert ids.index(newer) < ids.index(older)
     assert client.patch(f"/api/agent/sessions/{older}", json={"title": "   "}).status_code == 422
     assert client.patch("/api/agent/sessions/nope", json={"title": "x"}).status_code == 404
+
+
+def test_a_greeting_stays_small_even_with_apps_connected(client, llm):
+    """'Hii' cost ~1,200 tokens: the whole tool protocol, the question-card tool and every app's who-am-I tool."""
+    client.post("/api/agent/run", json={"message": "Hii", "session_id": new_session(client)})
+    call = next(c for c in llm.calls if c["kind"] in ("tools", "stream"))
+    offered = call.get("tools", [])
+    assert "nexus_ask_user" not in offered and not any(t.endswith("__get_me") for t in offered)
+    size = sum(len(m["content"]) for m in call["messages"]) // 4
+    assert size < 300, size
+
+
+def test_who_am_i_tools_only_come_with_a_request_about_apps():
+    from app.agent.tool_selection import rank_tools
+
+    tools = [("github__search_repositories", "Find GitHub repositories by name"), ("github__get_me", "Get details of the authenticated GitHub user")]
+    assert rank_tools("Hii", tools, 5, min_score=1) == []
+    assert "github__get_me" in rank_tools("my repositories", tools, 5, min_score=1)

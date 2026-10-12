@@ -146,6 +146,23 @@ def delete_llm_provider(provider_id: int) -> dict[str, Any]:
     return {"id": provider_id, "deleted": True}
 
 
+@router.get("/context-window")
+async def get_context_window(provider_id: Optional[int] = None) -> dict[str, Any]:
+    """The context window of the provider's model (or of the default provider, as chat uses)."""
+    from app.llm.context import context_window
+
+    conn = get_connection()
+    try:
+        row = (conn.execute("SELECT provider_name, model FROM llm_providers WHERE id = ?", (provider_id,)).fetchone()
+               if provider_id is not None else
+               conn.execute("SELECT provider_name, model FROM llm_providers WHERE enabled = 1 ORDER BY id DESC LIMIT 1").fetchone())
+    finally:
+        conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail="No LLM provider")
+    return {**await context_window(row["provider_name"], row["model"]), "model": row["model"]}
+
+
 @router.get("/{provider_id}")
 def get_llm_provider(provider_id: int) -> dict[str, Any]:
     conn = get_connection()

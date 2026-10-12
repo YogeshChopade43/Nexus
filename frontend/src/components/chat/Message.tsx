@@ -130,7 +130,8 @@ const numberFormat = new Intl.NumberFormat();
 
 function usageText(usage: NonNullable<ChatMessage['usage']>): string {
   const tokens = usage.input_tokens + usage.output_tokens;
-  const parts = [`${usage.estimated ? '~' : ''}${numberFormat.format(tokens)} tokens`];
+  const cached = usage.cached_tokens ? ` (${numberFormat.format(usage.cached_tokens)} cached)` : '';
+  const parts = [`${usage.estimated ? '~' : ''}${numberFormat.format(tokens)} tokens${cached}`];
   if (usage.cost !== null && usage.cost !== undefined) parts.push(usage.cost < 0.01 ? '<$0.01' : `$${usage.cost.toFixed(2)}`);
   return parts.join(' · ');
 }

@@ -40,6 +40,11 @@ describe('replies', () => {
     expect(onRetry).toHaveBeenCalled();
   });
 
+  test('usage shows the part of the prompt served from the provider cache', () => {
+    render(<Message message={{ ...base, content: 'Hi', usage: { input_tokens: 2200, output_tokens: 34, estimated: false, cost: null, cached_tokens: 1024 } }} />);
+    expect(screen.getByText('2,234 tokens (1,024 cached)')).toBeInTheDocument();
+  });
+
   test('edit puts the question (without the attachment line) in a box and sends the new text', () => {
     const onEdit = vi.fn();
     render(<Message message={{ ...base, id: 'u1', role: 'user', content: 'old question\n\n📎 notes.txt' }} onEdit={onEdit} />);

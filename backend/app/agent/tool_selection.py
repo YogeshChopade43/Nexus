@@ -43,15 +43,16 @@ def rank_tools(query: str, tools: list[tuple[str, str]], limit: int, min_score: 
         server, _, tool = name.partition("__")
         # OpenAPI-generated servers name tools "API-post-search": the HTTP method says nothing about intent.
         tool = re.sub(r"^api[-_](get|post|put|patch|delete)[-_]", "", tool or name, flags=re.IGNORECASE)
-        # Each app's who-am-I tool is always offered (only the named app's, if the request names one), on top of
-        # the best matches, so "my ..." works in any wording or language instead of guessing a username.
+        # Each app's who-am-I tool comes with app requests (only the named app's, if the request names one), on top
+        # of the best matches, so "my ..." works in any wording or language instead of guessing a username.
         if (server in named or not named) and (WHO_AM_I_NAME.search(tool) or WHO_AM_I_TEXT.search(description)):
             who_am_i.append(name)
             continue
         score = 2 * len(wanted & _words(tool)) + len(wanted & _words(description)) + (5 if server in named else 0)
         if score >= min_score:
             scored.append((-score, index, name))
-    return [name for _, _, name in sorted(scored)[:limit]] + who_am_i
+    # Only for a request about apps (one names an app or matches its tools): "Hii" gets none of them.
+    return [name for _, _, name in sorted(scored)[:limit]] + (who_am_i if named or scored else [])
 
 
 if __name__ == "__main__":

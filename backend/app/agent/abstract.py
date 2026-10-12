@@ -20,31 +20,27 @@ FIND_TOOLS = "nexus_find_tools"
 READ_RESULT = "nexus_read_result"
 FIND_TOOLS_SCHEMA = {
     "name": FIND_TOOLS,
-    "description": "Look for more tools when none of the offered tools fits the request. "
-                   "Returns matching tools, which become callable.",
+    "description": "Find more tools when none offered fits; the ones found become callable.",
     "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "What you need to do"}},
                    "required": ["query"]},
 }
 ASK_USER = "nexus_ask_user"
 ASK_USER_SCHEMA = {
     "name": ASK_USER,
-    "description": "Ask the user 1-4 multiple-choice questions, shown as cards they click. Use it when you're unsure and "
-                   "the answer changes what you'll do (where a reminder should alert them, which app or account to use, "
-                   "which of several things they mean). Offer 1-4 concrete options, from their connected apps when "
-                   "relevant; they can also type their own answer. Don't ask what you can work out yourself, and ask "
-                   "everything you need at once.",
+    "description": "Ask 1-4 multiple-choice questions as clickable cards when you're unsure and the answer changes what "
+                   "you'll do (where to send a reminder, which app or item they mean). Offer concrete options, from their "
+                   "apps when relevant; they can type their own. Ask everything at once; don't ask what you can work out.",
     "parameters": {
         "type": "object",
         "properties": {"questions": {"type": "array", "minItems": 1, "maxItems": 4, "items": {
             "type": "object",
             "properties": {
-                "question": {"type": "string", "description": "The full question, ending with a question mark"},
-                "header": {"type": "string", "description": "A 1-2 word label, e.g. 'Alerts' or 'Time'"},
-                "multi_select": {"type": "boolean", "description": "True if they may pick several options"},
+                "question": {"type": "string"},
+                "header": {"type": "string", "description": "1-2 words, e.g. 'Alerts'"},
+                "multi_select": {"type": "boolean"},
                 "options": {"type": "array", "minItems": 1, "maxItems": 4, "items": {
                     "type": "object",
-                    "properties": {"label": {"type": "string", "description": "1-5 words"},
-                                   "description": {"type": "string", "description": "What choosing it means"}},
+                    "properties": {"label": {"type": "string", "description": "1-5 words"}, "description": {"type": "string"}},
                     "required": ["label"]}},
             },
             "required": ["question", "options"]}}},
@@ -57,6 +53,22 @@ READ_RESULT_SCHEMA = {
     "parameters": {"type": "object", "properties": {"result_id": {"type": "string"}, "offset": {"type": "integer"}},
                    "required": ["result_id", "offset"]},
 }
+
+
+# Rules for using app tools: sent only while app tools are offered (they cost ~230 tokens per call).
+TOOL_PROTOCOL = (
+    "You are Nexus, an assistant that can use tools from the user's connected apps (MCP servers; tools are "
+    "named server__tool) and its own nexus tools.\n"
+    "- Answer greetings, small talk, general knowledge, advice, writing, and questions about earlier results "
+    "directly, without tools. Use tools only for live data from the user's apps or to act in them.\n"
+    "- Apps are already signed in as the user: never ask for credentials. For the user's own things "
+    "(\"my repos\"), first call that app's who-am-I tool (such as get_me) instead of guessing their username.\n"
+    f"- If a request is ambiguous, ask instead of guessing (with {ASK_USER} when it is offered). If no tool fits, "
+    "say which kind of app would be needed.\n"
+    "- Give every required parameter. After tools run, answer from their results in plain words, never raw "
+    "JSON. When a tool fails, report its actual error; don't invent causes it doesn't state.\n"
+    "- Use Markdown (lists, tables, code blocks) when it helps."
+)
 
 
 class Agent(ABC):
@@ -204,14 +216,29 @@ class BaseAgent(Agent):
 
     def _schemas_for(self, state: dict[str, Any]) -> List[dict[str, Any]]:
         """The tools offered this turn: the selected ones, plus the helpers that apply."""
-        schemas = self._build_tool_schemas(state["offered"])
+        # Sorted, so the same tools always produce the same prompt start: providers reuse their cache for it.
+        schemas = sorted(self._build_tool_schemas(state["offered"]), key=lambda schema: schema["name"])
         if len(state["offered"]) < len(state["all_tools"]):
             schemas.append(FIND_TOOLS_SCHEMA)
         if state.get("results"):
             schemas.append(READ_RESULT_SCHEMA)
-        if state.get("can_ask"):
+        if state.get("can_ask") and any(self._app_of(n) != "nexus" or n.endswith("_workflow") for n in state["offered"]):
             schemas.append(ASK_USER_SCHEMA)
         return schemas
+
+    def _system_for(self, state: dict[str, Any]) -> str:
+        """The full tool instructions once app tools are offered; until then a short prompt that names the user's
+        apps and lets the model load their tools itself (nexus_find_tools), like Claude's tool search."""
+        if any(self._app_of(n) not in ("nexus", "") for n in state["offered"]):
+            system = TOOL_PROTOCOL
+        else:
+            system = "You are Nexus, a helpful assistant. Be concise; use Markdown when it helps."
+            apps = sorted({self._app_of(n) for n in state["all_tools"]} - {"nexus", ""})
+            if apps and len(state["offered"]) < len(state["all_tools"]):
+                system += (f" The user's connected apps: {', '.join(apps)}. If a request needs live data from them or "
+                           f"an action in them, call {FIND_TOOLS} to load their tools; otherwise just answer.")
+        extra = state.get("extra_system") or ""
+        return f"{system}\n\n{extra}" if extra else system
 
     def _select_tools(self, task: str, history: list[dict[str, Any]], names: list[str]) -> list[str]:
         """Nexus's own tools, plus app tools sharing a word with the request or recent user messages.
@@ -263,61 +290,14 @@ class BaseAgent(Agent):
         events: list[dict[str, Any]],
         history: list[dict[str, Any]] = None,
     ) -> dict[str, Any]:
-        system_msg = (
-            "# Nexus Agent — Tool Use Protocol\n\n"
-            "You are Nexus, an AI assistant with access to external tools. Your primary role is to help users "
-            "by executing actions via these tools when needed.\n\n"
-            "## MANDATORY RULES\n\n"
-            "### 1. TOOL USE IS NOT DEFAULT\n"
-            "Most user messages do NOT require tools. Default to conversational response unless the request "
-            "explicitly or implicitly requires external data/actions.\n\n"
-            "### 2. USE TOOLS ONLY WHEN:\n"
-            "The user asks for something that CANNOT be answered from your training knowledge and requires:\n"
-            "- **Fetching live data** from external systems\n"
-            "- **Performing actions** on external systems\n"
-            "- **Real-time information** not in your training cutoff\n\n"
-            "### 3. DO NOT USE TOOLS FOR:\n"
-            "- Greetings, small talk, introductions\n"
-            "- Questions about your identity, capabilities, or training\n"
-            "- General knowledge questions (coding concepts, tech explanations, etc.)\n"
-            "- Opinions, advice, brainstorming, creative writing\n"
-            "- Follow-up questions about previous tool results (use the context provided)\n"
-            "- \"What can you do?\" or \"How do you work?\" questions\n\n"
-            "### 4. CONNECTED SERVERS & USER IDENTITY\n"
-            "Tools come from MCP servers the user has connected, each already authenticated as the user. "
-            "DO NOT ask for credentials. Tool names are prefixed with their server (server__tool). "
-            "For the user's own account (\"my repos\", \"my pages\"), first call that app's who-am-I tool "
-            "(such as get_me) instead of guessing their username from other context. When a tool fails, "
-            "report its actual error; don't invent causes it doesn't state.\n\n"
-            "### 5. AMBIGUOUS REQUESTS\n"
-            "If a request could be interpreted either way, ASK FOR CLARIFICATION instead of guessing: when the "
-            f"{ASK_USER} tool is available, ask with it (clickable options) rather than in plain text. "
-            "If no available tool fits, say which kind of MCP server would be needed.\n\n"
-            "### 6. TOOL CALL FORMAT\n"
-            "When tools ARE required:\n"
-            "- Call ONLY the necessary tool(s)\n"
-            "- Provide all required parameters\n"
-            "- Do not include explanatory text outside tool calls\n"
-            "- Multiple independent calls allowed in one response\n\n"
-            "### 6. AFTER TOOL EXECUTION\n"
-            "You will receive tool results. Summarize them naturally in your response. "
-            "Do not dump raw JSON. Answer the user's original question using the tool data.\n\n"
-            "## AVAILABLE TOOLS\n"
-            "Tools are provided by the connected MCP servers. Only call tools that appear in the "
-            "available tools list.\n\n"
-            "Respond with tool calls only when the above criteria are met. Otherwise, respond conversationally.\n\n"
-            "Format answers with Markdown (lists, tables, code blocks) when it helps readability."
-        )
-        if self._extra_system:
-            system_msg += "\n\n" + self._extra_system
-
-        messages: list[dict[str, Any]] = [{"role": "system", "content": system_msg}]
+        messages: list[dict[str, Any]] = [{"role": "system", "content": ""}]  # set per call by _system_for
         messages.extend(history or [])
         messages.append({"role": "user", "content": task})
         state = {"task": task, "history": history or [], "messages": messages, "summaries": [], "queue": [],
                  "iteration": 0, "events": events, "all_tools": list(tool_names),
                  "offered": self._select_tools(task, history or [], tool_names), "results": {},
                  "extra_system": self._extra_system, "can_ask": self.can_ask}
+        messages[0]["content"] = self._system_for(state)
         return await self._tool_loop(state, llm_provider)
 
     async def resume(self, state: dict[str, Any], approved: bool, llm_provider: Any) -> dict[str, Any]:
@@ -409,6 +389,7 @@ class BaseAgent(Agent):
                 content = ""
                 break
             state["iteration"] += 1
+            messages[0]["content"] = self._system_for(state)  # tools found mid-turn bring the full instructions
             result = await llm_provider.chat_with_tools(messages=messages, tools=self._schemas_for(state))
             content = result.get("content") or ""
             tool_calls = result.get("tool_calls") or []

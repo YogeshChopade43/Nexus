@@ -1,3 +1,4 @@
+import { ContextMeter } from './ContextMeter';
 import { useRef, useCallback, useEffect, useState } from 'react';
 import { cn } from '../../lib/utils';
 import { MessageList, MessageListRef } from './MessageList';
@@ -90,6 +91,7 @@ export function ChatArea({ className }: ChatAreaProps) {
               ))}
             </select>
           )}
+          {hasLLM && <ContextMeter messages={messages} providerId={providerId} />}
           <Button variant="ghost" size="sm" className="w-8 px-0" onClick={() => setHistoryOpen(o => !o)} aria-label="Conversations" title="Past conversations" aria-expanded={historyOpen}>
             <History className="w-4 h-4" />
           </Button>

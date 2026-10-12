@@ -39,7 +39,10 @@ def usage_total(records: list[dict[str, Any]]) -> dict[str, Any]:
 
     prices = load_user_settings().get("llmPrices") or {}
     total = {"input_tokens": sum(r["input"] for r in records), "output_tokens": sum(r["output"] for r in records),
-             "estimated": any(r["estimated"] for r in records), "cost": None}
+             "estimated": any(r["estimated"] for r in records), "cost": None,
+             # The biggest prompt sent at once is how full the context window got (calls re-send everything so far).
+             "context_tokens": max((r["input"] for r in records), default=0),
+             "cached_tokens": sum(r.get("cached", 0) for r in records)}
     if records and all(isinstance(prices.get(r["model"]), dict) for r in records):
         total["cost"] = round(sum(
             (r["input"] * float(prices[r["model"]].get("input") or 0) + r["output"] * float(prices[r["model"]].get("output") or 0))
@@ -81,10 +84,11 @@ def check_budget() -> None:
 
 
 def record_usage(provider_id: Optional[int], provider: str, model: str, input_tokens: int, output_tokens: int,
-                 estimated: bool = False) -> None:
+                 estimated: bool = False, cached: int = 0) -> None:
     scope = _scope.get()
     if scope is not None:
-        scope.append({"model": model or "", "input": int(input_tokens or 0), "output": int(output_tokens or 0), "estimated": estimated})
+        scope.append({"model": model or "", "input": int(input_tokens or 0), "output": int(output_tokens or 0),
+                      "estimated": estimated, "cached": int(cached or 0)})
     conn = get_connection()
     try:
         conn.execute(
@@ -99,11 +103,21 @@ def record_usage(provider_id: Optional[int], provider: str, model: str, input_to
 
 
 def _usage_tokens(usage: Any) -> tuple[int, int]:
-    """(input, output) from Anthropic-style or OpenAI-style usage objects."""
+    """(input, output) from Anthropic-style or OpenAI-style usage objects. Input is the whole prompt: Anthropic
+    reports the part read from or written to its cache separately."""
     if not isinstance(usage, dict):
         return 0, 0
-    return (int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0),
-            int(usage.get("output_tokens") or usage.get("completion_tokens") or 0))
+    prompt = int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
+    prompt += int(usage.get("cache_read_input_tokens") or 0) + int(usage.get("cache_creation_input_tokens") or 0)
+    return prompt, int(usage.get("output_tokens") or usage.get("completion_tokens") or 0)
+
+
+def _cached_tokens(usage: Any) -> int:
+    """Prompt tokens the provider served from its cache (cheaper and faster)."""
+    if not isinstance(usage, dict):
+        return 0
+    details = usage.get("prompt_tokens_details") or {}
+    return int(usage.get("cache_read_input_tokens") or (details.get("cached_tokens") if isinstance(details, dict) else 0) or 0)
 
 
 def _estimate(text: str) -> int:
@@ -128,7 +142,7 @@ class Metered:
             input_tokens, output_tokens = _usage_tokens(result.get("usage"))
             if input_tokens or output_tokens:
                 record_usage(self._provider_id, self._name, result.get("model") or model or self._model,
-                             input_tokens, output_tokens)
+                             input_tokens, output_tokens, cached=_cached_tokens(result.get("usage")))
 
     async def chat(self, messages: Any, **kwargs: Any) -> Any:
         check_budget()
