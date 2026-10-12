@@ -6,6 +6,8 @@ import { cn, getErrorMessage } from '../../lib/utils';
 import { mcpService } from '../../services/mcp';
 import { workflowService } from '../../services/workflow';
 import { graphToTree, treeToGraph, type FlowStep, type FlowTree } from './flowTree';
+import { FlowEditor } from './FlowEditor';
+import { layout, type Graph } from './graphEdit';
 import { ActionPicker, BUILT_INS, type PickedAction } from './ActionPicker';
 import { StepConfig, type DynamicSources } from './StepConfig';
 import { toolLabel } from './toolInfo';
@@ -62,7 +64,8 @@ function collectIds(nodes: WorkflowNode[], into = new Set<string>()): Set<string
   return into;
 }
 
-function summary(node: WorkflowNode, servers: McpServer[]): string {
+/** One line saying what a step does, for the step list and the canvas. */
+export function stepSummary(node: WorkflowNode, servers: McpServer[]): string {
   const c = node.config;
   switch (node.type) {
     case 'action': {
@@ -98,7 +101,7 @@ function summary(node: WorkflowNode, servers: McpServer[]): string {
 }
 
 /** Everything a step list needs from the builder, passed down unchanged through nested lists. */
-interface BuilderContext {
+export interface BuilderContext {
   tools: Map<string, ToolDefinition>;
   servers: McpServer[];
   llmProviders: LLMProviderConfig[];
@@ -136,6 +139,112 @@ function NestedSteps({ graph, onGraph, before, listKey, ctx, scopes, label, tone
         <p className="text-xs text-nexus-warning">These steps use a structure the builder can't display.</p>
       )}
     </div>
+  );
+}
+
+/** A step's settings: what it does, retries, timeout, and "Test step" with its result. */
+export function StepDetails({ node, onConfig, ctx, sources }: {
+  node: WorkflowNode;
+  onConfig: (patch: Record<string, unknown>) => void;
+  ctx: BuilderContext;
+  sources: DynamicSources;
+}) {
+  const test = ctx.tests[node.id];
+  return (
+    <>
+      <StepConfig node={node} onConfig={onConfig} tools={ctx.tools} llmProviders={ctx.llmProviders} sources={sources} workflows={ctx.workflows} />
+      <div className="flex flex-wrap items-center gap-4 text-xs text-nexus-text-secondary">
+        {HANDLES_ERRORS.includes(node.type) && (
+          <>
+            <label className="flex items-center gap-2">
+              Retries
+              <input type="number" min={0} max={5} value={Number(node.config.retries ?? 0)} onChange={(e) => onConfig({ retries: Number(e.target.value) })}
+                className="w-14 px-2 py-1 rounded bg-nexus-bg-tertiary border border-nexus-border text-nexus-text" />
+            </label>
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={Boolean(node.config.continue_on_error)} onChange={(e) => onConfig({ continue_on_error: e.target.checked })} />
+              Continue if this step fails
+            </label>
+            {!node.config.on_error && (
+              <button onClick={() => onConfig({ on_error: EMPTY_GRAPH })} className="text-nexus-accent">+ If this step fails…</button>
+            )}
+          </>
+        )}
+        {!['loop', 'parallel', 'condition'].includes(node.type) && (
+          <label className="flex items-center gap-2">
+            Timeout (s)
+            <input type="number" min={1} max={3600} placeholder="300" value={node.config.timeout_seconds ? Number(node.config.timeout_seconds) : ''}
+              onChange={(e) => onConfig({ timeout_seconds: e.target.value ? Number(e.target.value) : null })}
+              className="w-20 px-2 py-1 rounded bg-nexus-bg-tertiary border border-nexus-border text-nexus-text" />
+          </label>
+        )}
+        {!['loop', 'parallel'].includes(node.type) && (
+          <button onClick={() => ctx.testStep(node)} disabled={test === 'running'} className="flex items-center gap-1 text-nexus-accent disabled:opacity-50">
+            <FlaskConical className="w-3.5 h-3.5" /> {test === 'running' ? 'Testing…' : 'Test step'}
+          </button>
+        )}
+      </div>
+      {test && test !== 'running' && (
+        <div className={cn('rounded p-2 text-xs', test.status === 'success' ? 'bg-green-500/5' : 'bg-red-500/5')}>
+          <p className={test.status === 'success' ? 'text-green-500' : 'text-nexus-danger'}>
+            {test.status === 'success' ? `Test passed in ${test.duration_ms} ms` : `Test failed: ${test.error}`}
+          </p>
+          {test.output !== undefined && (
+            <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-nexus-text-secondary">{JSON.stringify(test.output, null, 2)}</pre>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
+/** Steps held inside a step: a loop's body, parallel branches, and what to do if the step fails. */
+export function NestedSections({ node, onConfig, ctx, earlier, listKey, scopes }: {
+  node: WorkflowNode;
+  onConfig: (patch: Record<string, unknown>) => void;
+  ctx: BuilderContext;
+  earlier: WorkflowNode[];
+  listKey: string;
+  scopes: Array<'loop' | 'error'>;
+}) {
+  const branches = (node.config.branches as NestedGraph[] | undefined) ?? [];
+  return (
+    <>
+      {node.type === 'loop' && (
+      <div className="p-3 border-t border-nexus-border">
+        <NestedSteps graph={node.config.body as NestedGraph | undefined} onGraph={(body) => onConfig({ body })}
+          before={[...earlier, node]} listKey={`${listKey}/${node.id}.body`} ctx={ctx} scopes={[...scopes, 'loop']}
+          label="For each item, do:" tone="bg-blue-500/5" />
+      </div>
+    )}
+
+    {node.type === 'parallel' && (
+      <div className="p-3 border-t border-nexus-border space-y-2">
+        <div className="grid gap-3 md:grid-cols-2">
+          {branches.map((graph, b) => (
+            <div key={b} className="relative">
+              <button onClick={() => onConfig({ branches: branches.filter((_, i) => i !== b) })} aria-label={`Remove branch ${b + 1}`}
+                className="absolute right-2 top-2 text-nexus-text-muted hover:text-nexus-danger"><X className="w-3.5 h-3.5" /></button>
+              <NestedSteps graph={graph} onGraph={(g) => onConfig({ branches: branches.map((x, i) => (i === b ? g : x)) })}
+                before={[...earlier]} listKey={`${listKey}/${node.id}.branch${b}`} ctx={ctx} scopes={scopes}
+                label={`Branch ${b + 1}`} tone="bg-purple-500/5" />
+            </div>
+          ))}
+        </div>
+        <button onClick={() => onConfig({ branches: [...branches, EMPTY_GRAPH] })} className="text-xs text-nexus-accent">+ Add branch</button>
+      </div>
+    )}
+
+    {node.config.on_error != null && HANDLES_ERRORS.includes(node.type) && (
+      <div className="p-3 border-t border-nexus-border relative">
+        <button onClick={() => onConfig({ on_error: null })} aria-label="Remove error handler"
+          className="absolute right-4 top-4 text-nexus-text-muted hover:text-nexus-danger"><X className="w-3.5 h-3.5" /></button>
+        <NestedSteps graph={node.config.on_error as NestedGraph} onGraph={(on_error) => onConfig({ on_error })}
+          before={[...earlier]} listKey={`${listKey}/${node.id}.on_error`} ctx={ctx} scopes={[...scopes, 'error']}
+          label="If this step fails, do: (then continue)" tone="bg-red-500/5" />
+      </div>
+    )}
+    </>
   );
 }
 
@@ -192,8 +301,6 @@ function StepList({ steps, onChange, before, listKey, ctx, scopes = [] }: {
         const sources: DynamicSources = { trigger: ctx.trigger, earlierSteps: earlier, lastOutputs: ctx.lastOutputs, scopes };
         const setNode = (patch: Partial<WorkflowNode>) => replace(index, { ...step, node: { ...node, ...patch } } as FlowStep);
         const onConfig = (patch: Record<string, unknown>) => setNode({ config: { ...node.config, ...patch } });
-        const test = ctx.tests[node.id];
-        const branches = (node.config.branches as NestedGraph[] | undefined) ?? [];
         return (
           <div key={node.id} className="space-y-2">
             {inserter(index)}
@@ -206,7 +313,7 @@ function StepList({ steps, onChange, before, listKey, ctx, scopes = [] }: {
                 <div className="flex-1 min-w-0">
                   <input value={node.name} onChange={(e) => setNode({ name: e.target.value })} aria-label="Step name"
                     className="w-full bg-transparent text-sm font-medium text-nexus-text focus:outline-none" />
-                  {!open && <p className="text-xs text-nexus-text-muted truncate">{summary(node, ctx.servers)}</p>}
+                  {!open && <p className="text-xs text-nexus-text-muted truncate">{stepSummary(node, ctx.servers)}</p>}
                 </div>
                 <code className="hidden sm:inline text-[10px] text-nexus-text-muted">{node.id}</code>
                 <button onClick={() => move(index, -1)} disabled={index === 0} aria-label="Move up" className="text-nexus-text-muted disabled:opacity-30"><ArrowUp className="w-4 h-4" /></button>
@@ -215,48 +322,7 @@ function StepList({ steps, onChange, before, listKey, ctx, scopes = [] }: {
               </div>
               {open && (
                 <div className="px-3 pb-3 space-y-3 border-t border-nexus-border pt-3">
-                  <StepConfig node={node} onConfig={onConfig} tools={ctx.tools} llmProviders={ctx.llmProviders} sources={sources} workflows={ctx.workflows} />
-                  <div className="flex flex-wrap items-center gap-4 text-xs text-nexus-text-secondary">
-                    {HANDLES_ERRORS.includes(node.type) && (
-                      <>
-                        <label className="flex items-center gap-2">
-                          Retries
-                          <input type="number" min={0} max={5} value={Number(node.config.retries ?? 0)} onChange={(e) => onConfig({ retries: Number(e.target.value) })}
-                            className="w-14 px-2 py-1 rounded bg-nexus-bg-tertiary border border-nexus-border text-nexus-text" />
-                        </label>
-                        <label className="flex items-center gap-2">
-                          <input type="checkbox" checked={Boolean(node.config.continue_on_error)} onChange={(e) => onConfig({ continue_on_error: e.target.checked })} />
-                          Continue if this step fails
-                        </label>
-                        {!node.config.on_error && (
-                          <button onClick={() => onConfig({ on_error: EMPTY_GRAPH })} className="text-nexus-accent">+ If this step fails…</button>
-                        )}
-                      </>
-                    )}
-                    {!['loop', 'parallel', 'condition'].includes(node.type) && (
-                      <label className="flex items-center gap-2">
-                        Timeout (s)
-                        <input type="number" min={1} max={3600} placeholder="300" value={node.config.timeout_seconds ? Number(node.config.timeout_seconds) : ''}
-                          onChange={(e) => onConfig({ timeout_seconds: e.target.value ? Number(e.target.value) : null })}
-                          className="w-20 px-2 py-1 rounded bg-nexus-bg-tertiary border border-nexus-border text-nexus-text" />
-                      </label>
-                    )}
-                    {!['loop', 'parallel'].includes(node.type) && (
-                      <button onClick={() => ctx.testStep(node)} disabled={test === 'running'} className="flex items-center gap-1 text-nexus-accent disabled:opacity-50">
-                        <FlaskConical className="w-3.5 h-3.5" /> {test === 'running' ? 'Testing…' : 'Test step'}
-                      </button>
-                    )}
-                  </div>
-                  {test && test !== 'running' && (
-                    <div className={cn('rounded p-2 text-xs', test.status === 'success' ? 'bg-green-500/5' : 'bg-red-500/5')}>
-                      <p className={test.status === 'success' ? 'text-green-500' : 'text-nexus-danger'}>
-                        {test.status === 'success' ? `Test passed in ${test.duration_ms} ms` : `Test failed: ${test.error}`}
-                      </p>
-                      {test.output !== undefined && (
-                        <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-nexus-text-secondary">{JSON.stringify(test.output, null, 2)}</pre>
-                      )}
-                    </div>
-                  )}
+                  <StepDetails node={node} onConfig={onConfig} ctx={ctx} sources={sources} />
                 </div>
               )}
 
@@ -272,40 +338,7 @@ function StepList({ steps, onChange, before, listKey, ctx, scopes = [] }: {
                 </div>
               )}
 
-              {node.type === 'loop' && (
-                <div className="p-3 border-t border-nexus-border">
-                  <NestedSteps graph={node.config.body as NestedGraph | undefined} onGraph={(body) => onConfig({ body })}
-                    before={[...earlier, node]} listKey={`${listKey}/${node.id}.body`} ctx={ctx} scopes={[...scopes, 'loop']}
-                    label="For each item, do:" tone="bg-blue-500/5" />
-                </div>
-              )}
-
-              {node.type === 'parallel' && (
-                <div className="p-3 border-t border-nexus-border space-y-2">
-                  <div className="grid gap-3 md:grid-cols-2">
-                    {branches.map((graph, b) => (
-                      <div key={b} className="relative">
-                        <button onClick={() => onConfig({ branches: branches.filter((_, i) => i !== b) })} aria-label={`Remove branch ${b + 1}`}
-                          className="absolute right-2 top-2 text-nexus-text-muted hover:text-nexus-danger"><X className="w-3.5 h-3.5" /></button>
-                        <NestedSteps graph={graph} onGraph={(g) => onConfig({ branches: branches.map((x, i) => (i === b ? g : x)) })}
-                          before={[...earlier]} listKey={`${listKey}/${node.id}.branch${b}`} ctx={ctx} scopes={scopes}
-                          label={`Branch ${b + 1}`} tone="bg-purple-500/5" />
-                      </div>
-                    ))}
-                  </div>
-                  <button onClick={() => onConfig({ branches: [...branches, EMPTY_GRAPH] })} className="text-xs text-nexus-accent">+ Add branch</button>
-                </div>
-              )}
-
-              {node.config.on_error != null && HANDLES_ERRORS.includes(node.type) && (
-                <div className="p-3 border-t border-nexus-border relative">
-                  <button onClick={() => onConfig({ on_error: null })} aria-label="Remove error handler"
-                    className="absolute right-4 top-4 text-nexus-text-muted hover:text-nexus-danger"><X className="w-3.5 h-3.5" /></button>
-                  <NestedSteps graph={node.config.on_error as NestedGraph} onGraph={(on_error) => onConfig({ on_error })}
-                    before={[...earlier]} listKey={`${listKey}/${node.id}.on_error`} ctx={ctx} scopes={[...scopes, 'error']}
-                    label="If this step fails, do: (then continue)" tone="bg-red-500/5" />
-                </div>
-              )}
+              <NestedSections node={node} onConfig={onConfig} ctx={ctx} earlier={earlier} listKey={listKey} scopes={scopes} />
             </div>
           </div>
         );
@@ -319,13 +352,17 @@ export function WorkflowBuilder({ workflow, draft, onSave, onCancel, tools, llmP
   const [name, setName] = useState(workflow?.name ?? draft?.name ?? '');
   const [description, setDescription] = useState(workflow?.description ?? draft?.description ?? '');
   const [isActive, setIsActive] = useState(workflow?.isActive ?? true);
-  const initialTree = useMemo<FlowTree | null>(() => {
-    if (workflow) return graphToTree(workflow.nodes, workflow.edges);
-    if (draft) return graphToTree(draft.nodes, draft.edges);
-    return { trigger: { id: 'trigger_1', type: 'trigger', name: 'Trigger', config: defaultTriggerConfig('manual') }, steps: [] };
-  }, [workflow, draft]);
-  const [tree, setTree] = useState<FlowTree | null>(initialTree);
-  const [expanded, setExpanded] = useState<string | null>(workflow ? null : 'trigger_1');
+  const [graph, setGraph] = useState<Graph>(() => {
+    const start = workflow ?? draft
+      ?? { nodes: [{ id: 'trigger_1', type: 'trigger' as const, name: 'Trigger', config: defaultTriggerConfig('manual') }], edges: [] };
+    return { nodes: layout(start.nodes, start.edges), edges: start.edges };
+  });
+  // The list edits the same graph as a tree; shapes a tree can't hold (two steps starting at once…) are canvas-only.
+  const tree = useMemo<FlowTree | null>(() => graphToTree(graph.nodes, graph.edges), [graph]);
+  const setTree = (next: FlowTree) => setGraph(treeToGraph(next));
+  // Phones start in the list: a node canvas is hard to use on a small touch screen.
+  const [view, setView] = useState<'canvas' | 'list'>(() => (window.innerWidth < 640 && tree ? 'list' : 'canvas'));
+  const [expanded, setExpanded] = useState<string | null>(null);
   const [pickerAt, setPickerAt] = useState<string | null>(null);
   const [servers, setServers] = useState<McpServer[]>([]);
   const [triggerTypes, setTriggerTypes] = useState<TriggerTypeInfo[]>([]);
@@ -361,7 +398,7 @@ export function WorkflowBuilder({ workflow, draft, onSave, onCancel, tools, llmP
   const toolMap = useMemo(() => new Map(tools.map(t => [t.tool_name, t])), [tools]);
 
   const newNode = (picked: PickedAction): WorkflowNode => {
-    const ids = tree ? collectIds(treeToGraph(tree).nodes) : new Set<string>();
+    const ids = collectIds(graph.nodes);
     let n = 1;
     while (ids.has(`${picked.type}_${n}`)) n++;
     const id = `${picked.type}_${n}`;
@@ -388,7 +425,6 @@ export function WorkflowBuilder({ workflow, draft, onSave, onCancel, tools, llmP
   };
 
   const handleSave = async () => {
-    if (!tree) return;
     if (!name.trim()) {
       setSaveError('Give the workflow a name');
       return;
@@ -396,8 +432,7 @@ export function WorkflowBuilder({ workflow, draft, onSave, onCancel, tools, llmP
     setSaving(true);
     setSaveError(null);
     try {
-      const { nodes, edges } = treeToGraph(tree);
-      const error = await onSave({ name: name.trim(), description, nodes, edges, isActive });
+      const error = await onSave({ name: name.trim(), description, nodes: layout(graph.nodes, graph.edges), edges: graph.edges, isActive });
       if (error) setSaveError(error);
     } finally {
       setSaving(false);
@@ -405,7 +440,7 @@ export function WorkflowBuilder({ workflow, draft, onSave, onCancel, tools, llmP
   };
 
   const ctx: BuilderContext = {
-    tools: toolMap, servers, llmProviders, workflows, workflowId: workflow?.id ?? null, trigger: tree?.trigger ?? null, lastOutputs,
+    tools: toolMap, servers, llmProviders, workflows, workflowId: workflow?.id ?? null, trigger: graph.nodes.find(n => n.type === 'trigger') ?? null, lastOutputs,
     expanded, setExpanded, pickerAt, setPickerAt, newNode, tests, testStep,
   };
 
@@ -417,7 +452,7 @@ export function WorkflowBuilder({ workflow, draft, onSave, onCancel, tools, llmP
           <label className="flex items-center gap-2 cursor-pointer self-end pb-2">
             <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} className="w-4 h-4" />
             <span className="text-sm text-nexus-text">
-              {tree?.trigger && tree.trigger.config.trigger_type !== 'manual'
+              {graph.nodes.some(n => n.type === 'trigger' && n.config.trigger_type !== 'manual')
                 ? 'Active (runs on its own while on)' : 'Enabled (can be run)'}
             </span>
           </label>
@@ -427,11 +462,30 @@ export function WorkflowBuilder({ workflow, draft, onSave, onCancel, tools, llmP
           <ul className="text-xs text-nexus-warning space-y-0.5">{draft.warnings.map(w => <li key={w}>⚠ {w}</li>)}</ul>
         )}
 
-        {tree === null ? (
-          <div role="alert" className="p-4 rounded-lg border border-nexus-warning/40 text-sm text-nexus-text-secondary">
-            This workflow was created with a structure the step builder can&apos;t display. You can still run or delete it,
-            but editing its steps here is disabled so nothing gets lost.
-          </div>
+        <div className="flex items-center gap-1" role="radiogroup" aria-label="Edit steps as">
+          {(['canvas', 'list'] as const).map(option => (
+            <button key={option} type="button" role="radio" aria-checked={view === option}
+              disabled={option === 'list' && tree === null}
+              title={option === 'list' && tree === null ? "This workflow's shape can only be shown on the canvas" : undefined}
+              onClick={() => setView(option)}
+              className={cn('px-2.5 py-1 rounded-md text-xs disabled:opacity-40',
+                view === option ? 'bg-nexus-accent-dim text-nexus-accent' : 'text-nexus-text-secondary hover:bg-nexus-bg-tertiary')}>
+              {option === 'canvas' ? 'Canvas' : 'List'}
+            </button>
+          ))}
+          {view === 'canvas' && (
+            <span className="ml-2 text-xs text-nexus-text-muted hidden sm:inline">
+              Drag steps to move them, drag from a dot to connect, + adds the next step, Delete removes the selection.
+            </span>
+          )}
+        </div>
+
+        {view === 'canvas' || tree === null ? (
+          <FlowEditor graph={graph} onChange={setGraph} ctx={ctx}
+            renderTrigger={(node, update) => (
+              <TriggerCard trigger={node} onChange={update} servers={servers} tools={toolMap} triggerTypes={triggerTypes}
+                webhookPath={workflow?.trigger_config?.webhook_path} />
+            )} />
         ) : (
           <div className="max-w-3xl mx-auto w-full space-y-2">
             {tree.trigger ? (
@@ -463,7 +517,7 @@ export function WorkflowBuilder({ workflow, draft, onSave, onCancel, tools, llmP
       {saveError && <p className="mt-3 text-sm text-nexus-danger" role="alert">{saveError}</p>}
       <div className="flex justify-end gap-2 pt-4 mt-2 border-t border-nexus-border">
         <Button variant="ghost" size="sm" onClick={onCancel} disabled={saving}>Cancel</Button>
-        <Button variant="primary" size="sm" onClick={handleSave} loading={saving} disabled={saving || tree === null} className="gap-1.5">
+        <Button variant="primary" size="sm" onClick={handleSave} loading={saving} disabled={saving} className="gap-1.5">
           <Save className="w-4 h-4" /> Save
         </Button>
       </div>

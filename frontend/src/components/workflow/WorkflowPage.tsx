@@ -9,7 +9,7 @@ import { Modal } from '../ui/Modal';
 import { WorkflowList } from './WorkflowList';
 import { NODE_ICONS, WorkflowBuilder, type WorkflowSaveData } from './WorkflowBuilder';
 import { RunInputsModal } from './RunInputsModal';
-import { WorkflowCanvas } from './WorkflowCanvas';
+import { FlowEditor } from './FlowEditor';
 import { triggerSummary } from './TriggerCard';
 import { ExecutionTrace } from './ExecutionTrace';
 import { useWorkflows } from '../../hooks/useWorkflows';
@@ -399,7 +399,7 @@ export function WorkflowPage() {
                       </button>
                     ))}
                   </div>
-                  {stepView === 'canvas' ? <WorkflowCanvas nodes={currentWorkflow.nodes} edges={currentWorkflow.edges} /> : (
+                  {stepView === 'canvas' ? <FlowEditor key={`${currentWorkflow.id}-${currentWorkflow.version}`} graph={{ nodes: currentWorkflow.nodes, edges: currentWorkflow.edges }} /> : (
                   <ol className="flex flex-wrap gap-2">
                     {currentWorkflow.nodes.map(node => (
                       <li key={node.id} className="px-3 py-1 bg-nexus-bg-tertiary border border-nexus-border rounded-full text-sm">
@@ -456,7 +456,7 @@ export function WorkflowPage() {
         </div>
       </div>
 
-      <Modal open={editorOpen} onClose={() => setEditorOpen(false)} title={editingWorkflow ? 'Edit Workflow' : 'Create Workflow'} size="xl">
+      <Modal open={editorOpen} onClose={() => setEditorOpen(false)} title={editingWorkflow ? 'Edit Workflow' : 'Create Workflow'} size="screen">
         {editorOpen && (
           <WorkflowBuilder
             key={editingWorkflow?.id ?? (draft ? 'draft' : 'new')}

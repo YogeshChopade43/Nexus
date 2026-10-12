@@ -10,7 +10,7 @@ interface ModalProps {
   title?: string;
   description?: string;
   children: ReactNode;
-  size?: 'sm' | 'md' | 'lg' | 'xl' | 'full';
+  size?: 'sm' | 'md' | 'lg' | 'xl' | 'full' | 'screen';
   showClose?: boolean;
 }
 
@@ -72,6 +72,7 @@ export function Modal({
     lg: 'max-w-lg',
     xl: 'max-w-xl',
     full: 'max-w-4xl',
+    screen: 'max-w-7xl',
   };
 
   const modalContent = (

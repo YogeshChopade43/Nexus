@@ -140,3 +140,48 @@ test('chat: Markdown replies, cost, retry, edit, stop and search', async ({ page
   await page.getByLabel('Search conversations').fill('hello again');
   await expect(page.getByRole('dialog', { name: 'Conversations' }).getByRole('button').filter({ hasText: 'hello' })).toHaveCount(1);
 });
+
+test('workflow canvas: add steps, connect them by dragging, save', async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 900 });
+  await page.goto('/workflows');
+  await page.getByRole('button', { name: 'New Workflow' }).click();
+  await page.getByLabel('Name', { exact: true }).fill('Canvas E2E');
+
+  // + beside the trigger adds a connected step and opens its settings.
+  await page.getByRole('button', { name: 'Add a step after Trigger' }).click();
+  await page.getByRole('button', { name: /Delay Wait before continuing/ }).click();
+  await expect(page.getByRole('region', { name: 'Step settings' })).toBeVisible();
+
+  // "Add step" adds an unconnected one; drag from Delay's output dot to its input to connect them.
+  await page.getByRole('button', { name: 'Add step', exact: true }).click();
+  await page.getByRole('button', { name: /Compose Build text/ }).click();
+  const output = page.locator('.react-flow__node', { hasText: 'Delay' }).locator('.react-flow__handle.source');
+  const input = page.locator('.react-flow__node', { hasText: 'Compose' }).locator('.react-flow__handle.target');
+  // The canvas pans to each new step (200 ms); measure the dots once they have held still for 450 ms.
+  const settled = async (handle: typeof output) => {
+    let [last, still] = ['', 0];
+    while (still < 3) {
+      await page.waitForTimeout(150);
+      const box = JSON.stringify(await handle.boundingBox());
+      still = box === last ? still + 1 : 0;
+      last = box;
+    }
+    return JSON.parse(last) as { x: number; y: number; width: number; height: number };
+  };
+  const [a, b] = [await settled(output), await settled(input)];
+  await expect(page.locator('.react-flow__edge')).toHaveCount(1);  // trigger -> delay, still drawn
+  await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 12 });
+  await page.mouse.up();
+  await expect(page.locator('.react-flow__edge')).toHaveCount(2);
+
+  await page.getByRole('button', { name: 'Save' }).click();
+  await expect(page.getByRole('dialog')).toBeHidden();
+  const workflows = await (await page.request.get('http://localhost:8765/api/workflows')).json();
+  const saved = workflows.find((w: { name: string }) => w.name === 'Canvas E2E');
+  expect(saved.edges.map((e: { source: string; target: string }) => `${e.source}->${e.target}`).sort())
+    .toEqual(['delay_1->transform_1', 'trigger_1->delay_1']);
+  expect(saved.nodes.every((n: { position?: unknown }) => n.position)).toBe(true);
+  await page.request.delete(`http://localhost:8765/api/workflows/${saved.id}`);
+});
