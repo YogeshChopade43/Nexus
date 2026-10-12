@@ -479,3 +479,16 @@ def test_after_a_tool_error_the_model_may_ask_instead_of_giving_up():
     run(agent, "show the repo", llm)
     reply = llm.calls[-1]["messages"][-1]["content"]
     assert "Not Found" in reply and "nexus_ask_user" in reply
+
+
+def test_conversations_can_be_renamed_and_pinned(client):
+    older, newer = new_session(client), new_session(client)
+    r = client.patch(f"/api/agent/sessions/{older}", json={"title": "  Trip plans  ", "pinned": True})
+    assert r.status_code == 200 and r.json()["title"] == "Trip plans" and r.json()["metadata"]["pinned"] is True
+    ids = [s["session_id"] for s in client.get("/api/agent/sessions").json()]
+    assert ids.index(older) < ids.index(newer)  # pinned first, though older
+    client.patch(f"/api/agent/sessions/{older}", json={"pinned": False})
+    ids = [s["session_id"] for s in client.get("/api/agent/sessions").json()]
+    assert ids.index(newer) < ids.index(older)
+    assert client.patch(f"/api/agent/sessions/{older}", json={"title": "   "}).status_code == 422
+    assert client.patch("/api/agent/sessions/nope", json={"title": "x"}).status_code == 404

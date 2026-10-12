@@ -77,3 +77,11 @@ test('optional install settings are folded away', () => {
   expect(container.querySelector('details')!.textContent).toContain('DB_TIMEOUT');
   expect(container.querySelector('details')!.textContent).not.toContain('DB_URL');
 });
+
+test('test connection shows the result of a live check', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: true, message: 'Works. Signed in as Login: me' }),
+    { status: 200, headers: { 'content-type': 'application/json' } })));
+  render(<InstalledServer server={base} onChanged={() => {}} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Test connection' }));
+  expect(await screen.findByRole('status')).toHaveTextContent('Works. Signed in as Login: me');
+});

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any
+from typing import Any, Optional
 
 from app.api.routes.settings import user_timezone
 from app.llm.utils import get_default_llm_provider
@@ -54,7 +54,12 @@ def _parse(text: str) -> dict[str, Any]:
     return data
 
 
-async def draft_workflow(description: str) -> dict[str, Any]:
+async def draft_workflow(description: str, current: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    """A new workflow from ``description``; with ``current`` (name, description, nodes, edges), that workflow
+    changed as ``description`` asks."""
+    if current is not None:
+        description = (f"Here is the current workflow:\n{json.dumps(current)}\n\nChange it as follows and keep "
+                       f"everything else (name, ids, other steps) the same: {description}")
     provider, _ = get_default_llm_provider()
     if provider is None:
         raise ValueError("No LLM provider configured. Add one in Settings > AI.")

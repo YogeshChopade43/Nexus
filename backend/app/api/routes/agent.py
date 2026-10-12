@@ -13,6 +13,7 @@ from app.agent.sessions import (
     append_message,
     create_session,
     delete_session,
+    update_session,
     get_history,
     get_session,
     list_sessions,
@@ -35,6 +36,7 @@ from app.models.agent import (
     AgentRunResponse,
     AgentSessionCreate,
     AgentSession,
+    SessionPatch,
     AnswerRequest, ApprovalRequest,
     ChatSettings,
 )
@@ -162,6 +164,14 @@ def get_agent_session(session_id: str) -> AgentSession:
     return AgentSession(**session)
 
 
+@router.patch("/sessions/{session_id}")
+def update_agent_session(session_id: str, body: SessionPatch) -> AgentSession:
+    """Rename or pin a conversation (pinned ones are listed first)."""
+    if not update_session(session_id, title=body.title, pinned=body.pinned):
+        raise HTTPException(status_code=404, detail="Session not found")
+    return AgentSession(**get_session(session_id))
+
+
 @router.delete("/sessions/{session_id}")
 def delete_agent_session(session_id: str) -> dict[str, Any]:
     if not delete_session(session_id):
@@ -203,8 +213,11 @@ PAUSED = ("needs_approval", "needs_input")  # a run waiting on the user (saved w
 
 # Messages that ask for something scheduled or automatic: only these get the create-workflow tool.
 AUTOMATION_REQUEST = re.compile(
-    r"\b(remind|reminder|schedule|automat\w*|workflow|every (day|weekday|week|month|morning|evening|night|hour|monday|"
+    r"\b(remind\w*|schedul\w*|automat\w*|workflows?|every (day|weekday|week|month|morning|evening|night|hour|monday|"
     r"tuesday|wednesday|thursday|friday|saturday|sunday|\d+)|daily|weekly|monthly|each (day|morning|week))\b", re.IGNORECASE)
+
+WORKFLOW_TOOLS = {f"{BUILTIN_APP}__create_workflow", f"{BUILTIN_APP}__change_workflow"}  # can need a question card
+
 
 class _Prepared:
     """Everything one agent turn needs, shared by /run, /run/stream and /approval."""
@@ -243,6 +256,11 @@ class _Prepared:
             self.available = [n for n in self.available if n not in (f"{BUILTIN_APP}__remember", f"{BUILTIN_APP}__forget")]
         if not AUTOMATION_REQUEST.search(self.task):  # "remind me every day at 9", "every weekday send me..."
             self.available = [n for n in self.available if n != f"{BUILTIN_APP}__create_workflow"]
+        # Listing and changing workflows also follow the topic: "pause the second one" after "what reminders do I have?".
+        recent = " ".join(str(m.get("content") or "") for m in (self.session.get("messages") or [])[-2:])
+        if not AUTOMATION_REQUEST.search(f"{self.task} {recent}"):
+            self.available = [n for n in self.available
+                              if n not in (f"{BUILTIN_APP}__list_workflows", f"{BUILTIN_APP}__change_workflow")]
         self.history: list[dict[str, Any]] = []
         self.summary = ""
 
@@ -282,7 +300,8 @@ class _Prepared:
                 f"## The user's documents\nThe user has uploaded these documents: {names}. Use "
                 f"{BUILTIN_APP}__search_documents before answering questions about the user (their name, job, "
                 "experience, plans) or anything these documents may cover. Search with a full question or several "
-                "keywords and synonyms, and search again with different words if the first results don't answer "
+                "keywords and synonyms (a standalone question: name who or what a follow-up's he/it/that means), "
+                "and search again with different words if the first results don't answer "
                 "the question. Cite the numbered sources you use like [1].")
         if self.mentioned_apps or self.mentioned_documents:
             pointed = [f"the app {s.name} (use its tools)" for s in self.mentioned_apps] + [
@@ -298,8 +317,7 @@ class _Prepared:
         connections = {app_id: state["available"] for app_id, state in self.states.items()}
         agent = BaseAgent(self.registry, connections, on_event=on_event)
         # Question cards only when the agent can act (apps, or creating a workflow): plain chats keep streaming.
-        agent.can_ask = any(self.tools_by_name[n].app_id != BUILTIN_APP or n == f"{BUILTIN_APP}__create_workflow"
-                            for n in self.available)
+        agent.can_ask = any(self.tools_by_name[n].app_id != BUILTIN_APP or n in WORKFLOW_TOOLS for n in self.available)
         return agent
 
 

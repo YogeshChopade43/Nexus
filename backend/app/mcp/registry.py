@@ -108,15 +108,21 @@ def publisher_info(name: str, title: str) -> tuple[str, bool, bool]:
     return ".".join(reversed(parts)), True, official
 
 
-def display_title(name: str, title: str) -> str:
+def _cased(word: str, description: str) -> str:
+    """``word`` as the description writes it with capitals ("paypal" -> "PayPal"), else capitalised."""
+    found = [m for m in re.findall(rf"\b{re.escape(word)}\b", description, re.IGNORECASE) if m != m.lower()]
+    return max(set(found), key=found.count) if found else word.capitalize()
+
+
+def display_title(name: str, title: str, description: str = "") -> str:
     """The listing's title; without one, its name, or the brand when the name is generic ("com.notion/mcp" -> "Notion")."""
     if title:
         return title
     namespace, _, rest = name.partition("/")
-    words = _product_words(rest)  # "playwright-mcp" -> "Playwright"
-    if words:
-        return " ".join(word.capitalize() for word in words)
-    return _brand(namespace).capitalize() if not namespace.startswith("io.github.") else (rest or name)
+    words = _product_words(rest) or ([] if namespace.startswith("io.github.") else [_brand(namespace)])
+    if not words:
+        return rest or name
+    return " ".join(_cased(word, description) for word in words)  # "playwright-mcp" -> "Playwright"
 
 
 def is_junk(name: str, title: str, description: str) -> bool:

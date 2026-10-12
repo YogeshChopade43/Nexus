@@ -83,12 +83,12 @@ def list_sessions(limit: int = 50, query: str = "") -> list[dict[str, Any]]:
             rows = conn.execute(
                 "SELECT * FROM agent_sessions WHERE title LIKE :p ESCAPE '!' OR EXISTS ("
                 "  SELECT 1 FROM json_each(agent_sessions.messages) WHERE json_extract(value, '$.content') LIKE :p ESCAPE '!'"
-                ") ORDER BY updated_at DESC LIMIT :limit",
+                ") ORDER BY COALESCE(json_extract(metadata, '$.pinned'), 0) DESC, updated_at DESC LIMIT :limit",
                 {"p": pattern, "limit": limit},
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM agent_sessions ORDER BY updated_at DESC LIMIT ?", (limit,)
+                "SELECT * FROM agent_sessions ORDER BY COALESCE(json_extract(metadata, '$.pinned'), 0) DESC, updated_at DESC LIMIT ?", (limit,)
             ).fetchall()
         return [
             {
@@ -104,6 +104,24 @@ def list_sessions(limit: int = 50, query: str = "") -> list[dict[str, Any]]:
         ]
     finally:
         conn.close()
+
+
+def update_session(session_id: str, title: Optional[str] = None, pinned: Optional[bool] = None) -> bool:
+    """Rename or pin a conversation. Leaves ``updated_at`` alone: tidying a chat doesn't make it recent."""
+    session = get_session(session_id)
+    if session is None:
+        return False
+    metadata = session["metadata"]
+    if pinned is not None:
+        metadata["pinned"] = pinned
+    conn = get_connection()
+    try:
+        conn.execute("UPDATE agent_sessions SET title = ?, metadata = ? WHERE session_id = ?",
+                     (title if title is not None else session["title"], json.dumps(metadata, default=str), session_id))
+        conn.commit()
+    finally:
+        conn.close()
+    return True
 
 
 def delete_session(session_id: str) -> bool:

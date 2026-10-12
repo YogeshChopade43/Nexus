@@ -36,6 +36,12 @@ async def grow(ctx: Context) -> str:
 
 
 @server.tool()
+def get_me() -> dict:
+    """Get the authenticated user."""
+    return {"login": "tester", "name": "Test User"}
+
+
+@server.tool()
 def fail() -> str:
     """Always fails."""
     raise ValueError("boom")

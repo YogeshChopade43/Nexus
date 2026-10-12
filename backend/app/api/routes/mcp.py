@@ -136,6 +136,14 @@ async def restart_server(server_id: int) -> dict[str, Any]:
     return _view(config)
 
 
+@router.post("/{server_id}/test")
+async def test_server(server_id: int) -> dict[str, Any]:
+    """Run one harmless read against the server and say whether it works, or what is wrong."""
+    if store.get_server(server_id) is None:
+        raise HTTPException(status_code=404, detail="Server not found")
+    return await mcp_manager.check(server_id)
+
+
 @router.get("/{server_id}/logs")
 def server_logs(server_id: int) -> dict[str, Any]:
     """Recent connection events plus the tail of a local server's own error output."""

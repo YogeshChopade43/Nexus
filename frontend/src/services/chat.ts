@@ -48,6 +48,10 @@ export const chatService = {
     return api.get<AgentSession[]>('/api/agent/sessions', query ? { q: query } : undefined);
   },
 
+  updateSession(sessionId: string, changes: { title?: string; pinned?: boolean }): Promise<AgentSession> {
+    return api.patch<AgentSession>(`/api/agent/sessions/${sessionId}`, changes);
+  },
+
   async deleteSession(sessionId: string): Promise<void> {
     await api.delete(`/api/agent/sessions/${sessionId}`);
   },

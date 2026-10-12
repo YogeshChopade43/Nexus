@@ -22,7 +22,7 @@ class InstallIn(BaseModel):
 
 
 def _title(row: dict[str, Any]) -> str:
-    return registry.display_title(row["name"], row["title"] or "")
+    return registry.display_title(row["name"], row["title"] or "", row["description"] or "")
 
 
 def _card(row: dict[str, Any], installed: dict[str, int]) -> dict[str, Any]:

@@ -47,6 +47,11 @@ export function ListingPanel({ card, onClose, onChanged }: { card: MarketCard; o
                 {card.publisher}{item?.version ? ` · v${item.version}` : ''}
               </p>
               <div className="text-xs"><PublisherBadge card={card} /></div>
+              {card.name && (
+                <p className="text-xs text-nexus-text-muted font-mono break-all" title="ID in the official MCP Registry">
+                  {card.name}
+                </p>
+              )}
             </div>
           </div>
           {card.description && <p className="text-sm text-nexus-text-secondary">{card.description}</p>}

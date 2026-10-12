@@ -106,7 +106,10 @@ class SearchDocuments(Tool):
         return {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "What to look for: a question or several keywords and synonyms"},
+                "query": {"type": "string", "description": (
+                    "What to look for, as a standalone question or several keywords and synonyms. In a follow-up, "
+                    "replace he/she/it/that/they with what they refer to in the conversation ('what about his "
+                    "education?' after a question about Rahul's resume -> 'Rahul education degree university').")},
                 "collection": {"type": "string", "description": "Optional: search only the library with this name"},
             },
             "required": ["query"],

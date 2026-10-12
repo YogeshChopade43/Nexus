@@ -3,9 +3,10 @@ import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
 import { ScrollArea } from '../ui/ScrollArea';
-import { Plus, Play, Edit, Trash2, GitBranch, MoreVertical } from 'lucide-react';
+import { Plus, Play, Square, Edit, Trash2, GitBranch, MoreVertical } from 'lucide-react';
 import { Dropdown, DropdownItem } from '../ui/Dropdown';
 import type { Workflow } from '../../types/workflow';
+import { runState } from './runState';
 
 interface WorkflowListProps {
   workflows: Workflow[];
@@ -15,6 +16,8 @@ interface WorkflowListProps {
   onEdit: (workflow: Workflow) => void;
   onDelete: (id: number | string) => void;
   onExecute: (workflow: Workflow) => void;
+  /** Pause or resume a workflow that runs by itself. */
+  onToggleActive: (workflow: Workflow) => void;
   loading?: boolean;
 }
 
@@ -26,11 +29,17 @@ export function WorkflowList({
   onEdit,
   onDelete,
   onExecute,
+  onToggleActive,
   loading,
 }: WorkflowListProps) {
   const menuItems = (workflow: Workflow): DropdownItem[] => [
     { label: 'Execute', icon: <Play className="w-4 h-4" />, onClick: () => onExecute(workflow) },
     { label: 'Edit', icon: <Edit className="w-4 h-4" />, onClick: () => onEdit(workflow) },
+    ...(runState(workflow).automatic ? [{
+      label: workflow.isActive ? 'Stop' : 'Start',
+      icon: workflow.isActive ? <Square className="w-4 h-4" /> : <Play className="w-4 h-4" />,
+      onClick: () => onToggleActive(workflow),
+    }] : []),
     { label: 'Delete', icon: <Trash2 className="w-4 h-4" />, onClick: () => onDelete(workflow.id), danger: true },
   ];
 
@@ -79,17 +88,12 @@ export function WorkflowList({
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex-1 min-w-0 pr-24">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="font-medium text-nexus-text truncate">{workflow.name}</span>
-                        {workflow.isActive && <Badge variant="accent" size="sm">Active</Badge>}
-                        {workflow.last_status && (
-                          <Badge variant={workflow.last_status === 'completed' ? 'success' : workflow.last_status === 'failed' ? 'danger' : 'warning'} size="sm">
-                            {workflow.last_status}
-                          </Badge>
+                      <p className="font-medium text-nexus-text line-clamp-2 break-words mb-1" title={workflow.name}>{workflow.name}</p>
+                      <p className="text-sm text-nexus-text-secondary truncate" title={workflow.description}>{workflow.description}</p>
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2 text-xs text-nexus-text-muted">
+                        {runState(workflow).label !== 'Manual' && (
+                          <Badge variant={runState(workflow).tone} size="sm">{runState(workflow).label}</Badge>
                         )}
-                      </div>
-                      <p className="text-sm text-nexus-text-secondary truncate">{workflow.description}</p>
-                      <div className="flex items-center gap-3 mt-2 text-xs text-nexus-text-muted">
                         <span>{workflow.nodes.length} nodes</span>
                         <span>{workflow.edges.length} connections</span>
                         <span>v{workflow.version}</span>
@@ -97,7 +101,7 @@ export function WorkflowList({
                     </div>
                   </div>
                 </div>
-                <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                <div className="absolute right-2 top-2.5 flex items-center gap-1">
                   <Button variant="primary" size="sm" aria-label={`Run ${workflow.name}`} className="gap-1"
                     onClick={(e) => { e.stopPropagation(); onExecute(workflow); }}>
                     <Play className="w-3.5 h-3.5" /> Run

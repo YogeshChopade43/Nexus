@@ -25,6 +25,7 @@ export function InstalledServer({ server: initial, onChanged }: {
   const [error, setError] = useState<string | null>(null);
   const [logs, setLogs] = useState<McpLogs | null>(null);
   const [editing, setEditing] = useState(false);
+  const [check, setCheck] = useState<{ ok: boolean; message: string } | 'running' | null>(null);
 
   useEffect(() => setServer(initial), [initial]);
 
@@ -62,6 +63,15 @@ export function InstalledServer({ server: initial, onChanged }: {
     }
   };
 
+  const testConnection = async () => {
+    setCheck('running');
+    try {
+      setCheck(await mcpService.test(server.id));
+    } catch (err) {
+      setCheck({ ok: false, message: getErrorMessage(err) });
+    }
+  };
+
   const tools = [...server.tools, ...server.blocked_tools];
   return (
     <div className="space-y-3">
@@ -84,6 +94,9 @@ export function InstalledServer({ server: initial, onChanged }: {
         <Button variant="ghost" size="sm" aria-label="Reconnect" disabled={busy || !server.enabled}
           onClick={() => void act(() => mcpService.restart(server.id))}>
           <RefreshCw className={cn('w-4 h-4', busy && 'animate-spin')} />
+        </Button>
+        <Button variant="secondary" size="sm" disabled={check === 'running'} onClick={() => void testConnection()}>
+          {check === 'running' ? 'Testing…' : 'Test connection'}
         </Button>
         <Button variant="secondary" size="sm" onClick={() => setEditing(true)}>Edit</Button>
         <Button variant="ghost" size="sm" aria-label="Remove server" className="text-nexus-danger"
@@ -114,6 +127,11 @@ export function InstalledServer({ server: initial, onChanged }: {
         <p className="text-xs text-nexus-text-muted">Connecting…</p>
       )}
       {error && <p role="alert" className="text-sm text-nexus-danger">{error}</p>}
+      {check && check !== 'running' && (
+        <p role="status" className={cn('text-sm', check.ok ? 'text-green-500' : 'text-nexus-danger')}>
+          {check.ok ? '✓ ' : '✗ '}{check.message}
+        </p>
+      )}
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-nexus-text-muted">
         {server.health?.connected_since && <span>Connected {formatRelativeTime(server.health.connected_since)}</span>}

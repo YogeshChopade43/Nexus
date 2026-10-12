@@ -52,6 +52,7 @@ test('install form masks secrets and requires fields', async () => {
   const key = await screen.findByLabelText(/api_key/);
   expect(key).toHaveAttribute('type', 'password');
   expect(screen.getByLabelText(/region/)).toHaveValue('us');
+  expect(screen.getByText('io.x/hosted')).toBeInTheDocument();  // the real registry ID, beside the readable title
   fireEvent.click(screen.getByRole('button', { name: 'Install' }));
   expect(await screen.findByRole('alert')).toHaveTextContent('api_key is required');
   fireEvent.change(key, { target: { value: 'k' } });

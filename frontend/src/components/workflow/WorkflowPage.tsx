@@ -1,3 +1,4 @@
+import { runState } from './runState';
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { AlertCircle, Copy, Download, Edit3, History, LayoutTemplate, Play, Plus, RotateCcw, Sparkles, Square, Upload, Zap } from 'lucide-react';
@@ -29,16 +30,17 @@ const STATUS_CLASSES: Record<string, string> = {
 };
 
 const POLL_MS = 800;
+const TONE_STYLES = { success: 'bg-green-500/15 text-green-500', danger: 'bg-red-500/15 text-red-500', default: 'bg-gray-500/15 text-gray-400' };
 
 function describeTrigger(workflow: Workflow): string {
   const t = workflow.trigger_config;
-  const next = t?.next_run_at ? ` · next ${new Date(t.next_run_at).toLocaleString()}` : workflow.isActive ? '' : ' · paused (inactive)';
+  const next = t?.next_run_at ? ` · next ${new Date(t.next_run_at).toLocaleString()}` : workflow.isActive ? '' : ' · stopped';
   switch (t?.type) {
     case 'recurrence':
     case 'poll':
       return `${triggerSummary({ ...t, trigger_type: t.type })}${next}`;
     case 'schedule':
-      return `Schedule: ${t.schedule} (${t.timezone || 'UTC'})${t.next_run_at ? ` · next ${new Date(t.next_run_at).toLocaleString()}` : workflow.isActive ? '' : ' · paused (inactive)'}`;
+      return `Schedule: ${t.schedule} (${t.timezone || 'UTC'})${t.next_run_at ? ` · next ${new Date(t.next_run_at).toLocaleString()}` : workflow.isActive ? '' : ' · stopped'}`;
     case 'webhook':
       return 'Webhook';
     case 'app_event':
@@ -148,6 +150,14 @@ export function WorkflowPage() {
       return getErrorMessage(err);
     }
   }, [editingWorkflow, createWorkflow, updateWorkflow, selectWorkflow, fetchWorkflowRuns]);
+
+  const handleToggleActive = useCallback(async (workflow: Workflow) => {
+    try {
+      await updateWorkflow({ id: workflow.id, isActive: !workflow.isActive, enabled: !workflow.isActive });
+    } catch (err) {
+      setRunError(getErrorMessage(err));
+    }
+  }, [updateWorkflow]);
 
   const handleDelete = useCallback(async (id: WorkflowId) => {
     if (window.confirm('Delete this workflow and its run history?')) {
@@ -303,6 +313,7 @@ export function WorkflowPage() {
             workflows={workflows}
             selectedWorkflow={currentWorkflow}
             onSelect={handleSelect}
+            onToggleActive={(workflow) => void handleToggleActive(workflow)}
             onCreate={() => openEditor(null)}
             onEdit={openEditor}
             onDelete={handleDelete}
@@ -319,8 +330,9 @@ export function WorkflowPage() {
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <h3 className="font-semibold text-nexus-text truncate">{currentWorkflow.name}</h3>
-                      <span className={cn('px-2 py-0.5 rounded text-xs font-medium', currentWorkflow.isActive ? 'bg-nexus-accent-dim text-nexus-accent' : 'bg-gray-500/15 text-gray-400')}>
-                        {currentWorkflow.isActive ? 'Active' : 'Inactive'}
+                      <span className={cn('px-2 py-0.5 rounded text-xs font-medium', TONE_STYLES[runState(currentWorkflow).tone])}
+                        title={runState(currentWorkflow).label === 'Manual' ? 'Runs only when you start it' : undefined}>
+                        {runState(currentWorkflow).label}
                       </span>
                     </div>
                     {currentWorkflow.description && <p className="text-sm text-nexus-text-secondary mt-1">{currentWorkflow.description}</p>}
@@ -341,6 +353,11 @@ export function WorkflowPage() {
                     <Button variant="secondary" size="sm" onClick={() => { setRunError(null); setRunInputOpen(true); }}>
                       Run with input
                     </Button>
+                    {runState(currentWorkflow).automatic && (
+                      <Button variant="secondary" size="sm" onClick={() => void handleToggleActive(currentWorkflow)} className="gap-1.5">
+                        {currentWorkflow.isActive ? <><Square className="w-4 h-4" /> Stop</> : <><Play className="w-4 h-4" /> Start</>}
+                      </Button>
+                    )}
                     <Button variant="secondary" size="sm" onClick={() => openEditor(currentWorkflow)} className="gap-1.5">
                       <Edit3 className="w-4 h-4" /> Edit
                     </Button>

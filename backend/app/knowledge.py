@@ -155,8 +155,9 @@ class CreateWorkflow(_BuiltIn):
     policy = "ask"
 
     def __init__(self) -> None:
-        super().__init__("create_workflow", "Create and switch on an automation from a plain-language description: "
-                         "reminders, schedules ('every weekday at 9am') or app automations. The user approves it first.", {
+        super().__init__("create_workflow", "Create and switch on a NEW automation from a plain-language description: "
+                         "reminders, schedules ('every weekday at 9am') or app automations. The user approves it first. "
+                         "To change, pause or delete an existing one, use nexus__change_workflow instead.", {
             "type": "object",
             "properties": {"description": {"type": "string", "description": "What should happen and when, in the "
                                            "user's words, e.g. 'Every day at 11:57 pm, remind me to take my medicines'"}},
@@ -190,8 +191,100 @@ class CreateWorkflow(_BuiltIn):
         return {"text": text, "data": {"workflow_id": workflow.id, "name": workflow.name, "next_run_at": next_run}}
 
 
+def _find_workflow(ref: str) -> dict[str, Any]:
+    """A workflow by number, exact name, or a part of its name that only one workflow has."""
+    conn = get_connection()
+    try:
+        rows = [dict(r) for r in conn.execute("SELECT id, name FROM workflows ORDER BY id").fetchall()]
+    finally:
+        conn.close()
+    ref = ref.strip().lstrip("#")
+    wanted = ref.lower()
+    matches = ([r for r in rows if str(r["id"]) == ref] or [r for r in rows if r["name"].lower() == wanted]
+               or [r for r in rows if wanted and wanted in r["name"].lower()])
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        raise ValueError(f"No workflow matches '{ref}'. Use nexus__list_workflows to see them.")
+    raise ValueError(f"'{ref}' matches several workflows: " + ", ".join(f"#{r['id']} {r['name']}" for r in matches)
+                     + ". Ask the user which one.")
+
+
+class ListWorkflows(_BuiltIn):
+    def __init__(self) -> None:
+        super().__init__("list_workflows", "List the user's workflows and reminders: number, name, active or stopped, "
+                         "what it does, next run and how the last run went.", {"type": "object", "properties": {}})
+
+    async def execute(self, parameters: dict[str, Any]) -> dict[str, Any]:
+        from app.api.routes.workflows import list_workflows
+
+        workflows = list_workflows(limit=500, offset=0)
+        if not workflows:
+            return {"text": "The user has no workflows yet.", "data": {"workflows": []}}
+        lines = []
+        for w in workflows:
+            next_run = (w.trigger_config or {}).get("next_run_at")
+            automatic = (w.trigger_config or {}).get("type", "manual") != "manual"
+            state = ("active" if w.isActive else "stopped") if automatic else ("manual: runs only when started"
+                                                                               if w.isActive else "disabled")
+            lines.append(f"#{w.id} {w.name} ({state}): {w.description or 'no description'}"
+                         + (f" Next run: {next_run}." if next_run and w.isActive else "")
+                         + (f" Last run: {w.last_status}." if w.last_status else ""))
+        return {"text": "\n".join(lines), "data": {"workflows": [{"id": w.id, "name": w.name, "active": w.isActive}
+                                                                for w in workflows]}}
+
+
+class ChangeWorkflow(_BuiltIn):
+    """Pause, resume, change or delete an existing workflow from chat. Asks first: it changes an automation."""
+    read_only = False
+    policy = "ask"
+
+    def __init__(self) -> None:
+        super().__init__("change_workflow", "Change an EXISTING workflow or reminder: stop it (pause), start it again (resume), delete it, "
+                         "or edit it (new time, new message, other steps). Find it with nexus__list_workflows first.", {
+            "type": "object",
+            "properties": {
+                "workflow": {"type": "string", "description": "The workflow's name, or its #number"},
+                "action": {"type": "string", "enum": ["pause", "resume", "edit", "delete"]},
+                "change": {"type": "string", "description": "For edit: what to change, in the user's words, "
+                                                            "e.g. 'move it to 3 pm on weekdays'"},
+            },
+            "required": ["workflow", "action"],
+        })
+
+    async def execute(self, parameters: dict[str, Any]) -> dict[str, Any]:
+        from app.api.routes.workflows import delete_workflow, get_workflow, update_workflow
+        from app.models.workflow import WorkflowUpdate
+        from app.workflows import drafting
+        from app.workflows.scheduler import next_run_time
+
+        found = _find_workflow(str(parameters.get("workflow") or ""))
+        action, name = parameters.get("action"), found["name"]
+        if action == "delete":
+            delete_workflow(found["id"])
+            return {"text": f"Deleted the workflow '{name}'.", "data": {"workflow_id": found["id"], "deleted": True}}
+        if action in ("pause", "resume"):
+            update_workflow(found["id"], WorkflowUpdate(isActive=action == "resume"))
+            text = f"{'Started' if action == 'resume' else 'Stopped'} the workflow '{name}'."
+        elif action == "edit":
+            change = str(parameters.get("change") or "").strip()
+            if not change:
+                raise ValueError("Say what to change in 'change', e.g. 'move it to 3 pm'.")
+            current = get_workflow(found["id"])
+            draft = await drafting.draft_workflow(change, current={
+                "name": current.name, "description": current.description, "nodes": current.nodes, "edges": current.edges})
+            updated = update_workflow(found["id"], WorkflowUpdate(name=draft["name"], description=draft["description"],
+                                                                  nodes=draft["nodes"], edges=draft["edges"]))
+            text = f"Changed the workflow '{updated.name}': {updated.description}."
+        else:
+            raise ValueError("action must be pause, resume, edit or delete")
+        next_run = next_run_time(found["id"])
+        return {"text": text + (f" Next run: {next_run}." if next_run else ""),
+                "data": {"workflow_id": found["id"], "next_run_at": next_run}}
+
+
 def register_builtin_tools(registry) -> None:
     from app.rag.tool import SearchDocuments
 
-    for tool in (SearchDocuments(), Remember(), Forget(), Notify(), CreateWorkflow()):
+    for tool in (SearchDocuments(), Remember(), Forget(), Notify(), CreateWorkflow(), ListWorkflows(), ChangeWorkflow()):
         registry.register(tool)

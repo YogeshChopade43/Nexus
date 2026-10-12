@@ -133,3 +133,12 @@ def test_legacy_import(client):
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
     conn.close()
     assert "legacy_documents" not in tables and "legacy_document_chunks" not in tables
+
+
+def test_follow_up_questions_are_searched_as_standalone_questions():
+    """'What about his education?' after a resume question must not be searched as the literal words: both the
+    tool's query field and the documents hint tell the model to resolve he/it/that from the conversation."""
+    from app.rag.tool import SearchDocuments
+
+    query = SearchDocuments().parameters_schema["properties"]["query"]["description"]
+    assert "standalone" in query.lower()

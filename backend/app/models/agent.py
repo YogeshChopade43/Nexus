@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, List, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class Attachment(BaseModel):
@@ -60,6 +60,18 @@ class AgentSession(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: str = ""
     updated_at: str = ""
+
+
+class SessionPatch(BaseModel):
+    title: Optional[str] = Field(default=None, max_length=200)
+    pinned: Optional[bool] = None
+
+    @field_validator("title")
+    @classmethod
+    def _title(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None and not value.strip():
+            raise ValueError("A title can't be empty")
+        return value.strip() if value is not None else None
 
 
 class AgentSessionRequest(BaseModel):

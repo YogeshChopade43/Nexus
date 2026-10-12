@@ -134,7 +134,7 @@ export function ChatArea({ className }: ChatAreaProps) {
           currentId={sessionId}
           onSearch={(q) => void refreshSessions(q)}
           onOpen={(id) => { void openSession(id); setHistoryOpen(false); }}
-          onDelete={(id) => void deleteSession(id)}
+          onDelete={deleteSession}
           onClose={() => setHistoryOpen(false)}
         />
       )}

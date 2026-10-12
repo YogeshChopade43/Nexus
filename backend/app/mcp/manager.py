@@ -511,6 +511,28 @@ class MCPManager:
             runtime.failures += 1
             raise
 
+    async def check(self, server_id: int) -> dict[str, Any]:
+        """A harmless live round trip: the server's who-am-I tool when it has one without required inputs
+        (proves the sign-in works too), else a fresh tool listing."""
+        from app.agent.abstract import BaseAgent
+        from app.agent.tool_selection import WHO_AM_I_NAME, WHO_AM_I_TEXT
+
+        runtime = self._runtimes.get(server_id)
+        if runtime is None or runtime.status != "connected" or runtime.client is None:
+            state = runtime.status if runtime else "stopped"
+            hint = {"needs_auth": "sign in first", "connecting": "still connecting"}.get(state, runtime and runtime.error)
+            return {"ok": False, "message": f"Not connected ({state})" + (f": {hint}" if hint else "")}
+        probe = next((t for t in runtime.tools if not t.parameters_schema.get("required")
+                      and (WHO_AM_I_NAME.search(t._remote_name) or WHO_AM_I_TEXT.search(t.description))), None)
+        try:
+            if probe:
+                result = await self.call_tool(runtime.config.slug, probe._remote_name, {})
+                return {"ok": True, "message": f"Works. Signed in as {BaseAgent._summarize_tool_result(probe.tool_name, result)}"}
+            tools = await self._list_tools(runtime.client)
+            return {"ok": True, "message": f"Works. The server answered with {len(tools)} tool(s)."}
+        except Exception as exc:
+            return {"ok": False, "message": _describe(exc)}
+
     def restart(self, server_id: int) -> bool:
         runtime = self._runtimes.get(server_id)
         if runtime is None:

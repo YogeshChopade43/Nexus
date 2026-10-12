@@ -416,7 +416,10 @@ export function WorkflowBuilder({ workflow, draft, onSave, onCancel, tools, llmP
           <Input label="Name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Daily issue digest" required />
           <label className="flex items-center gap-2 cursor-pointer self-end pb-2">
             <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} className="w-4 h-4" />
-            <span className="text-sm text-nexus-text">Active (schedules and app checks only run when active)</span>
+            <span className="text-sm text-nexus-text">
+              {tree?.trigger && tree.trigger.config.trigger_type !== 'manual'
+                ? 'Active (runs on its own while on)' : 'Enabled (can be run)'}
+            </span>
           </label>
         </div>
         <Textarea label="Description" value={description} onChange={(e) => setDescription(e.target.value)} rows={2} placeholder="What this workflow does" />

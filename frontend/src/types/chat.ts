@@ -101,6 +101,7 @@ export interface AgentSession {
   metadata?: {
     pending?: { state?: { queue?: { name: string; arguments: Record<string, unknown> }[] }; question?: PendingQuestion };
     settings?: ChatSettings;
+    pinned?: boolean;
   };
   created_at: string;
   updated_at: string;

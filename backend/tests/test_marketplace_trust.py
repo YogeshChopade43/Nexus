@@ -90,6 +90,14 @@ def test_untitled_listings_get_readable_titles():
     assert registry.display_title("com.x/whatever", "Given Title") == "Given Title"
 
 
+def test_generated_titles_use_the_brands_own_casing():
+    # Casing comes from how the listing's description writes the name, not from a list of brands.
+    assert registry.display_title("com.paypal/mcp", "", "The official PayPal MCP server. paypal payments.") == "PayPal"
+    assert registry.display_title("com.gitlab/gitlab-mcp", "", "Manage GitLab projects") == "GitLab"
+    assert registry.display_title("com.x/github-actions", "", "Run GitHub Actions. Uses the github API.") == "GitHub Actions"
+    assert registry.display_title("com.vercel/mcp", "", "deploy apps") == "Vercel"  # not mentioned: capitalised
+
+
 def test_official_filter(client):
     cards = client.get("/api/marketplace", params={"official": "true", "q": "notion"}).json()["items"]
     assert cards[0]["name"] == "com.notion/mcp" and all(c["official"] for c in cards)

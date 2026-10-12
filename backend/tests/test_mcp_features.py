@@ -64,6 +64,22 @@ def test_tool_list_change_is_picked_up(client, server):
     assert _wait(lambda: "logs__extra" in names()), names()
 
 
+def test_test_connection_reads_who_am_i(client, server):
+    r = client.post(f"/api/mcp/servers/{server['id']}/test")
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is True and "tester" in r.json()["message"]
+
+
+def test_test_connection_explains_a_stopped_server(client, server):
+    client.patch(f"/api/mcp/servers/{server['id']}", json={"enabled": False})
+    try:
+        result = client.post(f"/api/mcp/servers/{server['id']}/test").json()
+        assert result["ok"] is False and "not connected" in result["message"].lower()
+    finally:
+        client.patch(f"/api/mcp/servers/{server['id']}", json={"enabled": True})
+    assert client.post("/api/mcp/servers/99999/test").status_code == 404
+
+
 def test_oauth_redirect_and_callback(client):
     """The SDK's redirect/callback hooks wait for /oauth/callback to deliver the code."""
     config = store.create_server({"name": "Hosted", "transport": "http", "url": "https://example.invalid/mcp", "enabled": False})
