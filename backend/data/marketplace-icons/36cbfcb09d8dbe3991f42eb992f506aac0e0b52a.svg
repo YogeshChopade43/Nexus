@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="246" height="56" viewBox="0 0 246 56" role="img" aria-label="Apier">
+  <title>Apier</title>
+  <!-- Mark — original geometry (PR-LOGO-BRAND), reframed with a tight
+       4-unit padding (was 8 units inside a 64-tall viewBox). The mark is
+       48/56 of the viewBox height, so at the header's h-10 (40px) render
+       it lands at ~34px — the original on-screen visual weight — instead
+       of shrinking to ~30px inside dead viewBox space. -->
+  <rect x="4" y="4" width="48" height="48" rx="12" fill="#1e2a44"/>
+  <path d="M28 14 L40 42 L34.4 42 L28 27 L21.6 42 L16 42 Z" fill="#f5f3ee"/>
+  <!-- Wordmark — all-caps APIER (PR-UI-HEADER-1), hand-drawn slab-serif
+       letterforms as static paths (no live <text>, so the render never
+       depends on viewer fonts). Same navy ink as the mark. The paths keep
+       their original drawing coordinates (cap height 26, y 19–45) and the
+       group transform scales them 1.6× — founder call 2026-08-10: the
+       wordmark must read nearly as tall as the navy square (scaled cap
+       height 41.6 vs mark 48), clearly dominant beside it. The translate
+       centres the scaled wordmark on the mark's vertical midline (y 28)
+       and opens a 10-unit gap after the mark's right edge (x 52 → 62). -->
+  <g fill="#1e2a44" transform="translate(-44.4 -23.2) scale(1.6)">
+    <!-- A -->
+    <path d="M77.4 19 L82.6 19 L91.6 45 L86.3 45 Z"/>
+    <path d="M82.6 19 L77.4 19 L68.4 45 L73.7 45 Z"/>
+    <rect x="74.4" y="34.5" width="11.2" height="4.5"/>
+    <rect x="66.5" y="43" width="9" height="2"/>
+    <rect x="84.5" y="43" width="9" height="2"/>
+    <!-- P -->
+    <rect x="99" y="19" width="5" height="26"/>
+    <rect x="96.5" y="19" width="10" height="2"/>
+    <rect x="96.5" y="43" width="10" height="2"/>
+    <path fill-rule="evenodd" d="M104 19 L108 19 C113.5 19 115.5 22 115.5 26.25 C115.5 30.5 113.5 33.5 108 33.5 L104 33.5 Z M104 23.5 L107.5 23.5 C109.9 23.5 110.9 24.4 110.9 26.25 C110.9 28.1 109.9 29 107.5 29 L104 29 Z"/>
+    <!-- I -->
+    <rect x="123" y="19" width="5" height="26"/>
+    <rect x="121" y="19" width="9" height="2"/>
+    <rect x="121" y="43" width="9" height="2"/>
+    <!-- E -->
+    <rect x="137.5" y="19" width="5" height="26"/>
+    <rect x="137.5" y="19" width="15.5" height="4"/>
+    <rect x="137.5" y="32" width="12.5" height="4"/>
+    <rect x="137.5" y="41" width="15.5" height="4"/>
+    <!-- R -->
+    <rect x="160" y="19" width="5" height="26"/>
+    <rect x="157.5" y="19" width="10" height="2"/>
+    <rect x="157.5" y="43" width="10" height="2"/>
+    <path fill-rule="evenodd" d="M165 19 L169 19 C174.5 19 176.5 22 176.5 26.25 C176.5 30.5 174.5 33.5 169 33.5 L165 33.5 Z M165 23.5 L168.5 23.5 C170.9 23.5 171.9 24.4 171.9 26.25 C171.9 28.1 170.9 29 168.5 29 L165 29 Z"/>
+    <path d="M168.5 33.5 L173.5 33.5 L177.8 45 L172.5 45 Z"/>
+    <rect x="171" y="43" width="7.5" height="2"/>
+  </g>
+</svg>

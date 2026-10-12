@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <!-- Снимок BrandMark: жидкое стекло со светлым бликом, под ним два размытых пятна, кромка акцента. -->
+  <defs>
+    <clipPath id="tile"><rect width="48" height="48" rx="12"/></clipPath>
+    <filter id="blur" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="7"/></filter>
+    <linearGradient id="sheen" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity=".55"/>
+      <stop offset=".55" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <style>
+    .base { fill: #f4f5fb; }
+    .blob-a { fill: rgba(59, 91, 219, .34); }
+    .blob-b { fill: rgba(122, 82, 201, .3); }
+    .edge { stroke: rgba(59, 91, 219, .32); }
+    @media (prefers-color-scheme: dark) {
+      .base { fill: #1a1e28; }
+      .blob-a { fill: rgba(143, 166, 255, .42); }
+      .blob-b { fill: rgba(193, 166, 245, .36); }
+      .edge { stroke: rgba(143, 166, 255, .45); }
+    }
+  </style>
+  <g clip-path="url(#tile)">
+    <rect class="base" width="48" height="48"/>
+    <g filter="url(#blur)">
+      <ellipse class="blob-a" cx="12" cy="10" rx="14" ry="26"/>
+      <ellipse class="blob-b" cx="40" cy="24" rx="14" ry="26"/>
+    </g>
+    <rect width="48" height="48" fill="url(#sheen)"/>
+  </g>
+  <rect class="edge" x=".5" y=".5" width="47" height="47" rx="11.5" fill="none"/>
+  <rect x="9" y="14" width="4" height="20" rx="1.5" fill="#f2c14e"/>
+  <rect x="15.5" y="14" width="4" height="20" rx="1.5" fill="#e5534b"/>
+  <rect x="22" y="14" width="4" height="20" rx="1.5" fill="#34a853"/>
+  <rect x="28.5" y="14" width="4" height="20" rx="1.5" fill="#34a853"/>
+  <rect x="35" y="14" width="4" height="20" rx="1.5" fill="#34a853"/>
+</svg>
