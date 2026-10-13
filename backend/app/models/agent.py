@@ -10,6 +10,13 @@ class Attachment(BaseModel):
     content: str = Field(max_length=1_000_000)
 
 
+class FileRef(BaseModel):
+    id: str = Field(pattern=r"^[0-9a-f]{16}$")
+    name: str = Field(max_length=200)
+    size: int = 0
+    url: str = Field(max_length=400)
+
+
 class ChatSettings(BaseModel):
     """Per-conversation options, saved with the session."""
     servers: Optional[List[str]] = None  # MCP server slugs this chat may use; None = all
@@ -22,6 +29,7 @@ class AgentRunRequest(BaseModel):
     task: str = ""
     message: str = ""
     attachments: List[Attachment] = Field(default_factory=list, max_length=10)
+    files: List[FileRef] = Field(default_factory=list, max_length=10)  # the attached files, kept for the chat to preview
     chat_settings: Optional[ChatSettings] = None
     context: dict[str, Any] = Field(default_factory=dict)
     available_tools: List[str] = Field(default_factory=list)

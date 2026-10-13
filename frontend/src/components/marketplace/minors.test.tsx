@@ -42,6 +42,7 @@ test('M-7: a slow older search result never replaces a newer one', async () => {
   const pending: Record<string, (r: Response) => void> = {};
   vi.stubGlobal('fetch', vi.fn((url: string) => {
     const parsed = new URL(url);
+    if (parsed.pathname.startsWith('/api/integrations')) return Promise.resolve(json([]));
     if (parsed.pathname !== '/api/marketplace') return Promise.resolve(json({ items: [] }));
     return new Promise<Response>(resolve => { pending[parsed.searchParams.get('q') ?? ''] = resolve; });
   }));
@@ -60,6 +61,7 @@ test('M-8: listings appear while the first sync is still running', async () => {
   let count = 0;
   vi.stubGlobal('fetch', vi.fn(async (url: string) => {
     const path = new URL(url).pathname;
+    if (path.startsWith('/api/integrations')) return json([]);  // no built-in integrations connected
     if (path === '/api/marketplace/status') return json({ status: 'syncing', count: 5, last_synced_at: null, error: null });
     if (path === '/api/marketplace') {
       count += 1;
@@ -79,6 +81,7 @@ test('M-3: changing a server in its panel updates its card without reloading the
   let installed = false;
   vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit = {}) => {
     const path = new URL(url).pathname;
+    if (path.startsWith('/api/integrations')) return json([]);  // no built-in integrations connected
     calls.push(`${init.method ?? 'GET'} ${path}`);
     if (path === '/api/marketplace') return json({ items: [card({})], status: idle });
     if (path === '/api/marketplace/item') {

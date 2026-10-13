@@ -1,7 +1,7 @@
+import { listApps } from '../../services/integrations';
 import { useEffect, useState } from 'react';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
-import { mcpService } from '../../services/mcp';
 import { ragService } from '../../services/rag';
 import type { Library } from '../../types/rag';
 import { getErrorMessage } from '../../lib/utils';
@@ -26,7 +26,7 @@ export function ChatSettingsModal({ open, settings, onSave, onClose }: Props) {
     if (!open) return;
     setDraft(settings);
     setError(null);
-    mcpService.list().then(setServers).catch(() => setServers([]));
+    listApps().then(setServers).catch(() => setServers([]));
     ragService.collections().then(setLibraries).catch(() => setLibraries([]));
   }, [open, settings]);
 

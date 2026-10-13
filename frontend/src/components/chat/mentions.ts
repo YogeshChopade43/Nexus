@@ -1,4 +1,4 @@
-import { mcpService } from '../../services/mcp';
+import { listApps } from '../../services/integrations';
 import { ragService } from '../../services/rag';
 
 export interface MentionTarget {
@@ -16,7 +16,7 @@ export function mentionAt(text: string, caret: number): { start: number; query: 
 let loaded: Promise<MentionTarget[]> | null = null;
 export function mentionTargets(): Promise<MentionTarget[]> {
   loaded ??= Promise.all([
-    mcpService.list()
+    listApps()
       .then(servers => servers.filter(s => s.enabled && s.status === 'connected').map(s => ({ label: s.name, kind: 'app' as const })))
       .catch(() => []),
     ragService.collections()

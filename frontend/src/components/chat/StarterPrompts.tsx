@@ -1,6 +1,6 @@
+import { listApps } from '../../services/integrations';
 import { useEffect, useState } from 'react';
 import { Sparkles } from 'lucide-react';
-import { mcpService } from '../../services/mcp';
 import { ragService } from '../../services/rag';
 
 /** What to suggest for well-known apps; others get a general "what can you do" prompt. */
@@ -16,6 +16,9 @@ const APP_PROMPTS: [RegExp, string][] = [
   [/supabase/i, 'List my Supabase projects'],
   [/vercel/i, 'Show my latest Vercel deployments'],
   [/airtable/i, 'List my Airtable bases'],
+  [/mail|inbox|google/i, 'Triage my unread email: what needs a reply? Draft the replies'],
+  [/calendar/i, "What's on my calendar this week?"],
+  [/feed|blog|news|rss|changelog/i, "What's new in my feeds?"],
 ];
 
 const MAX = 4;
@@ -34,7 +37,7 @@ export function StarterPrompts({ onPick }: { onPick: (text: string) => void }) {
 
   useEffect(() => {
     let alive = true;
-    const apps = mcpService.list()
+    const apps = listApps()
       .then(servers => servers.filter(s => s.enabled && s.status === 'connected').map(s => s.name))
       .catch(() => [] as string[]);
     const document = ragService.collections()

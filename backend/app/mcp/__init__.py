@@ -11,8 +11,11 @@ register_builtin_tools(get_tool_registry())
 
 
 def server_states() -> dict[str, dict[str, bool]]:
-    return {**mcp_manager.server_states(), BUILTIN_APP: {"enabled": True, "connected": True, "available": True}}
+    from app.integrations import integration_manager  # built-in integrations sit beside MCP servers
+
+    return {**mcp_manager.server_states(), **integration_manager.states(),
+            BUILTIN_APP: {"enabled": True, "connected": True, "available": True}}
 
 
 def server_availability() -> dict[str, bool]:
-    return {**mcp_manager.availability(), BUILTIN_APP: True}
+    return {app_id: state["available"] for app_id, state in server_states().items()}

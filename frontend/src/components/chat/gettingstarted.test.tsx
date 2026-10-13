@@ -1,42 +1,52 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { GettingStarted } from './GettingStarted';
 
 beforeEach(() => localStorage.clear());
 afterEach(() => vi.unstubAllGlobals());
 
-function serve(servers: unknown[], sessions: unknown[]) {
+function serve({ integrations = [] as unknown[], servers = [] as unknown[], libraries = [] as unknown[], briefing = false } = {}) {
   vi.stubGlobal('fetch', vi.fn(async (url: string) => {
     const path = new URL(url).pathname;
-    const body = path === '/api/mcp/servers/' ? servers : path === '/api/agent/sessions' ? sessions : [];
+    const body = path === '/api/integrations' ? integrations : path === '/api/mcp/servers/' ? servers
+      : path === '/api/rag/collections' ? libraries : path === '/api/briefing' ? { enabled: briefing } : [];
     return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
   }));
 }
 
-const page = (hasLLM: boolean) => render(<MemoryRouter><GettingStarted hasLLM={hasLLM} /></MemoryRouter>);
+const page = (hasLLM: boolean, onTry = vi.fn()) => {
+  render(<MemoryRouter><GettingStarted hasLLM={hasLLM} onTry={onTry} /></MemoryRouter>);
+  return onTry;
+};
 
-test('a new user sees three steps, each linking where to do it', async () => {
-  serve([], []);
+const goal = (name: RegExp) => screen.getByRole('listitem', { name });
+
+test('a new user is asked what they want, each goal linking to its setup', async () => {
+  serve();
   page(false);
-  const guide = await screen.findByRole('region', { name: 'Getting started' });
-  expect(screen.getByRole('link', { name: /Add an AI provider/ })).toHaveAttribute('href', '/settings?tab=ai');
-  expect(screen.getByRole('link', { name: /Connect an app/ })).toHaveAttribute('href', '/servers');
-  expect(guide).toHaveTextContent('0 of 3 done');
+  expect(await screen.findByText('What do you want Nexus for?')).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: /add an AI provider/i })).toHaveAttribute('href', '/settings?tab=ai');
+  expect(within(goal(/Reminders on my phone/)).getByRole('link', { name: /Set up/ })).toHaveAttribute('href', '/servers?connect=telegram');
+  expect(within(goal(/Answers from my documents/)).getByRole('link', { name: /Set up/ })).toHaveAttribute('href', '/knowledge');
+  expect(within(goal(/Morning briefing/)).getByRole('link', { name: /Set up/ })).toHaveAttribute('href', '/dashboard');
 });
 
-test('finished steps are ticked, and the guide can be hidden for good', async () => {
-  serve([{ name: 'Notion', enabled: true, status: 'connected' }], []);
+test('goals that are ready offer to try them', async () => {
+  serve({ integrations: [{ kind: 'telegram', status: 'connected' }], libraries: [{ kind: 'library', ready: 2 }] });
+  const onTry = page(true);
+  const phone = await screen.findByRole('listitem', { name: /Reminders on my phone/ });
+  fireEvent.click(within(phone).getByRole('button', { name: /Try it/ }));
+  expect(onTry).toHaveBeenCalledWith(expect.stringMatching(/remind me/i));
+  expect(within(goal(/Answers from my documents/)).getByRole('button', { name: /Try it/ })).toBeInTheDocument();
+  expect(within(goal(/Help with my email/)).getByRole('link', { name: /Set up/ })).toBeInTheDocument();
+  expect(screen.queryByRole('link', { name: /add an AI provider/i })).toBeNull();
+});
+
+test('the guide can be hidden for good', async () => {
+  serve();
   page(true);
-  expect(await screen.findByText('2 of 3 done')).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: 'Hide getting started' }));
-  expect(screen.queryByRole('region', { name: 'Getting started' })).toBeNull();
+  fireEvent.click(await screen.findByRole('button', { name: 'Hide getting started' }));
+  expect(screen.queryByText('What do you want Nexus for?')).toBeNull();
   expect(localStorage.getItem('nexus.gettingStarted.hidden')).toBe('1');
-});
-
-test('nothing is shown once everything is done', async () => {
-  serve([{ name: 'Notion', enabled: true, status: 'connected' }], [{ id: 1 }]);
-  const { container } = page(true);
-  await new Promise(r => setTimeout(r, 50));
-  expect(container.textContent).toBe('');
 });

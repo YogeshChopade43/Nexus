@@ -917,7 +917,22 @@ async def run_workflow(
         first_error or f"{sum(1 for e in events if e['status'] == 'success')} step(s) succeeded",
         {"workflow_id": workflow_id, "run_id": run_id, "status": status, "trigger": trigger.get("type")},
     )
+    if status == "failed":
+        await _alert_failure(row["name"], first_error)
     return result
+
+
+async def _alert_failure(name: str, error: Optional[str]) -> None:
+    """A failed run also reaches the phone (Telegram), unless failure alerts are switched off."""
+    from app.api.routes.settings import load_user_settings
+    from app.integrations.telegram import notify_all
+
+    if not (load_user_settings().get("notifications") or {}).get("workflowFailure", True):
+        return
+    try:
+        await notify_all(f"Workflow '{name}' failed", error or "")
+    except Exception as exc:  # an alert must never break the run's bookkeeping
+        logger.warning("Couldn't send the failure alert: %s", exc)
 
 
 def start_background_run(

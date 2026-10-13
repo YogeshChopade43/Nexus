@@ -1,10 +1,10 @@
+import { listApps } from '../../services/integrations';
 import { NodeTile } from './NodeTile';
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, FlaskConical, Plus, Save, Trash2, X, Zap, AlertTriangle } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Input, Textarea } from '../ui/Input';
 import { cn, getErrorMessage } from '../../lib/utils';
-import { mcpService } from '../../services/mcp';
 import { workflowService } from '../../services/workflow';
 import { graphToTree, treeToGraph, type FlowStep, type FlowTree } from './flowTree';
 import { FlowEditor } from './FlowEditor';
@@ -371,7 +371,7 @@ export function WorkflowBuilder({ workflow, draft, onSave, onCancel, tools, llmP
 
   useEffect(() => {
     // Picker contents; failures just leave the lists empty.
-    mcpService.list().then(setServers).catch(() => {});
+    listApps().then(setServers).catch(() => {});
     workflowService.getTriggerTypes().then(setTriggerTypes).catch(() => {});
     workflowService.getWorkflows()
       .then(list => setWorkflows(list.filter(w => w.id !== workflow?.id).map(w => ({ id: w.id, name: w.name }))))

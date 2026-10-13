@@ -135,7 +135,9 @@ def _merge_secrets(new: dict[str, str], old: dict[str, str]) -> dict[str, str]:
 def create_server(data: dict[str, Any]) -> ServerConfig:
     conn = get_connection()
     try:
-        taken = {r["slug"] for r in conn.execute("SELECT slug FROM mcp_servers").fetchall()}
+        from app.integrations.store import taken_slugs  # MCP servers and integrations share tool-name prefixes
+
+        taken = taken_slugs(conn)
         cursor = conn.execute(
             """
             INSERT INTO mcp_servers (slug, name, transport, command, args, env, url, headers, enabled, tool_policies,

@@ -246,6 +246,22 @@ MIGRATIONS: list[str] = [
     DELETE FROM registry_fts WHERE rowid IN (SELECT id FROM registry_servers WHERE kind IS NOT 'hosted');
     DELETE FROM registry_servers WHERE kind IS NOT 'hosted'
     """,
+    # 14: built-in integrations (email, calendar feeds, RSS...): settings encrypted like MCP secrets
+    """
+    CREATE TABLE integrations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind TEXT NOT NULL,
+        name TEXT NOT NULL,
+        slug TEXT NOT NULL UNIQUE,
+        config TEXT NOT NULL DEFAULT '{}',
+        enabled INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL
+    )
+    """,
+    # 15: memories Nexus learned by itself (auto) beside the ones the user asked for (manual)
+    """
+    ALTER TABLE memories ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'
+    """,
 ]
 
 

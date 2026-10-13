@@ -1,7 +1,7 @@
+import { listApps } from '../../services/integrations';
 import { useEffect, useState } from 'react';
 import { humanize } from '../workflow/toolInfo';
 import { iconUrl } from '../../services/marketplace';
-import { mcpService } from '../../services/mcp';
 
 /** How well-known apps are written; others get their first letter capitalised. */
 const BRANDS: Record<string, string> = {
@@ -21,7 +21,7 @@ export function toolParts(name: string): { app: string; action: string } {
 /** Server slug -> its Marketplace listing, for logos (one request, shared by every tool step). */
 let listings: Promise<Record<string, string>> | null = null;
 function registryNames(): Promise<Record<string, string>> {
-  listings ??= mcpService.list()
+  listings ??= listApps()
     .then(servers => Object.fromEntries(servers.filter(s => s.registry_name).map(s => [s.slug, s.registry_name as string])))
     .catch(() => ({}));
   return listings;

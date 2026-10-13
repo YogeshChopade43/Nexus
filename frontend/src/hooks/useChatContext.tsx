@@ -1,13 +1,13 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef, ReactNode } from 'react';
 import { chatService } from '../services/chat';
-import { ragService, settled } from '../services/rag';
+import { ragService, settled, uploadFiles } from '../services/rag';
 import { useLLM } from './useLLM';
 import { useLocalStorage } from './useUtils';
 import { getErrorMessage } from '../lib/utils';
 import {
   DEFAULT_CHAT_SETTINGS,
   type AgentRunResponse, type AgentSession, type AgentStreamEvent, type ChatAttachment, type ChatMessage,
-  type ChatSettings, type StoredMessage, type ToolActivity,
+  type ChatSettings, type FileRef, type StoredMessage, type ToolActivity,
   type QuestionAnswers,
 } from '../types/chat';
 import type { LLMProviderConfig } from '../types/llm';
@@ -187,12 +187,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     }
   }, [setSessionId, refreshSessions]);
 
-  const ask = useCallback(async (content: string, shown: string, attachments: ChatAttachment[], targetSession: string | null) => {
+  const ask = useCallback(async (content: string, shown: string, attachments: ChatAttachment[], targetSession: string | null,
+    files: FileRef[] = []) => {
     const assistantId = newId();
     const now = new Date().toISOString();
     setMessages(prev => [
       ...prev,
-      { id: newId(), role: 'user', content: shown, timestamp: now },
+      { id: newId(), role: 'user', content: shown, timestamp: now, files },
       { id: assistantId, role: 'assistant', content: '', timestamp: now, status: 'running', activity: [] },
     ]);
     // The server creates the session if there is none and reports it in the final event.
@@ -201,6 +202,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       session_id: targetSession ?? undefined,
       llm_provider_id: providerId ?? undefined,
       attachments,
+      files,
       chat_settings: settings,
     }, onEvent, signal));
   }, [streamInto, providerId, settings]);
@@ -236,9 +238,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         setSending(false);
       }
     }
-    const names = [...attachments.map(a => a.name), ...uploads.map(f => f.name)];
-    const shown = names.length ? `${content}\n\n📎 ${names.join(', ')}`.trim() : content;
-    await ask(text, shown, attachments, target);
+    // Keep a copy of every attached file so the chat can preview it; the message still goes if that fails.
+    const picked = [...attachments.map(a => new File([a.content], a.name, { type: 'text/plain' })), ...uploads];
+    const files = picked.length ? await uploadFiles<FileRef[]>('/api/files', picked).catch(() => []) : [];
+    await ask(text, content, attachments, target, files);
   }, [hasLLM, ask, sessionId, setSessionId]);
 
   const answerApproval = useCallback(async (approved: boolean) => {

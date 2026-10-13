@@ -154,6 +154,8 @@ export interface WorkflowTemplate {
   id: string;
   name: string;
   description: string;
+  /** What to connect first ("Email", "Web search"); empty when it works as is. */
+  needs?: string[];
 }
 
 export interface WorkflowDraft {

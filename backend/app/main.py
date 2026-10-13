@@ -19,6 +19,9 @@ from app.api.routes import (
     knowledge_router,
     rag_router,
     marketplace_router,
+    integrations_router,
+    briefing_router,
+    files_router,
     mcp_router,
     health_router,
     llm_router,
@@ -28,6 +31,7 @@ from app.api.routes import (
     workflows_router,
 )
 from app.api.middleware import setup_middleware, validate_cors_origins
+from app.integrations import integration_manager
 from app.mcp import mcp_manager, server_availability
 from app.tools import get_tool_registry
 from app.workflows.engine import mark_interrupted_runs, resume_interrupted_runs
@@ -64,6 +68,7 @@ async def lifespan(app: FastAPI):
     interrupted = mark_interrupted_runs()
     # Servers connect in the background; startup doesn't wait for slow npx/uvx launches.
     await mcp_manager.start_all()
+    integration_manager.load_all()  # built-in integrations' tools (email, calendar feeds, RSS...)
     start_scheduler()
     registry.backfill_flags()
     registry.sync_if_stale()  # Marketplace listings: background, never blocks startup
@@ -126,6 +131,9 @@ def create_app() -> FastAPI:
         knowledge_router,
         rag_router,
         marketplace_router,
+        integrations_router,
+        briefing_router,
+        files_router,
         mcp_router,
         agent_router,
         workflows_router,

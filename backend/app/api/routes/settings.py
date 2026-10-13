@@ -59,6 +59,10 @@ DEFAULT_USER_SETTINGS = {
     "llmPrices": {},  # model -> {"input": $, "output": $} per million tokens, for cost estimates
     "timezone": "UTC",  # IANA name; schedules without their own timezone use it
     "notifications": {"workflowFailure": True},  # failed runs show in the bell
+    "memory": {"auto": True},  # learn lasting facts from chats by itself (every few messages)
+    # The daily briefing's choices; it runs as the workflow ``workflowId``.
+    "briefing": {"workflowId": None, "time": "08:00", "weekdaysOnly": True,
+                 "sections": ["calendar", "email", "apps", "feeds"], "notes": ""},
 }
 
 

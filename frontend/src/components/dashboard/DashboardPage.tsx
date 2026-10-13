@@ -1,3 +1,5 @@
+import { BriefingCard } from './BriefingCard';
+import { SystemStatus } from './SystemStatus';
 import { Activity, AlertTriangle, BarChart3, Coins, Cpu, Gauge, Timer } from 'lucide-react';
 import { EmptyState, PageHeader, SegmentedControl } from '../ui/PageHeader';
 import { useCallback, useEffect, useState } from 'react';
@@ -114,6 +116,9 @@ export function DashboardPage() {
       <PageHeader title="Dashboard" description="How your workflows are running and what the AI costs."
         actions={<SegmentedControl label="Time range" value={days} onChange={setDays}
           options={RANGES.map(r => ({ value: r, label: `${r} days` }))} />} />
+
+      <SystemStatus />
+      <BriefingCard />
 
       <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
         {([

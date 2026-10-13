@@ -1,9 +1,9 @@
+import { listApps } from '../../services/integrations';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AppWindow, FileText, GitBranch, LayoutGrid, MessageSquare, Search } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { chatService } from '../../services/chat';
-import { mcpService } from '../../services/mcp';
 import { ragService } from '../../services/rag';
 import { workflowService } from '../../services/workflow';
 
@@ -67,7 +67,7 @@ export function CommandPalette({ onOpenChat }: { onOpenChat: (sessionId: string)
     const workflows = workflowService.getWorkflows()
       .then(list => list.map(w => ({ kind: 'Workflow' as const, label: w.name, to: `/workflows?open=${w.id}` })))
       .catch(() => [] as Result[]);
-    const apps = mcpService.list()
+    const apps = listApps()
       .then(list => list.map(s => ({ kind: 'App' as const, label: s.name, to: '/servers' })))
       .catch(() => [] as Result[]);
     const documents = ragService.collections()

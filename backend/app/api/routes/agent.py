@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from types import SimpleNamespace
 import logging
 import asyncio
 from typing import Any, AsyncIterator, Optional
@@ -242,7 +243,11 @@ class _Prepared:
         self.document_names = readable_document_names(DEFAULT_WORKSPACE, session_id)
         # "@Notion ..." / "@resume.pdf": the user pointed at an app (only its tools, plus Nexus's own) or a document.
         lowered = self.task.lower()
-        self.mentioned_apps = [s for s in store.list_servers() if s.enabled and f"@{s.name.lower()}" in lowered]
+        from app.integrations import store as integration_store  # built-in integrations can be @-mentioned too
+
+        apps = [SimpleNamespace(name=s.name, slug=s.slug) for s in store.list_servers() if s.enabled] + [
+            SimpleNamespace(name=i["name"], slug=i["slug"]) for i in integration_store.list_integrations() if i["enabled"]]
+        self.mentioned_apps = [a for a in apps if f"@{a.name.lower()}" in lowered]
         self.mentioned_documents = [d for d in self.document_names if f"@{d.lower()}" in lowered]
         if self.mentioned_apps:
             pointed = {s.slug for s in self.mentioned_apps} | {BUILTIN_APP}
@@ -251,7 +256,9 @@ class _Prepared:
             self.available = [n for n in self.available if n != f"{BUILTIN_APP}__search_documents"]
         # Memory tools only when asked: offering tools sends the reply down the tool-calling path,
         # which can't stream, so plain chats without servers would lose word-by-word streaming.
-        self.available = [n for n in self.available if n != f"{BUILTIN_APP}__notify"]  # a workflow step, not for chat
+        # Workflow steps, not for chat: Notify, and running the agent itself (unattended, read-only).
+        self.available = [n for n in self.available if n not in (f"{BUILTIN_APP}__notify", f"{BUILTIN_APP}__ask_agent")]
+        self.unattended = False
         if not re.search(r"remember|forget|memor", self.task, re.IGNORECASE):
             self.available = [n for n in self.available if n not in (f"{BUILTIN_APP}__remember", f"{BUILTIN_APP}__forget")]
         if not AUTOMATION_REQUEST.search(self.task):  # "remind me every day at 9", "every weekday send me..."
@@ -317,7 +324,8 @@ class _Prepared:
         connections = {app_id: state["available"] for app_id, state in self.states.items()}
         agent = BaseAgent(self.registry, connections, on_event=on_event)
         # Question cards only when the agent can act (apps, or creating a workflow): plain chats keep streaming.
-        agent.can_ask = any(self.tools_by_name[n].app_id != BUILTIN_APP or n in WORKFLOW_TOOLS for n in self.available)
+        agent.can_ask = not self.unattended and any(
+            self.tools_by_name[n].app_id != BUILTIN_APP or n in WORKFLOW_TOOLS for n in self.available)
         return agent
 
 
@@ -331,13 +339,13 @@ def _cite(result: dict[str, Any], turn) -> dict[str, Any]:
 
 
 def _finish(session_id: Optional[str], user_text: Optional[str], result: dict[str, Any], llm_provider_id: Optional[int],
-            usage: Optional[dict[str, Any]] = None) -> AgentRunResponse:
+            usage: Optional[dict[str, Any]] = None, files: Optional[list[dict[str, Any]]] = None) -> AgentRunResponse:
     """Persist the turn to the session (or the pending approval) and build the response."""
     if session_id:
         session = get_session(session_id) or {}
         metadata = dict(session.get("metadata") or {})
         if user_text is not None:
-            append_message(session_id, {"role": "user", "content": user_text})
+            append_message(session_id, {"role": "user", "content": user_text, **({"files": files} if files else {})})
         if result["status"] in PAUSED:
             metadata["pending"] = {"state": result.pop("pending"), "llm_provider_id": llm_provider_id}
             if result.get("pending_question"):
@@ -352,6 +360,8 @@ def _finish(session_id: Optional[str], user_text: Optional[str], result: dict[st
             tools_used = [e.get("tool_name") for e in result["events"] if e.get("type") == "tool_executed"]
             log_activity("message_received", f"Agent: {(user_text or 'approved action')[:80]}", result.get("summary", ""),
                          {"status": result["status"], "tools": tools_used, "session_id": session_id})
+            if user_text is not None:
+                knowledge.learn_later(session_id)  # every few messages, in the background
         set_metadata(session_id, metadata)
     result.pop("pending", None)
     return AgentRunResponse(
@@ -392,6 +402,24 @@ async def _resume_answers(prepared: _Prepared, state: dict[str, Any], answers: d
         return _cite(await prepared.agent(on_event).resume_with_answers(state, answers, prepared.llm), turn)
 
 
+async def run_unattended(task: str) -> str:
+    """The agent for a workflow step (a daily briefing, a summary): nobody is there to approve or answer, so it
+    only gets tools that run without asking, never changes anything that needs approval, and asks no questions."""
+    prepared = _Prepared(AgentRunRequest(message=task), None)
+    if prepared.llm is None:
+        raise ValueError("No AI provider configured. Add one in Settings > AI.")
+    prepared.unattended = True
+    prepared.available = [n for n in prepared.available
+                          if getattr(prepared.tools_by_name[n], "policy", "allow") == "allow"
+                          and n not in (f"{BUILTIN_APP}__create_workflow", f"{BUILTIN_APP}__change_workflow")]
+    result = await _run(prepared)
+    return result.get("response") or result.get("message") or ""
+
+
+def _files(req: AgentRunRequest) -> list[dict[str, Any]]:
+    return [f.model_dump() for f in req.files]
+
+
 def _ensure_session(req: AgentRunRequest) -> Optional[str]:
     # Approvals need somewhere to keep the paused run, so every run belongs to a session.
     return req.session_id or create_session(title=(req.message or req.task)[:80])
@@ -417,7 +445,7 @@ async def run_agent(req: AgentRunRequest) -> AgentRunResponse:
     prepared = _Prepared(req, req.session_id)
     with usage_scope() as calls:
         result = await _run(prepared)
-    return _finish(req.session_id, prepared.task, result, req.llm_provider_id, usage_total(calls))
+    return _finish(req.session_id, prepared.task, result, req.llm_provider_id, usage_total(calls), _files(req))
 
 
 @router.post("/sessions/{session_id}/approval", response_model=AgentRunResponse)
@@ -438,7 +466,8 @@ async def answer_questions(session_id: str, body: AnswerRequest) -> AgentRunResp
     return _finish(session_id, None, result, prepared.req.llm_provider_id, usage_total(calls))
 
 
-def _stream(session_id: str, user_text: Optional[str], llm_provider_id: Optional[int], work) -> StreamingResponse:
+def _stream(session_id: str, user_text: Optional[str], llm_provider_id: Optional[int], work,
+            files: Optional[list[dict[str, Any]]] = None) -> StreamingResponse:
     """Run ``work(on_event)`` as server-sent events: progress events, then ``done`` (or ``error``).
 
     If the client disconnects (the Stop button), the run is cancelled and what was said so far is
@@ -456,14 +485,14 @@ def _stream(session_id: str, user_text: Optional[str], llm_provider_id: Optional
         with usage_scope() as calls:
             try:
                 result = await work(on_event)
-                final = _finish(session_id, user_text, result, llm_provider_id, usage_total(calls))
+                final = _finish(session_id, user_text, result, llm_provider_id, usage_total(calls), files)
                 await queue.put({"type": "done", **final.model_dump()})
             except asyncio.CancelledError:
                 text = "".join(partial).strip()
                 _finish(session_id, user_text, {
                     "status": "cancelled", "events": [], "summary": "Stopped by the user",
                     "response": f"{text}\n\n_(stopped)_" if text else "_(stopped before answering)_",
-                }, llm_provider_id, usage_total(calls))
+                }, llm_provider_id, usage_total(calls), files)
                 raise
             except Exception as exc:
                 logger.warning("Stream error: %s", exc)
@@ -491,7 +520,7 @@ async def run_agent_stream(req: AgentRunRequest):
     prepared = _Prepared(req, req.session_id)
     if prepared.llm is None:
         raise HTTPException(status_code=400, detail="An LLM provider is required")
-    return _stream(req.session_id, prepared.task, req.llm_provider_id, lambda on_event: _run(prepared, on_event))
+    return _stream(req.session_id, prepared.task, req.llm_provider_id, lambda on_event: _run(prepared, on_event), _files(req))
 
 
 @router.post("/sessions/{session_id}/approval/stream")

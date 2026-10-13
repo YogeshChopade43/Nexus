@@ -11,6 +11,8 @@ export interface UserSettings {
   llmPrices: Record<string, { input: number; output: number }>;
   /** Re-score document search results with the local reranker. */
   ragRerank: boolean;
+  /** Learn lasting facts from chats automatically. */
+  memory?: { auto: boolean };
 }
 
 export interface NotificationSettings {

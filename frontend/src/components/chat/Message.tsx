@@ -1,3 +1,5 @@
+import { MadeFiles, ToolSources } from './ToolSources';
+import { FileChip } from './FilePreview';
 import { MentionText, useMentionLabels } from './MentionText';
 import { Logo } from '../layout/Sidebar';
 import { cn, formatRelativeTime } from '../../lib/utils';
@@ -136,6 +138,11 @@ function usageText(usage: NonNullable<ChatMessage['usage']>): string {
   return parts.join(' · ');
 }
 
+/** What you typed: the server also keeps the attached files' text and a note about documents in the message. */
+export const typedText = (content: string) => content.split("\n\nAttached file '")[0]
+  .replace(/\n\n\(I attached [^\n]*\. They're searchable in this chat\.\)$/, '')
+  .replace(/\n\n📎 .*$/s, '').trim();
+
 export function Message({ message, onCopy, onApprove, onRetry, onEdit, onAnswer }: MessageProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
@@ -203,7 +210,7 @@ export function Message({ message, onCopy, onApprove, onRetry, onEdit, onAnswer 
               </div>
             </form>
           ) : isUser ? (
-            <div className="whitespace-pre-wrap break-words text-sm"><MentionText text={message.content} labels={mentionLabels} /></div>
+            <div className="whitespace-pre-wrap break-words text-sm"><MentionText text={typedText(message.content)} labels={mentionLabels} /></div>
           ) : (
             <Markdown text={message.content} />
           ))}
@@ -250,7 +257,7 @@ export function Message({ message, onCopy, onApprove, onRetry, onEdit, onAnswer 
           {onEdit && !editing && (
             <Tooltip content="Edit and ask again">
               <Button variant="ghost" size="sm" className="h-6 w-6 px-0" aria-label="Edit message"
-                onClick={() => { setDraft(message.content.replace(/\n\n📎 .*$/s, '')); setEditing(true); }}>
+                onClick={() => { setDraft(typedText(message.content)); setEditing(true); }}>
                 <Pencil className="w-3.5 h-3.5" />
               </Button>
             </Tooltip>
@@ -269,10 +276,15 @@ export function Message({ message, onCopy, onApprove, onRetry, onEdit, onAnswer 
             </Tooltip>
           )}
         </div>
-        {/* Agent events */}
-        {!isUser && visibleEvents.length > 0 && (
+        {isUser && message.files && message.files.length > 0 && (
+          <div className="mt-1.5 flex flex-wrap justify-end gap-2">{message.files.map(file => <FileChip key={file.id} file={file} />)}</div>
+        )}
+        {/* Where the answer came from (tool calls), then anything else that happened (errors, declines) */}
+        {!isUser && <MadeFiles events={visibleEvents.filter(e => e.type === 'tool_executed')} />}
+        {!isUser && <ToolSources events={visibleEvents.filter(e => e.type === 'tool_executed')} />}
+        {!isUser && visibleEvents.some(e => e.type !== 'tool_executed') && (
           <div className="mt-2 space-y-1.5 pl-1">
-            {visibleEvents.map((event, idx) => (
+            {visibleEvents.filter(e => e.type !== 'tool_executed').map((event, idx) => (
               <div key={idx} className="flex items-start gap-2 text-xs">
                 {renderEvent(event)}
               </div>

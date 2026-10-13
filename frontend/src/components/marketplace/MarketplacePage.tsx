@@ -1,3 +1,6 @@
+import { useSearchParams } from 'react-router-dom';
+import { BuiltInSection, IntegrationModal } from './BuiltIn';
+import { integrationService, type Integration, type IntegrationKind } from '../../services/integrations';
 import { EmptyState, PageHeader, SegmentedControl } from '../ui/PageHeader';
 import { fieldClass } from '../ui/Input';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -67,6 +70,26 @@ export function MarketplacePage() {
   const [selected, setSelected] = useState<MarketCard | null>(null);
   const [adding, setAdding] = useState(false);
   const [importing, setImporting] = useState(false);
+  // Built-in integrations (email, calendar feeds, RSS...): listed above the MCP Registry.
+  const [kinds, setKinds] = useState<IntegrationKind[]>([]);
+  const [integrations, setIntegrations] = useState<Integration[]>([]);
+  const [openKind, setOpenKind] = useState<IntegrationKind | null>(null);
+  const loadIntegrations = useCallback(() => {
+    integrationService.list().then(setIntegrations).catch(() => {});
+  }, []);
+  const [params, setParams] = useSearchParams();
+  useEffect(() => {
+    integrationService.kinds().then(found => {
+      setKinds(found);
+      // A link like /servers?connect=telegram (from the getting-started guide) opens that one straight away.
+      const wanted = found.find(k => k.id === params.get('connect'));
+      if (wanted) {
+        setOpenKind(wanted);
+        setParams({}, { replace: true });
+      }
+    }).catch(() => {});
+    loadIntegrations();
+  }, [loadIntegrations]);  // once, on arrival
 
   useEffect(() => {
     const timer = setTimeout(() => setSearched(query.trim()), 300);
@@ -175,6 +198,14 @@ export function MarketplacePage() {
       </div>
 
       {error && <p role="alert" className="text-sm text-nexus-danger">{error}</p>}
+
+      {!searched && !official && (
+        <BuiltInSection onOpen={setOpenKind} integrations={integrations}
+          kinds={kind === 'installed' ? kinds.filter(k => integrations.some(i => i.kind === k.id)) : kinds} />
+      )}
+      {openKind && (
+        <IntegrationModal kind={openKind} integrations={integrations} onClose={() => setOpenKind(null)} onChanged={loadIntegrations} />
+      )}
 
       {showFeatured && (
         <section aria-label="Featured" className="space-y-2">

@@ -2,6 +2,14 @@ import type { Citation } from './rag';
 
 export type MessageRole = 'user' | 'assistant';
 
+/** A file stored by Nexus: attached in the chat or made by a reply. */
+export interface FileRef {
+  id: string;
+  name: string;
+  size: number;
+  url: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: MessageRole;
@@ -18,6 +26,8 @@ export interface ChatMessage {
   usage?: ReplyUsage | null;
   /** Document passages the reply cited as [n]. */
   citations?: Citation[] | null;
+  /** Files you attached (your messages). */
+  files?: FileRef[];
 }
 
 /** Tokens one reply used, and its cost when prices are set on the Dashboard. */
@@ -84,6 +94,7 @@ export interface AgentRunRequest {
   llm_provider_id?: number;
   session_id?: string;
   attachments?: ChatAttachment[];
+  files?: FileRef[];
   chat_settings?: ChatSettings;
 }
 
@@ -95,6 +106,7 @@ export interface StoredMessage {
   summary?: string;
   usage?: ReplyUsage | null;
   citations?: Citation[] | null;
+  files?: FileRef[];
 }
 
 export interface AgentSession {

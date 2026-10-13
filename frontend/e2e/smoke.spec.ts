@@ -101,7 +101,10 @@ test('chat: Markdown replies, cost, retry, edit, stop and search', async ({ page
   await expect(log.getByText(/120 tokens · <\$0\.01/)).toBeVisible();
 
   // Retry asks the same question again; Edit replaces it.
+  // Wait for the retried reply to finish streaming before editing (Edit is hidden while a reply runs).
+  const retried = page.waitForResponse(r => r.url().includes('/api/agent/run'));
   await log.getByRole('button', { name: 'Retry' }).click();
+  await (await retried).finished();
   await expect(log.getByText('Answer to: hello there')).toHaveCount(1);
   await log.getByRole('button', { name: 'Edit message' }).click();
   await log.getByRole('textbox', { name: 'Edit message' }).fill('hello again');
@@ -184,4 +187,26 @@ test('workflow canvas: add steps, connect them by dragging, save', async ({ page
     .toEqual(['delay_1->transform_1', 'trigger_1->delay_1']);
   expect(saved.nodes.every((n: { position?: unknown }) => n.position)).toBe(true);
   await page.request.delete(`http://localhost:8765/api/workflows/${saved.id}`);
+});
+
+test('built-in integrations: connect an RSS feed from the Marketplace, then mention it in chat', async ({ page }) => {
+  await page.goto('/servers');
+  await page.getByRole('button', { name: /RSS \/ Atom feed/ }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('Name').fill('Team news');
+  await dialog.getByLabel(/Feed address/).fill('http://127.0.0.1:8766/feed.xml');
+  await dialog.getByRole('button', { name: 'Connect' }).click();
+  await expect(dialog.getByRole('status')).toContainText('Feed "Team news" with 1 item(s)');
+  await expect(dialog.getByText('Team news', { exact: true })).toBeVisible();  // listed as connected
+  await page.keyboard.press('Escape');
+  await expect(page.getByText('1 connected')).toBeVisible();
+
+  await page.goto('/');
+  const input = page.getByLabel('Message input');
+  await input.click();
+  await page.keyboard.type('What is new in @Team');
+  await expect(page.getByRole('listbox', { name: 'Mention an app or document' }).getByRole('option', { name: /Team news/ })).toBeVisible();
+
+  const listed = await (await page.request.get('http://localhost:8765/api/integrations')).json();
+  await page.request.delete(`http://localhost:8765/api/integrations/${listed[0].id}`);
 });

@@ -98,3 +98,35 @@ def dashboard(days: int = Query(14, ge=1, le=90)) -> dict[str, Any]:
         "tokens_today": tokens_used_today(),
         "daily_token_limit": int(load_user_settings().get("dailyTokenLimit") or 0),
     }
+
+
+@router.get("/status")
+def system_status() -> dict[str, Any]:
+    """Is everything working? The scheduler, each connected app, the last failed run, and phone alerts."""
+    from app.integrations import store as integration_store
+    from app.mcp import mcp_manager, store as mcp_store
+    from app.workflows import scheduler
+
+    jobs = scheduler._scheduler.get_jobs() if scheduler._scheduler else []
+    apps = [{"name": s.name, "kind": "app", "status": mcp_manager.status(s.id)["status"] if s.enabled else "stopped",
+             "error": mcp_manager.status(s.id)["error"]} for s in mcp_store.list_servers()]
+    integrations = integration_store.list_integrations()
+    apps += [{"name": i["name"], "kind": i["kind"], "error": None,
+              "status": "stopped" if not i["enabled"] else "needs_auth" if (
+                  (i["kind"] == "google" and not i["config"].get("refresh_token"))
+                  or (i["kind"] in ("telegram", "slack", "discord") and not i["config"].get("chat_id"))) else "connected"}
+             for i in integrations]
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT r.workflow_id, w.name, r.started_at, r.error FROM workflow_runs r "
+                           "JOIN workflows w ON w.id = r.workflow_id WHERE r.status = 'failed' "
+                           "ORDER BY r.started_at DESC LIMIT 1").fetchone()
+    finally:
+        conn.close()
+    return {
+        "scheduler": {"running": bool(scheduler._scheduler and scheduler._scheduler.running),
+                      "jobs": sum(1 for job in jobs if job.id.startswith("workflow-"))},
+        "apps": apps,
+        "last_failure": dict(row) if row else None,
+        "telegram_linked": any(i["kind"] in ("telegram", "slack", "discord") and i["config"].get("chat_id") for i in integrations),
+    }

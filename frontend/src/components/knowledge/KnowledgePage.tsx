@@ -1,3 +1,4 @@
+import { Badge } from '../ui/Badge';
 import { fieldClass as inputClass } from '../ui/Input';
 import { PageHeader } from '../ui/PageHeader';
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
@@ -19,6 +20,7 @@ export function KnowledgePage() {
   const [newName, setNewName] = useState('');
   const [status, setStatus] = useState<RagStatus | null>(null);
   const [rerank, setRerank] = useState(true);
+  const [autoMemory, setAutoMemory] = useState(true);
   const [memories, setMemories] = useState<Memory[]>([]);
   const [fact, setFact] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -36,7 +38,10 @@ export function KnowledgePage() {
   useEffect(() => {
     void loadLibraries();
     knowledgeService.memories().then(setMemories).catch(err => setError(getErrorMessage(err)));
-    settingsService.getSettings().then(s => setRerank(s.user.ragRerank !== false)).catch(() => {});
+    settingsService.getSettings().then(s => {
+      setRerank(s.user.ragRerank !== false);
+      setAutoMemory(s.user.memory?.auto !== false);
+    }).catch(() => {});
   }, [loadLibraries]);
 
   // The first upload downloads the local search models; show that instead of an unexplained wait.
@@ -61,6 +66,11 @@ export function KnowledgePage() {
     } catch (err) {
       setError(getErrorMessage(err));
     }
+  };
+
+  const toggleAutoMemory = (on: boolean) => {
+    setAutoMemory(on);
+    settingsService.updateUserSettings({ memory: { auto: on } }).catch(err => { setAutoMemory(!on); setError(getErrorMessage(err)); });
   };
 
   const toggleRerank = (on: boolean) => {
@@ -143,7 +153,14 @@ export function KnowledgePage() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><Brain className="w-5 h-5" /> Memory</CardTitle>
-          <CardDescription>Facts the agent keeps in mind in every chat. It saves one when you say "remember …", or add them here.</CardDescription>
+          <CardDescription>
+            Facts the agent keeps in mind in every chat. It saves one when you say "remember …", learns them from your chats
+            when that's on below, or you add them here. Remove anything you don't want kept.
+          </CardDescription>
+          <label className="mt-2 flex items-center gap-2 text-[13px] text-nexus-text-secondary">
+            <input type="checkbox" checked={autoMemory} onChange={(e) => toggleAutoMemory(e.target.checked)} />
+            Learn from my chats automatically (a short AI call every few messages)
+          </label>
         </CardHeader>
         <CardContent className="space-y-3">
           {memories.length === 0 ? <p className="text-sm text-nexus-text-muted">Nothing remembered yet.</p> : (
@@ -151,6 +168,7 @@ export function KnowledgePage() {
               {memories.map(memory => (
                 <li key={memory.id} className="py-2 flex items-center gap-3">
                   <span className="flex-1 text-sm text-nexus-text">{memory.content}</span>
+                  {memory.source === 'auto' && <Badge size="sm" variant="accent" title="Learned from a chat">Learned</Badge>}
                   <Button variant="ghost" size="sm" aria-label={`Forget: ${memory.content}`} className="text-nexus-danger"
                     onClick={() => void memoryAction(() => knowledgeService.removeMemory(memory.id))}>
                     <Trash2 className="w-4 h-4" />

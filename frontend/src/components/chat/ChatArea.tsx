@@ -149,7 +149,7 @@ export function ChatArea({ className }: ChatAreaProps) {
       )}
 
       <MessageList
-        intro={<GettingStarted hasLLM={hasLLM} />}
+        intro={<GettingStarted hasLLM={hasLLM} onTry={hasLLM && !sending ? (text) => void handleSend(text, [], []) : undefined} />}
         ref={messageListRef}
         messages={messages}
         onCopy={handleCopy}

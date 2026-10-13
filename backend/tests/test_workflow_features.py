@@ -307,3 +307,17 @@ def test_ai_draft(client, monkeypatch):
 
     monkeypatch.setattr(drafting, "get_default_llm_provider", lambda: (None, None))
     assert client.post("/api/workflows/draft", json={"description": "x"}).status_code == 400
+
+
+def test_templates_use_the_new_abilities_and_say_what_they_need(client):
+    templates = {t["id"]: t for t in client.get("/api/workflows/templates").json()}
+    assert {"inbox-triage", "daily-briefing", "daily-reminder", "weekly-report-doc", "web-news"} <= set(templates)
+    assert templates["web-news"]["needs"] == ["Web search"] and templates["inbox-triage"]["needs"] == ["Email"]
+    assert templates["daily-reminder"]["needs"] == []
+    tools = {n["config"].get("tool") for n in client.post("/api/workflows/templates/inbox-triage").json()["nodes"]}
+    assert {"nexus__ask_agent", "nexus__notify"} <= tools
+    # Every template validates against the real step types and built-in tools.
+    for template_id in templates:
+        created = client.post(f"/api/workflows/templates/{template_id}")
+        assert created.status_code == 200 and not created.json().get("warnings"), (template_id, created.json().get("warnings"))
+        client.delete(f"/api/workflows/{created.json()['id']}")

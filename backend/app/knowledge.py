@@ -30,7 +30,7 @@ def list_memories() -> list[dict[str, Any]]:
         conn.close()
 
 
-def add_memory(content: str) -> dict[str, Any]:
+def add_memory(content: str, source: str = "manual") -> dict[str, Any]:
     content = " ".join(content.split())[:500]
     if not content:
         raise ValueError("Nothing to remember")
@@ -41,7 +41,7 @@ def add_memory(content: str) -> dict[str, Any]:
             return dict(existing)
         if conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0] >= MAX_MEMORIES:
             raise ValueError(f"Memory is full ({MAX_MEMORIES} facts). Remove some in Knowledge > Memory.")
-        cursor = conn.execute("INSERT INTO memories (content, created_at) VALUES (?, ?)", (content, _now()))
+        cursor = conn.execute("INSERT INTO memories (content, created_at, source) VALUES (?, ?, ?)", (content, _now(), source))
         conn.commit()
         return dict(conn.execute("SELECT * FROM memories WHERE id = ?", (cursor.lastrowid,)).fetchone())
     finally:
@@ -56,6 +56,65 @@ def delete_memory(memory_id: int) -> bool:
         return deleted > 0
     finally:
         conn.close()
+
+
+LEARN_EVERY = 3  # user messages between automatic memory updates (each costs one short AI call)
+_learning: set = set()  # running background tasks (kept so they aren't garbage-collected)
+
+
+def learn_later(session_id: str) -> None:
+    """Every few messages, in the background: save lasting facts the user stated (unless switched off)."""
+    import asyncio
+
+    from app.agent.sessions import get_session
+    from app.api.routes.settings import load_user_settings
+
+    if not (load_user_settings().get("memory") or {}).get("auto", True):
+        return
+    messages = (get_session(session_id) or {}).get("messages") or []
+    if sum(1 for m in messages if m.get("role") == "user") % LEARN_EVERY != 0:
+        return
+    try:
+        task = asyncio.get_running_loop().create_task(learn_from(messages[-2 * LEARN_EVERY:]))
+    except RuntimeError:  # no event loop: nothing to run it on
+        return
+    _learning.add(task)
+    task.add_done_callback(_learning.discard)
+
+
+async def learn_from(messages: list[dict[str, Any]]) -> list[str]:
+    from app.api.routes import agent as agent_route  # the same AI provider as the chat
+
+    llm, _ = agent_route.get_default_llm_provider()
+    if llm is None:
+        return []
+    known = "\n".join(f"- {m['content']}" for m in list_memories()) or "(nothing yet)"
+    talk = "\n".join(f"{m['role']}: {str(m.get('content') or '')[:600]}" for m in messages)
+    prompt = (f"Already remembered:\n{known}\n\nRecent conversation:\n{talk}\n\n"
+              "List new facts worth remembering about the user for future chats: lasting preferences, names, "
+              "accounts, IDs, how they like things done. Only what the user said or confirmed; nothing one-off, "
+              "nothing already remembered. Each as one short sentence. Reply with only a JSON list of strings, "
+              "at most 3; [] if none.")
+    try:
+        reply = await llm.chat(messages=[{"role": "system", "content": "You keep a user's long-term memory. JSON only."},
+                                         {"role": "user", "content": prompt}])
+        found = re.search(r"\[.*\]", reply.get("content") or "", re.DOTALL)
+        facts = json.loads(found.group(0)) if found else []
+    except Exception:  # memory is a bonus: never break or slow the chat
+        return []
+    learned = []
+    known_lower = {m["content"].lower() for m in list_memories()}
+    for fact in facts[:3] if isinstance(facts, list) else []:
+        fact = " ".join(str(fact).split())[:500]
+        if not fact or fact.lower() in known_lower:
+            continue
+        try:
+            add_memory(fact, source="auto")
+        except ValueError:  # memory full
+            break
+        log_activity("memory_learned", f"Remembered: {fact}", "Learned from a chat. Remove it in Knowledge > Memory.")
+        learned.append(fact)
+    return learned
 
 
 def memory_prompt() -> str:
@@ -116,8 +175,8 @@ class Notify(_BuiltIn):
     read_only = False
 
     def __init__(self) -> None:
-        super().__init__("notify", "Notify the user: shows in Nexus's notification bell and as a browser "
-                         "notification while Nexus is open. Use for reminders and alerts in workflows.", {
+        super().__init__("notify", "Notify the user: Nexus's notification bell, a browser notification while Nexus "
+                         "is open, and their phone when Telegram is linked. Use for reminders and alerts in workflows.", {
             "type": "object",
             "properties": {"title": {"type": "string", "description": "Short headline, e.g. 'Take your medicines'"},
                            "message": {"type": "string", "description": "Optional details"}},
@@ -125,8 +184,14 @@ class Notify(_BuiltIn):
         })
 
     async def execute(self, parameters: dict[str, Any]) -> dict[str, Any]:
-        title = str(parameters.get("title") or "Reminder")[:200]
-        log_activity("reminder", title, str(parameters.get("message") or "")[:1000])
+        from app.workflows.scheduler import due_note  # a reminder that ran late says when it was due
+
+        title = str(parameters.get("title") or "Reminder")[:200] + due_note()
+        message = str(parameters.get("message") or "")[:4000]  # room for a daily briefing
+        log_activity("reminder", title, message)
+        from app.integrations.telegram import notify_all  # and on the phone, when Telegram is linked
+
+        await notify_all(title, message)
         return {"text": f"Notified: {title}", "data": {"title": title}}
 
 
@@ -283,8 +348,31 @@ class ChangeWorkflow(_BuiltIn):
                 "data": {"workflow_id": found["id"], "next_run_at": next_run}}
 
 
+class AskAgent(_BuiltIn):
+    """A workflow step that runs the agent with the user's apps, read-only, and returns its answer."""
+
+    def __init__(self) -> None:
+        super().__init__("ask_agent", "Run the Nexus agent on a request, using the user's connected apps to look "
+                         "things up (read-only: it changes and sends nothing), and return its answer. For workflow "
+                         "steps such as a daily briefing, a digest or a summary.", {
+            "type": "object",
+            "properties": {"prompt": {"type": "string", "description": "What the agent should find out or write"}},
+            "required": ["prompt"],
+        })
+
+    async def execute(self, parameters: dict[str, Any]) -> dict[str, Any]:
+        from app.api.routes.agent import run_unattended
+
+        answer = await run_unattended(str(parameters.get("prompt") or "").strip())
+        return {"text": answer, "data": {"answer": answer}}
+
+
 def register_builtin_tools(registry) -> None:
     from app.rag.tool import SearchDocuments
 
-    for tool in (SearchDocuments(), Remember(), Forget(), Notify(), CreateWorkflow(), ListWorkflows(), ChangeWorkflow()):
+    for tool in (SearchDocuments(), Remember(), Forget(), Notify(), CreateWorkflow(), ListWorkflows(), ChangeWorkflow(),
+                 AskAgent()):
         registry.register(tool)
+    from app.integrations.files_tool import CreateFile  # under the app "files": offered when a request is about making a file
+
+    registry.register(CreateFile())

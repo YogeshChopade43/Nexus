@@ -91,6 +91,16 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
+        if self.path == "/feed.xml":  # an RSS feed for the built-in integrations test
+            data = (b'<?xml version="1.0"?><rss version="2.0"><channel><title>Team news</title>'
+                    b'<item><title>Office closed Friday</title><link>https://ex.com/1</link><guid>n1</guid></item>'
+                    b'</channel></rss>')
+            self.send_response(200)
+            self.send_header("content-type", "application/rss+xml")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         self.send_response(200)  # health check for Playwright's webServer
         self.end_headers()
         self.wfile.write(b"ok")

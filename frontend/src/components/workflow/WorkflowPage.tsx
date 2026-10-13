@@ -3,7 +3,7 @@ import { EmptyState, SegmentedControl } from '../ui/PageHeader';
 import { PageHeader } from '../ui/PageHeader';
 import { runState } from './runState';
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { AlertCircle, Copy, Download, Edit3, History, LayoutTemplate, Play, Plus, RotateCcw, Sparkles, Square, Upload, Zap, AlertTriangle } from 'lucide-react';
 import { cn, formatRelativeTime, getErrorMessage } from '../../lib/utils';
 import { Card } from '../ui/Card';
@@ -515,6 +515,11 @@ export function WorkflowPage() {
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium text-nexus-text">{t.name}</p>
                 <p className="text-xs text-nexus-text-muted">{t.description}</p>
+                {t.needs && t.needs.length > 0 && (
+                  <p className="mt-1 text-xs text-nexus-text-secondary">
+                    Needs {t.needs.join(' and ')} · <Link to={`/servers?connect=${t.needs[0] === 'Web search' ? 'websearch' : 'google'}`}>connect it</Link>
+                  </p>
+                )}
               </div>
               <Button size="sm" onClick={async () => {
                 try {

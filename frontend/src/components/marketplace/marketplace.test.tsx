@@ -21,7 +21,8 @@ function serve(items: MarketCard[], status: SyncStatus = idle, featured: MarketC
   vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit = {}) => {
     const parsed = new URL(url);
     calls.push({ path: parsed.pathname, query: parsed.search, method: init.method ?? 'GET' });
-    const body = parsed.pathname === '/api/marketplace' ? { items, status }
+    const body = parsed.pathname.startsWith('/api/integrations') ? []  // no built-in integrations connected
+      : parsed.pathname === '/api/marketplace' ? { items, status }
       : parsed.pathname === '/api/marketplace/featured' ? { items: featured }
       : parsed.pathname === '/api/marketplace/refresh' ? { started: true } : status;
     return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });

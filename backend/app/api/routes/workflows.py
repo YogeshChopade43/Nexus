@@ -217,7 +217,8 @@ def import_workflow(payload: dict[str, Any]) -> WorkflowResponse:
 
 @router.get("/templates")
 def list_templates() -> list[dict[str, Any]]:
-    return [{"id": t["id"], "name": t["name"], "description": t["description"]} for t in TEMPLATES]
+    return [{"id": t["id"], "name": t["name"], "description": t["description"], "needs": t.get("needs", [])}
+            for t in TEMPLATES]
 
 
 @router.post("/templates/{template_id}", response_model=WorkflowResponse)

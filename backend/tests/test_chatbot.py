@@ -196,6 +196,13 @@ def test_retry_rewinds_the_last_turn(client, llm):
     assert client.post(f"/api/agent/sessions/{new_session(client)}/rewind").status_code == 409
 
 
+def test_attached_files_are_kept_with_the_message(client, llm):
+    sid = new_session(client)
+    ref = {"id": "0123456789abcdef", "name": "notes.txt", "size": 5, "url": "/api/files/0123456789abcdef/notes.txt"}
+    client.post("/api/agent/run", json={"message": "read this", "session_id": sid, "files": [ref]})
+    assert get_session(sid)["messages"][0]["files"] == [ref]
+
+
 def test_conversation_search(client, llm):
     sid = new_session(client)
     client.post("/api/agent/run", json={"message": "Notes about the café menu 100%", "session_id": sid})

@@ -45,3 +45,7 @@ backend/data/mcp-logs/
 frontend/test-results/
 frontend/playwright-report/
 backend/data/models/
+*.json
+*.jsonl
+*.xlsx
+*.csv
