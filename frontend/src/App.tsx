@@ -11,6 +11,7 @@ const WorkflowPage = lazy(() => import('./components/workflow').then(m => ({ def
 const ActivityPage = lazy(() => import('./components/activity').then(m => ({ default: m.ActivityPage })))
 const DashboardPage = lazy(() => import('./components/dashboard/DashboardPage').then(m => ({ default: m.DashboardPage })))
 const KnowledgePage = lazy(() => import('./components/knowledge/KnowledgePage').then(m => ({ default: m.KnowledgePage })))
+const RunOncePage = lazy(() => import('./components/runonce/RunOnce').then(m => ({ default: m.RunOnce })))
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then(m => ({ default: m.SettingsPage })))
 
 function App() {
@@ -29,6 +30,8 @@ function App() {
               <Route path="/activity" element={<ActivityPage />} />
               <Route path="/dashboard" element={<DashboardPage />} />
               <Route path="/knowledge" element={<KnowledgePage />} />
+              <Route path="/run-once" element={<RunOncePage />} />
+              <Route path="/will" element={<Navigate to="/run-once" replace />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>

@@ -60,6 +60,11 @@ DEFAULT_USER_SETTINGS = {
     "timezone": "UTC",  # IANA name; schedules without their own timezone use it
     "notifications": {"workflowFailure": True},  # failed runs show in the bell
     "memory": {"auto": True},  # learn lasting facts from chats by itself (every few messages)
+    "workflowFolders": [],  # folders made on the Workflows page, kept even while empty
+    "checkIn": {"last": None},  # when you last used Nexus yourself: run-once "if I go quiet" counts from it
+    # Before run-once: the digital will's state, read once to turn it into a run-once (routes/run_once.py).
+    "will": {"enabled": False, "days": 14, "workflowId": None, "lastCheckIn": None, "warnedAt": None,
+             "remindedAt": None, "triggeredAt": None},
     # The daily briefing's choices; it runs as the workflow ``workflowId``.
     "briefing": {"workflowId": None, "time": "08:00", "weekdaysOnly": True,
                  "sections": ["calendar", "email", "apps", "feeds"], "notes": ""},

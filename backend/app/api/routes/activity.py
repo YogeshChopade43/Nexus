@@ -188,7 +188,7 @@ def clear_activities() -> dict[str, Any]:
     finally:
         conn.close()
 
-NOTIFY_TYPES = ("workflow_failed", "server_error", "workflow_resumed", "document_failed", "reminder")
+NOTIFY_TYPES = ("workflow_failed", "server_error", "workflow_resumed", "document_failed", "reminder", "run_once_ran")
 
 
 @router.get("/notifications")

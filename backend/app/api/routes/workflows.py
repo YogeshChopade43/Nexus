@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Response
+from pydantic import BaseModel, Field
 
 from app.api.routes.settings import user_timezone
 from app.core.database import get_connection, log_activity
@@ -20,6 +21,7 @@ from app.models.workflow import (
 from app.tools import get_tool_registry
 from app.triggers.models import TriggerConfig
 from app.triggers.registry import list_trigger_types
+from app.workflows import sharing
 from app.workflows import inputs, polling, recurrence
 from app.workflows import drafting
 from app.workflows.engine import (
@@ -89,6 +91,7 @@ def _response_from_row(row: Any, warnings: Optional[list[str]] = None) -> Workfl
         trigger_status=polling.get_status(row["id"]) if trigger_info["type"] == "poll" else None,
         last_status=_last_status(row["id"]),
         llm_provider_id=row["llm_provider_id"],
+        folder=row["folder"] or "",
         last_run=row["last_run"],
         warnings=warnings or [],
     )
@@ -209,10 +212,96 @@ def import_workflow(payload: dict[str, Any]) -> WorkflowResponse:
         raise HTTPException(status_code=400, detail=f"Not a Nexus workflow export (expected format '{EXPORT_FORMAT}')")
     trigger = dict(payload.get("trigger") or {"type": "manual"})
     trigger.pop("secret", None)  # never trust an imported webhook token; a new one is generated
-    return create_workflow(WorkflowCreate(
+    nodes, notes = sharing.adopt(payload["nodes"], payload.get("apps") or {}, payload.get("cleared") or [])
+    created = create_workflow(WorkflowCreate(
         name=f"{payload.get('name') or 'Workflow'} (imported)", description=payload.get("description") or "",
-        nodes=payload["nodes"], edges=payload.get("edges") or [], trigger_config=trigger, isActive=False,
+        nodes=nodes, edges=payload.get("edges") or [], trigger_config=trigger, isActive=False,
     ))
+    created.warnings = [*notes, *(w for w in created.warnings if w not in notes)]
+    return created
+
+
+# ---- folders: workflows grouped by a name; one can exist before anything is in it ------------------
+
+class FolderName(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+
+
+def _saved_folders() -> list[str]:
+    from app.api.routes.settings import load_user_settings
+
+    return [str(f) for f in load_user_settings().get("workflowFolders") or []]
+
+
+def _save_folders(folders: list[str]) -> None:
+    from app.api.routes.settings import update_user_settings
+
+    update_user_settings({"workflowFolders": sorted(set(folders), key=str.lower)})
+
+
+def _folder_counts() -> dict[str, int]:
+    conn = get_connection()
+    try:
+        rows = conn.execute("SELECT folder, COUNT(*) AS n FROM workflows WHERE folder != '' GROUP BY folder").fetchall()
+    finally:
+        conn.close()
+    return {row["folder"]: row["n"] for row in rows}
+
+
+def _find_folder(name: str) -> Optional[str]:
+    """The existing folder called ``name``, whatever its capitals."""
+    return next((f for f in {*_saved_folders(), *_folder_counts()} if f.lower() == name.strip().lower()), None)
+
+
+@router.get("/folders")
+def list_folders() -> list[dict[str, Any]]:
+    counts = _folder_counts()
+    return [{"name": name, "count": counts.get(name, 0)} for name in sorted({*_saved_folders(), *counts}, key=str.lower)]
+
+
+@router.post("/folders")
+def create_folder(body: FolderName) -> list[dict[str, Any]]:
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="Give the folder a name")
+    if _find_folder(name):
+        raise HTTPException(status_code=409, detail=f"There's already a folder called {_find_folder(name)}")
+    _save_folders([*_saved_folders(), name])
+    return list_folders()
+
+
+@router.patch("/folders/{name}")
+def rename_folder(name: str, body: FolderName) -> list[dict[str, Any]]:
+    old, new = _find_folder(name), body.name.strip()
+    if old is None:
+        raise HTTPException(status_code=404, detail="Folder not found")
+    clash = _find_folder(new)
+    if clash and clash != old:
+        raise HTTPException(status_code=409, detail=f"There's already a folder called {clash}")
+    conn = get_connection()
+    try:
+        conn.execute("UPDATE workflows SET folder = ? WHERE folder = ?", (new, old))
+        conn.commit()
+    finally:
+        conn.close()
+    _save_folders([f for f in _saved_folders() if f != old] + [new])
+    return list_folders()
+
+
+@router.delete("/folders/{name}", status_code=204)
+def delete_folder(name: str) -> Response:
+    """Removes the folder only: its workflows stay, outside any folder."""
+    old = _find_folder(name)
+    if old is None:
+        raise HTTPException(status_code=404, detail="Folder not found")
+    conn = get_connection()
+    try:
+        conn.execute("UPDATE workflows SET folder = '' WHERE folder = ?", (old,))
+        conn.commit()
+    finally:
+        conn.close()
+    _save_folders([f for f in _saved_folders() if f != old])
+    return Response(status_code=204)
 
 
 @router.get("/templates")
@@ -323,12 +412,12 @@ def create_workflow(req: WorkflowCreate) -> WorkflowResponse:
         cursor = conn.execute(
             """
             INSERT INTO workflows
-                (name, description, steps, nodes, edges, version, enabled, is_active, trigger, llm_provider_id, updated_at)
-            VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
+                (name, description, steps, nodes, edges, version, enabled, is_active, trigger, llm_provider_id, updated_at, folder)
+            VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
             """,
             (
                 req.name.strip(), req.description, json.dumps(steps), json.dumps(nodes), json.dumps(edges),
-                int(is_active), int(is_active), trigger, req.llm_provider_id, _utc_now(),
+                int(is_active), int(is_active), trigger, req.llm_provider_id, _utc_now(), req.folder.strip(),
             ),
         )
         conn.commit()
@@ -360,6 +449,16 @@ def update_workflow(workflow_id: int, req: WorkflowUpdate) -> WorkflowResponse:
         raise HTTPException(status_code=404, detail="Workflow not found")
 
     values = req.model_dump(exclude_unset=True)
+    if "folder" in values:  # filing it away isn't an edit: no new version
+        conn = get_connection()
+        try:
+            conn.execute("UPDATE workflows SET folder = ? WHERE id = ?", ((values.pop("folder") or "").strip(), workflow_id))
+            conn.commit()
+            row = conn.execute("SELECT * FROM workflows WHERE id = ?", (workflow_id,)).fetchone()
+        finally:
+            conn.close()
+        if not values:
+            return _get_with_warnings(workflow_id, [])
     current_nodes, current_edges = load_workflow_graph(row)
     nodes = values.get("nodes", current_nodes) or []
     edges = values.get("edges", current_edges) or []
@@ -458,7 +557,9 @@ def export_workflow(workflow_id: int) -> dict[str, Any]:
         conn.close()
     if row is None:
         raise HTTPException(status_code=404, detail="Workflow not found")
-    return {"format": EXPORT_FORMAT, **_snapshot(row)}
+    snapshot = _snapshot(row)
+    nodes, apps, cleared = sharing.shareable(snapshot["nodes"])  # safe to send: no keys, no local ids
+    return {"format": EXPORT_FORMAT, **snapshot, "nodes": nodes, "apps": apps, "cleared": cleared}
 
 
 @router.delete("/{workflow_id}", status_code=204)
@@ -482,6 +583,9 @@ async def run_workflow_endpoint(
     workflow_id: int, req: WorkflowRunRequest, background: bool = Query(False),
 ) -> WorkflowRunResult:
     """Run now. With ``background=true`` the run starts and its id returns at once; poll it for progress."""
+    from app.api.routes import run_once
+
+    run_once.refuse_manual_run(workflow_id, req.confirm)
     conn = get_connection()
     try:
         row = conn.execute("SELECT id, trigger FROM workflows WHERE id = ?", (workflow_id,)).fetchone()

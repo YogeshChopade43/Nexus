@@ -12,6 +12,8 @@ interface Window {
 const number = new Intl.NumberFormat();
 const compact = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 });
 
+const money = (dollars: number) => (dollars < 0.01 ? '<$0.01' : `$${dollars.toFixed(2)}`);
+
 /** Colour by how full: violet with room to spare, amber when filling, red when nearly full. */
 function tone(percent: number) {
   return percent >= 85 ? 'text-nexus-danger' : percent >= 60 ? 'text-nexus-warning' : 'text-nexus-accent-text';
@@ -49,8 +51,15 @@ export function ContextMeter({ messages, providerId }: { messages: ChatMessage[]
   const label = percent !== null ? `Context window: ${percent}% used` : `Context window: ${approx}${number.format(used)} tokens used`;
   const circumference = 2 * Math.PI * 6;
 
+  // What the whole chat has cost: every reply's tokens, and its price when the model has one set.
+  const replies = messages.filter(m => m.role === 'assistant' && m.usage);
+  const chatTokens = replies.reduce((sum, m) => sum + m.usage!.input_tokens + m.usage!.output_tokens, 0);
+  const priced = replies.filter(m => typeof m.usage!.cost === 'number');
+  const cost = priced.length ? money(priced.reduce((sum, m) => sum + m.usage!.cost!, 0)) : null;
+  const unpriced = replies.length - priced.length;
+
   return (
-    <div ref={ref} className="relative">
+    <div ref={ref} className="relative flex items-center">
       <button type="button" aria-label={label} title={label} aria-expanded={open} onClick={() => setOpen(o => !o)}
         className="flex h-8 items-center gap-1.5 rounded-md px-2 text-xs tabular-nums text-nexus-text-secondary transition-colors hover:bg-nexus-bg-tertiary hover:text-nexus-text">
         <svg viewBox="0 0 16 16" className="h-4 w-4 -rotate-90" aria-hidden>
@@ -63,6 +72,10 @@ export function ContextMeter({ messages, providerId }: { messages: ChatMessage[]
         </svg>
         <span className="hidden sm:inline">{percent !== null ? shown : `${approx}${compact.format(used)}`}</span>
       </button>
+      {cost && (
+        <span title={`This chat has cost ${cost} so far`}
+          className="border-l border-nexus-border pl-2 pr-1 text-xs tabular-nums text-nexus-text-secondary">{cost}</span>
+      )}
 
       {open && (
         <div role="dialog" aria-label="Context window"
@@ -91,6 +104,19 @@ export function ContextMeter({ messages, providerId }: { messages: ChatMessage[]
             <p className="text-xs text-nexus-text-secondary">
               {approx}{number.format(used)} tokens used. This model&apos;s window size isn&apos;t known, so the percentage can&apos;t be shown.
             </p>
+          )}
+          {replies.length > 0 && (
+            <div className="space-y-1 border-t border-nexus-border pt-3">
+              <p className="text-xs tabular-nums text-nexus-text">
+                This chat: {number.format(chatTokens)} tokens{cost ? ` · ${cost}` : ''}
+              </p>
+              {unpriced > 0 && (
+                <p className="text-[11px] text-nexus-text-muted">
+                  {cost ? `${unpriced} ${unpriced === 1 ? 'reply has' : 'replies have'} no price, so the cost is a minimum. `
+                    : 'No cost shown: '}Set model prices on the Dashboard.
+                </p>
+              )}
+            </div>
           )}
           <p className="border-t border-nexus-border pt-3 text-[11px] leading-relaxed text-nexus-text-muted">
             Measured from the last reply: instructions, your apps&apos; tools, document passages and the conversation sent to the model.

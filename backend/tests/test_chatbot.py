@@ -517,3 +517,13 @@ def test_who_am_i_tools_only_come_with_a_request_about_apps():
     tools = [("github__search_repositories", "Find GitHub repositories by name"), ("github__get_me", "Get details of the authenticated GitHub user")]
     assert rank_tools("Hii", tools, 5, min_score=1) == []
     assert "github__get_me" in rank_tools("my repositories", tools, 5, min_score=1)
+
+
+@pytest.mark.parametrize("message", [
+    "summarise https://blog.example.org/post-42",
+    "what does www.example.org/pricing say?",
+    "tl;dr example.org/docs/intro",
+])
+def test_a_shared_link_gets_the_page_reader_without_any_app(client, llm, message):
+    client.post("/api/agent/run", json={"message": message, "session_id": new_session(client)})
+    assert "web__read_page" in next(c for c in llm.calls if c["kind"] == "tools")["tools"]

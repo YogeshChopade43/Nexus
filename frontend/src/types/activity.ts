@@ -13,6 +13,10 @@ export type ActivityType =
   | 'server_error'
   | 'document_failed'
   | 'reminder'
+  | 'will_armed'
+  | 'will_ran'
+  | 'run_once_set'
+  | 'run_once_ran'
   | 'settings_changed';
 
 export interface Activity {

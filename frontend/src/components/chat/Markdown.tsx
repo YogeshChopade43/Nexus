@@ -83,7 +83,20 @@ const components: Components = {
   p: ({ children }) => <p className="my-1.5 first:mt-0 last:mb-0">{children}</p>,
   blockquote: ({ children }) => <blockquote className="border-l-2 border-nexus-border pl-3 text-nexus-text-secondary my-2">{children}</blockquote>,
   hr: () => <hr className="my-3 border-nexus-border" />,
+  // Pictures (e.g. found by the browser): web addresses only, a sensible size, click for the original.
+  img: ({ src, alt }) => (typeof src === 'string' && /^https?:\/\//i.test(src) ? <Picture src={src} alt={alt ?? ''} /> : null),
 };
+
+function Picture({ src, alt }: { src: string; alt: string }) {
+  const [broken, setBroken] = useState(false);  // gone, or the site refuses: leave no empty frame
+  if (broken) return null;
+  return (
+    <a href={src} target="_blank" rel="noreferrer" className="my-1 mr-2 inline-block align-top">
+      <img src={src} alt={alt} loading="lazy" referrerPolicy="no-referrer" onError={() => setBroken(true)}
+        className="max-h-56 max-w-full rounded-lg border border-nexus-border object-cover" />
+    </a>
+  );
+}
 
 /** Assistant replies as Markdown (GitHub flavour: tables, task lists). Raw HTML is not rendered. */
 export function Markdown({ text }: { text: string }) {

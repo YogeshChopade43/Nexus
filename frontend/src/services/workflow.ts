@@ -90,6 +90,23 @@ export const workflowService = {
     return api.post<Workflow>('/api/workflows/import', data);
   },
 
+  /** Folders (with how many workflows each holds), including empty ones made on the page. */
+  async getFolders(): Promise<{ name: string; count: number }[]> {
+    return api.get<{ name: string; count: number }[]>('/api/workflows/folders');
+  },
+
+  async createFolder(name: string): Promise<void> {
+    await api.post('/api/workflows/folders', { name });
+  },
+
+  async renameFolder(name: string, newName: string): Promise<void> {
+    await api.patch(`/api/workflows/folders/${encodeURIComponent(name)}`, { name: newName });
+  },
+
+  async deleteFolder(name: string): Promise<void> {
+    await api.delete(`/api/workflows/folders/${encodeURIComponent(name)}`);
+  },
+
   async getTemplates(): Promise<WorkflowTemplate[]> {
     return api.get<WorkflowTemplate[]>('/api/workflows/templates');
   },

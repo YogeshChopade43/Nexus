@@ -4,7 +4,8 @@ import { PageHeader } from '../ui/PageHeader';
 import { runState } from './runState';
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { AlertCircle, Copy, Download, Edit3, History, LayoutTemplate, Play, Plus, RotateCcw, Sparkles, Square, Upload, Zap, AlertTriangle } from 'lucide-react';
+import { AlertCircle, Copy, Edit3, History, LayoutTemplate, Play, Plus, RotateCcw, Share2, Sparkles, Square, Upload, X, Zap, AlertTriangle } from 'lucide-react';
+import { exportFileName, shareNote } from './sharing';
 import { cn, formatRelativeTime, getErrorMessage } from '../../lib/utils';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
@@ -67,6 +68,12 @@ export function WorkflowPage() {
   const [runInputOpen, setRunInputOpen] = useState(false);
   const [runInput, setRunInput] = useState('{}');
   const [runError, setRunError] = useState<string | null>(null);
+  const [shared, setShared] = useState<string | null>(null);
+  const [folders, setFolders] = useState<string[]>([]);
+  const loadFolders = useCallback(() => {
+    workflowService.getFolders().then(found => setFolders(found.map(f => f.name)), () => {});
+  }, []);
+  useEffect(loadFolders, [loadFolders]);
   const [copied, setCopied] = useState(false);
   const [inputsFor, setInputsFor] = useState<Workflow | null>(null);
   const [draft, setDraft] = useState<WorkflowDraft | null>(null);
@@ -171,7 +178,15 @@ export function WorkflowPage() {
   /** Starts the workflow and opens the live run view; resolves to an error message, or null when it started. */
   const runNow = useCallback(async (workflow: Workflow, input: Record<string, unknown>): Promise<string | null> => {
     try {
-      const run = await workflowService.startRun(workflow.id, { input_data: input });
+      let run;
+      try {
+        run = await workflowService.startRun(workflow.id, { input_data: input });
+      } catch (err) {
+        // The digital will refuses a plain Run: running it really sends everything in it.
+        if ((err as { code?: string }).code !== 'HTTP_409') throw err;
+        if (!window.confirm(getErrorMessage(err))) return null;
+        run = await workflowService.startRun(workflow.id, { input_data: input, confirm: true });
+      }
       if (currentWorkflow?.id !== workflow.id) selectWorkflow(workflow);
       showRun(workflow.id, { ...run, events: [], trace: [] });
       return null;
@@ -213,10 +228,12 @@ export function WorkflowPage() {
   const handleExport = useCallback(async (workflow: Workflow) => {
     try {
       const data = await workflowService.exportWorkflow(workflow.id);
+      const fileName = exportFileName(workflow.name);
       const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
-      const link = Object.assign(document.createElement('a'), { href: url, download: `${workflow.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.nexus.json` });
+      const link = Object.assign(document.createElement('a'), { href: url, download: fileName });
       link.click();
       URL.revokeObjectURL(url);
+      setShared(shareNote(fileName, Array.isArray(data.cleared) ? data.cleared.map(String) : []));
     } catch (err) {
       setRunError(getErrorMessage(err));
     }
@@ -293,6 +310,18 @@ export function WorkflowPage() {
         </div>
       </div>
 
+      {shared && (
+        <Card role="status" className="border-nexus-accent/30 bg-nexus-accent/5 text-[13px]">
+          <div className="flex items-start gap-2 text-nexus-text-secondary">
+            <Share2 className="mt-0.5 h-4 w-4 shrink-0 text-nexus-accent-text" aria-hidden />
+            <span className="flex-1">{shared}</span>
+            <button type="button" aria-label="Dismiss" onClick={() => setShared(null)} className="text-nexus-text-muted hover:text-nexus-text">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </Card>
+      )}
+
       {(error || runError) && (
         <Card className="border-nexus-danger/30 bg-nexus-danger/5 text-[13px]">
           <div className="flex items-center gap-2 text-nexus-danger">
@@ -309,6 +338,20 @@ export function WorkflowPage() {
             selectedWorkflow={currentWorkflow}
             onSelect={handleSelect}
             onToggleActive={(workflow) => void handleToggleActive(workflow)}
+            onMove={(workflow, folder) => { updateWorkflow({ id: workflow.id, folder }).catch(err => setRunError(getErrorMessage(err))); }}
+            folders={folders}
+            onCreateFolder={async (name) => { await workflowService.createFolder(name); loadFolders(); }}
+            onRenameFolder={async (name, newName) => {
+              await workflowService.renameFolder(name, newName);
+              loadFolders();
+              await fetchWorkflows();
+            }}
+            onDeleteFolder={(name) => {
+              if (!window.confirm(`Delete the folder “${name}”? Its workflows stay, just outside a folder.`)) return;
+              workflowService.deleteFolder(name)
+                .then(() => { loadFolders(); return fetchWorkflows(); })
+                .catch(err => setRunError(getErrorMessage(err)));
+            }}
             onCreate={() => openEditor(null)}
             onEdit={openEditor}
             onDelete={handleDelete}
@@ -360,8 +403,8 @@ export function WorkflowPage() {
                       onClick={() => workflowService.getVersions(currentWorkflow.id).then(setVersions).catch(err => setRunError(getErrorMessage(err)))}>
                       <History className="w-4 h-4" />
                     </Button>
-                    <Button variant="ghost" size="sm" className="w-8 px-0" aria-label="Export" title="Export as JSON" onClick={() => void handleExport(currentWorkflow)}>
-                      <Download className="w-4 h-4" />
+                    <Button variant="ghost" size="sm" className="w-8 px-0" aria-label="Share" title="Share: download a file anyone can import (secrets left out)" onClick={() => void handleExport(currentWorkflow)}>
+                      <Share2 className="w-4 h-4" />
                     </Button>
                   </div>
                 </div>

@@ -15,4 +15,5 @@ from app.api.routes.rag import router as rag_router
 from app.api.routes.marketplace import router as marketplace_router
 from app.api.routes.integrations import router as integrations_router
 from app.api.routes.briefing import router as briefing_router
+from app.api.routes.run_once import router as run_once_router
 from app.files import router as files_router

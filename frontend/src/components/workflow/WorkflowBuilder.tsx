@@ -345,6 +345,24 @@ function StepList({ steps, onChange, before, listKey, ctx, scopes = [] }: {
   );
 }
 
+/** A new step for what was picked: a free id (action_1, delay_2…), its usual name and starting settings. */
+export function nodeFor(picked: PickedAction, taken: Set<string>): WorkflowNode {
+  let n = 1;
+  while (taken.has(`${picked.type}_${n}`)) n++;
+  const defaults: Record<string, Record<string, unknown>> = {
+    action: picked.type === 'action' ? { tool: picked.tool, parameters: {} } : {},
+    condition: { operator: 'not_empty' },
+    delay: { seconds: 5 },
+    http: { method: 'GET', url: '' },
+    code: { code: 'return input.steps;' },
+    loop: { items: '', body: EMPTY_GRAPH },
+    parallel: { branches: [EMPTY_GRAPH, EMPTY_GRAPH] },
+    workflow: { workflow_id: null, inputs: {} },
+  };
+  const label = picked.type === 'action' ? picked.name : BUILT_INS.find(b => b.type === picked.type)?.name ?? picked.name;
+  return { id: `${picked.type}_${n}`, type: picked.type, name: label, config: { ...(defaults[picked.type] ?? {}) } };
+}
+
 export function WorkflowBuilder({ workflow, draft, onSave, onCancel, tools, llmProviders }: WorkflowBuilderProps) {
   const [name, setName] = useState(workflow?.name ?? draft?.name ?? '');
   const [description, setDescription] = useState(workflow?.description ?? draft?.description ?? '');
@@ -394,24 +412,7 @@ export function WorkflowBuilder({ workflow, draft, onSave, onCancel, tools, llmP
 
   const toolMap = useMemo(() => new Map(tools.map(t => [t.tool_name, t])), [tools]);
 
-  const newNode = (picked: PickedAction): WorkflowNode => {
-    const ids = collectIds(graph.nodes);
-    let n = 1;
-    while (ids.has(`${picked.type}_${n}`)) n++;
-    const id = `${picked.type}_${n}`;
-    const defaults: Record<string, Record<string, unknown>> = {
-      action: picked.type === 'action' ? { tool: picked.tool, parameters: {} } : {},
-      condition: { operator: 'not_empty' },
-      delay: { seconds: 5 },
-      http: { method: 'GET', url: '' },
-      code: { code: 'return input.steps;' },
-      loop: { items: '', body: EMPTY_GRAPH },
-      parallel: { branches: [EMPTY_GRAPH, EMPTY_GRAPH] },
-      workflow: { workflow_id: null, inputs: {} },
-    };
-    const label = picked.type === 'action' ? picked.name : BUILT_INS.find(b => b.type === picked.type)?.name ?? picked.name;
-    return { id, type: picked.type, name: label, config: { ...(defaults[picked.type] ?? {}) } };
-  };
+  const newNode = (picked: PickedAction): WorkflowNode => nodeFor(picked, collectIds(graph.nodes));
 
   const testStep = (node: WorkflowNode) => {
     setTests(prev => ({ ...prev, [node.id]: 'running' }));

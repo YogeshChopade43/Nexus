@@ -262,6 +262,27 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE memories ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'
     """,
+    # 16: workflows grouped in folders ('' = no folder)
+    """
+    ALTER TABLE workflows ADD COLUMN folder TEXT NOT NULL DEFAULT ''
+    """,
+    # 17: run-once workflows: one run, on a date ('at') or if you go quiet ('quiet')
+    """
+    CREATE TABLE run_once (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        workflow_id INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        at TEXT,
+        days INTEGER,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        armed_at TEXT,
+        warned_at TEXT,
+        reminded_at TEXT,
+        ran_at TEXT,
+        missed_at TEXT,
+        created_at TEXT NOT NULL
+    )
+    """,
 ]
 
 

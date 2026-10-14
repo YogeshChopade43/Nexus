@@ -23,6 +23,7 @@ const ICONS = { Page: LayoutGrid, Chat: MessageSquare, Workflow: GitBranch, App:
 const PAGES: (Result & { keywords: string })[] = [
   { kind: 'Page', label: 'Agent chat', to: '/', keywords: 'chat agent ask conversation' },
   { kind: 'Page', label: 'Workflows', to: '/workflows', keywords: 'workflows automations schedules reminders' },
+  { kind: 'Page', label: 'Run once', to: '/run-once', keywords: 'run once one time date schedule if i go quiet inactivity safety family birthday' },
   { kind: 'Page', label: 'Marketplace', to: '/servers', keywords: 'marketplace apps mcp servers connect install' },
   { kind: 'Page', label: 'Knowledge', to: '/knowledge', keywords: 'knowledge documents files library memory' },
   { kind: 'Page', label: 'Dashboard', to: '/dashboard', keywords: 'dashboard usage cost tokens' },

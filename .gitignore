@@ -49,3 +49,8 @@ backend/data/models/
 *.jsonl
 *.xlsx
 *.csv
+
+# Private runtime data: the built-in browser's profiles (cookies, sign-ins)
+# and files attached in chat or made by the agent
+backend/data/browser/
+backend/data/files/

@@ -21,6 +21,7 @@ from app.api.routes import (
     marketplace_router,
     integrations_router,
     briefing_router,
+    run_once_router,
     files_router,
     mcp_router,
     health_router,
@@ -31,7 +32,7 @@ from app.api.routes import (
     workflows_router,
 )
 from app.api.middleware import setup_middleware, validate_cors_origins
-from app.integrations import integration_manager
+from app.integrations import browser, integration_manager
 from app.mcp import mcp_manager, server_availability
 from app.tools import get_tool_registry
 from app.workflows.engine import mark_interrupted_runs, resume_interrupted_runs
@@ -83,6 +84,7 @@ async def lifespan(app: FastAPI):
         await rag_worker.stop()
         await registry.stop_sync()
         stop_scheduler()
+        await browser.close_all()  # an open browser would keep Nexus from exiting
         await mcp_manager.stop_all()
 
 
@@ -133,6 +135,7 @@ def create_app() -> FastAPI:
         marketplace_router,
         integrations_router,
         briefing_router,
+        run_once_router,
         files_router,
         mcp_router,
         agent_router,

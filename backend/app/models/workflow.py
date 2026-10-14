@@ -22,6 +22,7 @@ class WorkflowCreate(BaseModel):
     trigger: str = "manual"
     trigger_config: Optional[Dict[str, Any]] = None
     llm_provider_id: Optional[int] = None
+    folder: str = Field(default="", max_length=60)  # to group workflows; '' = none
 
 
 class WorkflowUpdate(BaseModel):
@@ -35,6 +36,7 @@ class WorkflowUpdate(BaseModel):
     trigger: Optional[str] = None
     trigger_config: Optional[Dict[str, Any]] = None
     llm_provider_id: Optional[int] = None
+    folder: Optional[str] = Field(default=None, max_length=60)
 
 
 class WorkflowResponse(BaseModel):
@@ -56,6 +58,7 @@ class WorkflowResponse(BaseModel):
     trigger: str = "manual"
     trigger_config: Dict[str, Any] = Field(default_factory=dict)
     llm_provider_id: Optional[int] = None
+    folder: str = ""
     last_run: Optional[str] = None
     warnings: List[str] = Field(default_factory=list)
     trigger_status: Optional[Dict[str, Any]] = None
@@ -64,6 +67,7 @@ class WorkflowResponse(BaseModel):
 
 class WorkflowRunRequest(BaseModel):
     input_data: Dict[str, Any] = Field(default_factory=dict)
+    confirm: bool = False  # running the digital will by hand needs it
     input: Optional[Dict[str, Any]] = None
 
     def model_post_init(self, __context: Any) -> None:

@@ -321,3 +321,77 @@ def test_templates_use_the_new_abilities_and_say_what_they_need(client):
         created = client.post(f"/api/workflows/templates/{template_id}")
         assert created.status_code == 200 and not created.json().get("warnings"), (template_id, created.json().get("warnings"))
         client.delete(f"/api/workflows/{created.json()['id']}")
+
+
+# ---- sharing: safe to send, works on someone else's Nexus --------------------------------------
+
+GITHUB_URL = "https://api.githubcopilot.com/mcp/"
+
+
+def test_shared_workflows_leave_secrets_out_and_say_which_apps_they_need(client):
+    from app.integrations import store as integrations
+    from app.mcp import store as servers
+
+    mail = integrations.create_integration("mail", "Work email", {"address": "me@example.org"})
+    github = servers.create_server({"name": "GitHub Share", "transport": "http", "url": GITHUB_URL})
+    nodes = [
+        {"id": "t", "type": "trigger", "config": {"trigger_type": "manual"}},
+        {"id": "send", "type": "action", "name": "Send", "config": {"tool": f"{mail['slug']}__send_email", "parameters": {"to": "boss@example.org"}}},
+        {"id": "issue", "type": "action", "name": "Issue", "config": {"tool": f"{github.slug}__create_issue", "parameters": {"title": "x"}}},
+        {"id": "call", "type": "http", "name": "Call API", "config": {
+            "url": "https://api.example.org/v1?api_key=abc123&q=1", "headers": {"Authorization": "Bearer sk-secret", "Accept": "application/json"}}},
+        {"id": "think", "type": "llm", "name": "Think", "config": {"prompt": "hi", "provider_id": 7}},
+    ]
+    try:
+        wf = create(client, nodes, name="shared")
+        exported = client.get(f"/api/workflows/{wf['id']}/export").json()
+        text = json.dumps(exported)
+        assert "sk-secret" not in text and "abc123" not in text and "provider_id" not in text
+        call = next(n for n in exported["nodes"] if n["id"] == "call")["config"]
+        assert call["headers"]["Accept"] == "application/json" and "q=1" in call["url"]
+        assert any("Authorization" in c for c in exported["cleared"]) and any("api_key" in c for c in exported["cleared"])
+        assert exported["apps"] == {mail["slug"]: {"name": "Work email", "integration": "mail"},
+                                    github.slug: {"name": "GitHub Share", "url": GITHUB_URL}}
+    finally:
+        integrations.delete_integration(mail["id"])
+        servers.delete_server(github.id)
+
+    # Someone else's Nexus: their email is named differently, and they have no GitHub.
+    theirs = integrations.create_integration("mail", "Personal mail", {"address": "them@example.org"})
+    try:
+        imported = client.post("/api/workflows/import", json=exported).json()
+        tools = {n["id"]: n["config"].get("tool") for n in imported["nodes"]}
+        assert tools["send"] == f"{theirs['slug']}__send_email"  # matched to their own email app
+        warnings = " ".join(imported["warnings"])
+        assert "Connect GitHub Share" in warnings and "Authorization" in warnings
+        assert imported["isActive"] is False  # nothing runs until they've looked at it
+    finally:
+        integrations.delete_integration(theirs["id"])
+
+
+def test_workflows_can_be_grouped_in_folders(client):
+    wf = create(client, [compose("x", "hi")], name="filed", folder="  Health  ")
+    assert wf["folder"] == "Health"  # trimmed
+    moved = client.patch(f"/api/workflows/{wf['id']}", json={"folder": "Work reports"}).json()
+    assert moved["folder"] == "Work reports" and moved["version"] == wf["version"]  # moving isn't an edit
+    listed = {w["id"]: w["folder"] for w in client.get("/api/workflows/").json()}
+    assert listed[wf["id"]] == "Work reports"
+    assert client.patch(f"/api/workflows/{wf['id']}", json={"folder": ""}).json()["folder"] == ""  # out of the folder
+    assert client.patch(f"/api/workflows/{wf['id']}", json={"folder": "x" * 61}).status_code == 422
+
+
+def test_folders_can_be_made_empty_renamed_and_deleted(client):
+    names = lambda: {f["name"]: f["count"] for f in client.get("/api/workflows/folders").json()}  # noqa: E731
+    assert client.post("/api/workflows/folders", json={"name": "  Finance "}).status_code == 200
+    assert names()["Finance"] == 0  # exists before anything is in it
+    assert client.post("/api/workflows/folders", json={"name": "finance"}).status_code == 409  # same name
+
+    wf = create(client, [compose("x", "hi")], name="bills", folder="Finance")
+    assert names()["Finance"] == 1
+    renamed = client.patch("/api/workflows/folders/Finance", json={"name": "Money"})
+    assert renamed.status_code == 200 and "Finance" not in names() and names()["Money"] == 1
+    assert client.get(f"/api/workflows/{wf['id']}").json()["folder"] == "Money"  # its workflows moved along
+
+    assert client.delete("/api/workflows/folders/Money").status_code == 204
+    assert "Money" not in names()
+    assert client.get(f"/api/workflows/{wf['id']}").json()["folder"] == ""  # the workflow stays, outside a folder

@@ -10,6 +10,7 @@ import {
   RefreshCw,
   AlertCircle,
   Inbox,
+  Repeat1,
   GitBranch,
   Plug,
   Settings,
@@ -38,6 +39,10 @@ const typeLabels: Record<ActivityType, string> = {
   server_error: 'Server not connected',
   document_failed: 'Document failed',
   reminder: 'Reminder',
+  will_armed: 'Run once set',
+  will_ran: 'Ran once',
+  run_once_set: 'Run once set',
+  run_once_ran: 'Ran once',
   settings_changed: 'Settings changed',
 };
 
@@ -56,6 +61,10 @@ const typeIcons: Record<ActivityType, typeof ActivityIcon> = {
   server_error: AlertCircle,
   document_failed: AlertCircle,
   reminder: AlarmClock,
+  will_armed: Repeat1,
+  will_ran: Repeat1,
+  run_once_set: Repeat1,
+  run_once_ran: Repeat1,
   settings_changed: Settings,
 };
 
@@ -70,7 +79,11 @@ function activityGroup(type: ActivityType): ActivityGroup {
     type === 'workflow_completed' ||
     type === 'workflow_failed' ||
     type === 'workflow_resumed' ||
-    type === 'reminder'
+    type === 'reminder' ||
+    type === 'will_armed' ||
+    type === 'will_ran' ||
+    type === 'run_once_set' ||
+    type === 'run_once_ran'
   ) return 'workflows';
   return 'settings';
 }

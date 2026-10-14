@@ -1,7 +1,7 @@
 import { NavLink, useLocation } from 'react-router-dom';
 import { cn } from '../../lib/utils';
 import {
-  Activity, BarChart3, BookOpen, Bot, GitBranch, PanelLeftClose, PanelLeftOpen, Settings, Store, Waypoints,
+  Activity, BarChart3, BookOpen, Bot, GitBranch, PanelLeftClose, Repeat1, PanelLeftOpen, Settings, Store, Waypoints,
 } from 'lucide-react';
 import type { ComponentType } from 'react';
 import { SidebarItem } from './SidebarItem';
@@ -21,6 +21,7 @@ export const NAV_SECTIONS: Array<{ title: string; items: NavItem[] }> = [
       { path: '/workflows', label: 'Workflows', icon: GitBranch },
       { path: '/knowledge', label: 'Knowledge', icon: BookOpen },
       { path: '/servers', label: 'Marketplace', icon: Store },
+      { path: '/run-once', label: 'Run once', icon: Repeat1 },
     ],
   },
   {

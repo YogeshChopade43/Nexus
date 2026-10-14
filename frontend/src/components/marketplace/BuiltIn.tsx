@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { CalendarDays, CheckCircle2, Copy, Globe, Hash, LogIn, Mail, MessagesSquare, Plug, Rss, Send, Trash2, XCircle, type LucideIcon } from 'lucide-react';
+import { CalendarDays, CheckCircle2, Copy, Globe, Hash, LogIn, Mail, MessagesSquare, MousePointerClick, Plug, Rss, Send, Trash2, XCircle, type LucideIcon } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
 import { Modal } from '../ui/Modal';
@@ -7,7 +7,7 @@ import { fieldClass } from '../ui/Input';
 import { cn, getErrorMessage } from '../../lib/utils';
 import { integrationService, type Integration, type IntegrationField, type IntegrationKind } from '../../services/integrations';
 
-const ICONS: Record<string, LucideIcon> = { Mail, CalendarDays, Rss, Send, Globe, Hash, MessagesSquare };
+const ICONS: Record<string, LucideIcon> = { Mail, CalendarDays, Rss, Send, Globe, Hash, MessagesSquare, MousePointerClick };
 const CHAT_APPS = ['telegram', 'slack', 'discord'];
 
 export function KindIcon({ icon, className }: { icon: string; className?: string }) {
@@ -197,7 +197,18 @@ export function IntegrationModal({ kind, integrations, onClose, onChanged }: {
                         <Trash2 className="h-4 w-4" />
                       </Button>
                     </div>
-                    {integration.status === 'needs_auth' && integration.kind === 'telegram' && (
+                    {integration.status === 'needs_auth' && CHAT_APPS.includes(integration.kind) && Boolean(integration.settings.pairing_locked) && (
+                      <div role="alert" className="flex flex-wrap items-center gap-2 rounded-md bg-nexus-warning/10 p-2 text-xs text-nexus-text">
+                        <span className="flex-1">
+                          Linking is locked: too many wrong codes were sent to the bot, so someone may be guessing. Get a new
+                          code, then send it to the bot from your own chat.
+                        </span>
+                        <Button size="sm" onClick={() => {
+                          integrationService.newPairingCode(integration.id).then(onChanged, err => setError(getErrorMessage(err)));
+                        }}>Get a new code</Button>
+                      </div>
+                    )}
+                    {integration.status === 'needs_auth' && integration.kind === 'telegram' && !integration.settings.pairing_locked && (
                       <div className="flex flex-wrap items-center gap-2 rounded-md bg-nexus-accent/5 p-2 text-xs text-nexus-text-secondary">
                         <a href={`https://t.me/${String(integration.settings.bot_username)}?start=${String(integration.settings.pairing_code)}`}
                           target="_blank" rel="noreferrer"
@@ -207,13 +218,13 @@ export function IntegrationModal({ kind, integrations, onClose, onChanged }: {
                         <span>and tap <b>Start</b>, or send it <code className="font-mono text-nexus-text">/start {String(integration.settings.pairing_code)}</code></span>
                       </div>
                     )}
-                    {integration.status === 'needs_auth' && integration.kind === 'slack' && (
+                    {integration.status === 'needs_auth' && integration.kind === 'slack' && !integration.settings.pairing_locked && (
                       <p className="rounded-md bg-nexus-accent/5 p-2 text-xs text-nexus-text-secondary">
                         In Slack, open <b>@{String(integration.settings.bot_username)}</b> (Apps in the sidebar) and send it{' '}
                         <code className="font-mono text-nexus-text">{String(integration.settings.pairing_code)}</code>
                       </p>
                     )}
-                    {integration.status === 'needs_auth' && integration.kind === 'discord' && (
+                    {integration.status === 'needs_auth' && integration.kind === 'discord' && !integration.settings.pairing_locked && (
                       <div className="flex flex-wrap items-center gap-2 rounded-md bg-nexus-accent/5 p-2 text-xs text-nexus-text-secondary">
                         <a href={String(integration.settings.invite_url)} target="_blank" rel="noreferrer"
                           className="inline-flex h-7 items-center gap-1.5 rounded-md bg-nexus-accent px-2.5 font-medium text-nexus-on-accent hover:no-underline">

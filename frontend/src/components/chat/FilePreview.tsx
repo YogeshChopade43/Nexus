@@ -9,7 +9,7 @@ import type { FileRef } from '../../types/chat';
 type Preview =
   | { kind: 'table'; sheets: { name: string; rows: (string | number)[][]; truncated: boolean }[] }
   | { kind: 'markdown' | 'text' | 'html'; text: string; truncated: boolean }
-  | { kind: 'pdf' | 'none' };
+  | { kind: 'pdf' | 'image' | 'none' };
 
 export const fileSize = (bytes: number) =>
   (bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / 1048576).toFixed(1)} MB`);
@@ -108,6 +108,8 @@ export function FilePreview({ file, onClose }: { file: FileRef; onClose: () => v
   } else if (preview.kind === 'html') {
     // sandbox="" : no scripts, no forms, no access to Nexus; the page only gets drawn.
     body = <iframe title={file.name} sandbox="" srcDoc={preview.text} className="h-[65vh] w-full rounded-lg border border-nexus-border bg-white" />;
+  } else if (preview.kind === 'image') {
+    body = <img src={`${href(file)}?inline=1`} alt={file.name} className="mx-auto max-h-[70vh] max-w-full rounded-lg border border-nexus-border" />;
   } else if (preview.kind === 'pdf') {
     body = <iframe title={file.name} src={`${href(file)}?inline=1`} className="h-[70vh] w-full rounded-lg border border-nexus-border" />;
   } else {

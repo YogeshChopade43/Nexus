@@ -4,13 +4,13 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from app.integrations import calendar_feed, discord, google, mail, rss, slack, store, telegram, web
+from app.integrations import browser, calendar_feed, discord, google, mail, rss, slack, store, telegram, web
 from app.integrations.base import IntegrationTool, Kind
 from app.tools import get_tool_registry
 
 logger = logging.getLogger(__name__)
 
-KINDS: dict[str, Kind] = {kind.id: kind for kind in (google.KIND, telegram.KIND, slack.KIND, discord.KIND, web.KIND,
+KINDS: dict[str, Kind] = {kind.id: kind for kind in (google.KIND, telegram.KIND, slack.KIND, discord.KIND, web.KIND, browser.KIND,
                                                      mail.KIND, calendar_feed.KIND, rss.KIND)}
 
 

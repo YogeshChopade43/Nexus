@@ -51,3 +51,12 @@ test('PDFs open in the browser viewer; web pages run sandboxed', async () => {
   expect(page.getAttribute('sandbox')).toBe('');  // no scripts, no access to Nexus
   expect(page.getAttribute('srcdoc')).toContain('<b>hi</b>');
 });
+
+test('pictures (like a browser screenshot) show as an image', async () => {
+  serve({ kind: 'image' });
+  render(<Message message={{ ...base, content: 'Done.', events: [
+    { type: 'tool_executed', tool_name: 'browser__screenshot', data: { data: { file: ref('screenshot-shop.png') } } }] }} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Preview screenshot-shop.png' }));
+  const image = await within(await screen.findByRole('dialog')).findByRole('img', { name: 'screenshot-shop.png' });
+  expect(image.getAttribute('src')).toContain('/api/files/0123456789abcdef/screenshot-shop.png?inline=1');
+});

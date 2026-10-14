@@ -6,6 +6,7 @@ import { Sidebar } from './Sidebar';
 import { Header } from './Header';
 import { CommandPalette } from './CommandPalette';
 import { useChatContext } from '../../hooks/useChatContext';
+import { RunOnceBanner } from '../runonce/RunOnce';
 
 const COLLAPSED_KEY = 'nexus-sidebar-collapsed';
 
@@ -39,6 +40,7 @@ export function Layout({ children }: { children?: ReactNode }) {
       <Sidebar collapsed={collapsed} mobileOpen={mobileOpen} onToggleCollapse={toggleCollapsed} />
       <div className={cn('flex min-h-screen flex-col transition-[margin] duration-200 ease-out', collapsed ? 'lg:ml-14' : 'lg:ml-60')}>
         <Header onMenuClick={() => setMobileOpen(open => !open)} />
+        <RunOnceBanner />
         <main className="flex-1" role="main">
           <div className="mx-auto w-full max-w-[1400px] p-4 lg:px-8 lg:py-6">
             {children}

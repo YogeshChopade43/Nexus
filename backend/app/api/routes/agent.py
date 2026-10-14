@@ -420,13 +420,22 @@ def _files(req: AgentRunRequest) -> list[dict[str, Any]]:
     return [f.model_dump() for f in req.files]
 
 
+def _you_are_here() -> None:
+    """A message, approval or answer from you (chat or bots, never a workflow): a check-in for run-once's "if I go quiet"."""
+    from app.api.routes import run_once
+
+    run_once.check_in()
+
+
 def _ensure_session(req: AgentRunRequest) -> Optional[str]:
+    _you_are_here()
     # Approvals need somewhere to keep the paused run, so every run belongs to a session.
     return req.session_id or create_session(title=(req.message or req.task)[:80])
 
 
 def _pending(session_id: str, question: bool = False) -> tuple[dict[str, Any], _Prepared]:
     """The paused run: one waiting for answers (``question``) or for an approval."""
+    _you_are_here()
     session = get_session(session_id)
     pending = (session or {}).get("metadata", {}).get("pending")
     if not pending or bool(pending.get("question")) != question:

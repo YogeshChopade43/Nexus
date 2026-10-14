@@ -234,6 +234,11 @@ def start_scheduler() -> None:
     # Shortly after startup: runs that were due while Nexus was off.
     _scheduler.add_job(catch_up_missed_runs, id="catch-up", replace_existing=True,
                        next_run_time=datetime.now(timezone.utc) + timedelta(seconds=20))
+    from app.api.routes import run_once
+
+    # Run-once workflows: every minute (on a date: on time; if you go quiet: warns first, never runs straight away).
+    _scheduler.add_job(run_once.tick, IntervalTrigger(minutes=1), id="run-once", replace_existing=True,
+                       next_run_time=datetime.now(timezone.utc) + timedelta(seconds=30))
     # Daily cleanup of old runs and activity, also once shortly after startup.
     _scheduler.add_job(_cleanup, IntervalTrigger(hours=24), id="cleanup", replace_existing=True,
                        next_run_time=datetime.now(timezone.utc) + timedelta(minutes=1))

@@ -56,3 +56,14 @@ describe('replies', () => {
     expect(onEdit).toHaveBeenCalledWith('new question');
   });
 });
+
+test('pictures in a reply show as images that open the original', () => {
+  render(<Message message={{ id: 'm', role: 'assistant', timestamp: new Date().toISOString(),
+    content: '![Iron Man in red](https://img.example.org/iron-man.jpg) ![bad](javascript:alert(1))' }} />);
+  const image = screen.getByRole('img', { name: 'Iron Man in red' });
+  expect(image).toHaveAttribute('src', 'https://img.example.org/iron-man.jpg');
+  expect(image).toHaveAttribute('loading', 'lazy');
+  expect(image).toHaveAttribute('referrerpolicy', 'no-referrer');  // sites that refuse hotlinking still show it
+  expect(image.closest('a')).toHaveAttribute('href', 'https://img.example.org/iron-man.jpg');
+  expect(screen.queryByRole('img', { name: 'bad' })).toBeNull();
+});

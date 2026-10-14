@@ -210,3 +210,39 @@ test('built-in integrations: connect an RSS feed from the Marketplace, then ment
   const listed = await (await page.request.get('http://localhost:8765/api/integrations')).json();
   await page.request.delete(`http://localhost:8765/api/integrations/${listed[0].id}`);
 });
+
+test('run once: make one that waits for you to go quiet, check in, edit its steps, and Run asks first', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('link', { name: 'Run once' }).click();
+  await page.getByRole('button', { name: 'New run-once' }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('Name').fill('Share documents with family');
+  await dialog.getByText('If I go quiet').click();
+  await dialog.getByRole('button', { name: '30 days' }).click();
+  await expect(dialog.getByRole('button', { name: 'Create' })).toBeDisabled();  // needs something to do
+  await dialog.getByRole('button', { name: 'Add a step' }).click();
+  await page.getByRole('dialog', { name: 'Choose an operation' }).getByRole('button', { name: /Compose/ }).click();
+  await expect(dialog.getByText('Compose').first()).toBeVisible();  // the step, ready to fill in
+  await dialog.getByRole('button', { name: 'Create' }).click();
+  await expect(page.getByRole('heading', { name: 'Share documents with family' })).toBeVisible();
+  await expect(page.getByRole('progressbar', { name: /of 30 quiet days/ })).toBeVisible();
+
+  const before = (await (await page.request.get('http://localhost:8765/api/run-once')).json()).lastCheckIn ?? '';
+  await page.waitForTimeout(1100);  // so the new check-in time differs
+  await page.getByRole('button', { name: "I'm here" }).click();
+  await expect(page.getByRole('status')).toContainText('Checked in');
+  const after = (await (await page.request.get('http://localhost:8765/api/run-once')).json()).lastCheckIn;
+  expect(after > before, `before=${before} after=${after}`).toBeTruthy();  // the server really recorded it
+
+  await page.getByRole('link', { name: /Edit steps/ }).click();
+  await expect(page.getByRole('dialog', { name: 'Edit Workflow' })).toContainText("When it's time");  // only the trigger: you add the steps
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog')).toBeHidden();
+  let asked = '';
+  page.once('dialog', d => { asked = d.message(); void d.dismiss(); });
+  await page.getByRole('button', { name: 'Run Share documents with family' }).click();
+  await expect.poll(() => asked).toContain('run once');  // and dismissing it ran nothing
+
+  const listed = await (await page.request.get('http://localhost:8765/api/run-once')).json();
+  for (const item of listed.items) await page.request.delete(`http://localhost:8765/api/run-once/${item.id}`);
+});

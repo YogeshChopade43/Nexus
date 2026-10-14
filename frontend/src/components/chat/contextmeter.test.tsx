@@ -45,3 +45,26 @@ test('an unknown window still shows the tokens used', async () => {
   fireEvent.click(await screen.findByRole('button', { name: `Context window: ≈${new Intl.NumberFormat().format(5_000)} tokens used` }));
   expect(screen.getByRole('dialog')).toHaveTextContent(/window size isn.t known/i);
 });
+
+const priced = (cost: number | null, input = 1_000, output = 100): ChatMessage => ({
+  id: 'p', role: 'assistant', content: 'hi', timestamp: '2026-10-12T00:00:00Z',
+  usage: { input_tokens: input, output_tokens: output, estimated: false, cost, context_tokens: input },
+});
+
+test('shows what the whole chat has cost so far, beside the meter and in the details', async () => {
+  serve(128_000);
+  const you: ChatMessage = { id: 'u', role: 'user', content: 'hi', timestamp: '2026-10-12T00:00:00Z' };
+  render(<ContextMeter messages={[you, priced(0.012), you, priced(0.03, 2_000, 400)]} providerId={null} />);
+  expect(await screen.findByTitle('This chat has cost $0.04 so far')).toHaveTextContent('$0.04');
+  fireEvent.click(screen.getByRole('button', { name: /Context window/ }));
+  const n = new Intl.NumberFormat();
+  expect(screen.getByRole('dialog')).toHaveTextContent(`This chat: ${n.format(3_500)} tokens · $0.04`);
+});
+
+test('without prices the chat total shows tokens and says where to set prices', async () => {
+  serve(128_000);
+  render(<ContextMeter messages={[priced(null), priced(0.0004)]} providerId={null} />);
+  expect(await screen.findByTitle('This chat has cost <$0.01 so far')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: /Context window/ }));
+  expect(screen.getByRole('dialog')).toHaveTextContent(/1 reply has no price/i);
+});

@@ -29,6 +29,8 @@ interface ActionPickerProps {
   onClose: () => void;
   /** Only list app tools (used by the polling trigger). */
   toolsOnly?: boolean;
+  /** Built-in steps to leave out (ones that need the canvas, like branches, in a simple list of steps). */
+  without?: WorkflowNodeType[];
 }
 
 interface ToolEntry {
@@ -62,14 +64,14 @@ function ToolButton({ entry, onPick }: { entry: ToolEntry; onPick: () => void })
   );
 }
 
-export function ActionPicker({ servers, onPick, onClose, toolsOnly }: ActionPickerProps) {
+export function ActionPicker({ servers, onPick, onClose, toolsOnly, without = [] }: ActionPickerProps) {
   const [query, setQuery] = useState('');
   // With several apps, start collapsed so the list is a short menu of apps.
   const [open, setOpen] = useState<Set<number>>(() => new Set(servers.length <= 1 ? servers.map(s => s.id) : []));
   const q = query.trim().toLowerCase();
   const matches = (...texts: string[]) => !q || texts.some(t => t.toLowerCase().includes(q));
 
-  const builtIns = toolsOnly ? [] : BUILT_INS.filter(b => matches(b.name, b.description));
+  const builtIns = toolsOnly ? [] : BUILT_INS.filter(b => !without.includes(b.type) && matches(b.name, b.description));
   const toggle = (id: number) => setOpen(prev => {
     const next = new Set(prev);
     if (next.has(id)) next.delete(id); else next.add(id);

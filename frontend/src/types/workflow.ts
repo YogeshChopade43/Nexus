@@ -123,6 +123,8 @@ export interface Workflow {
   id: WorkflowId;
   name: string;
   description: string;
+  /** Folder it's grouped in ('' or missing = none). */
+  folder?: string;
   steps: Record<string, unknown>[];
   nodes: WorkflowNode[];
   edges: WorkflowEdge[];
@@ -254,8 +256,11 @@ export interface WorkflowUpdateRequest {
   enabled?: boolean;
   trigger?: string;
   llm_provider_id?: number | null;
+  folder?: string;
 }
 
 export interface WorkflowRunRequest {
   input_data?: Record<string, unknown>;
+  /** Running the digital will by hand: yes, really send everything. */
+  confirm?: boolean;
 }

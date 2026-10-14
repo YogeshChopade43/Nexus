@@ -20,6 +20,7 @@ MAX_CONTENT = 2_000_000  # characters the model may put into one file
 MAX_UPLOAD = 20_000_000  # bytes of one file attached in the chat
 PREVIEW_ROWS = 200  # rows of each sheet a preview shows
 PREVIEW_CHARS = 200_000  # characters of a text preview
+IMAGES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}  # shown in the page (not .svg: it can carry scripts)
 
 router = APIRouter(prefix="/api/files", tags=["files"])
 
@@ -270,6 +271,8 @@ def preview(path: Path) -> dict[str, Any]:
         return _text(_docx_markdown(path), "markdown")
     if suffix == ".pdf":
         return {"kind": "pdf"}
+    if suffix in IMAGES:
+        return {"kind": "image"}
     try:
         text = path.read_bytes().decode("utf-8-sig")
     except UnicodeDecodeError:
@@ -321,6 +324,6 @@ def file_preview(file_id: str, name: str) -> dict[str, Any]:
 @router.get("/{file_id}/{name}")
 def download(file_id: str, name: str, inline: bool = False) -> FileResponse:
     path = _file_or_404(file_id, name)
-    # Only PDFs open in the page (the browser's own viewer); anything else, HTML above all, is a download.
-    shown = inline and path.suffix.lower() == ".pdf"
+    # Only PDFs and pictures open in the page; anything else, HTML above all, is a download.
+    shown = inline and path.suffix.lower() in IMAGES | {".pdf"}
     return FileResponse(path, filename=path.name, content_disposition_type="inline" if shown else "attachment")
