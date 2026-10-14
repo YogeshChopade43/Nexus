@@ -13,8 +13,11 @@ register_builtin_tools(get_tool_registry())
 def server_states() -> dict[str, dict[str, bool]]:
     from app.integrations import integration_manager  # built-in integrations sit beside MCP servers
 
-    return {**mcp_manager.server_states(), **integration_manager.states(),
-            BUILTIN_APP: {"enabled": True, "connected": True, "available": True}}
+    from app.auth.owner import owns_app
+
+    states = {**mcp_manager.server_states(), **integration_manager.states(),
+              BUILTIN_APP: {"enabled": True, "connected": True, "available": True}}
+    return {app_id: state for app_id, state in states.items() if owns_app(app_id)}  # yours and the built-in ones
 
 
 def server_availability() -> dict[str, bool]:

@@ -16,7 +16,7 @@ from zoneinfo import available_timezones
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from app.api.middleware import require_local
-from app.core.database import get_connection, log_activity
+from app.core.database import get_connection, is_postgres, log_activity
 
 logger = logging.getLogger(__name__)
 
@@ -87,8 +87,19 @@ def _read_api_settings(conn) -> dict[str, Any]:
     return {**DEFAULT_API_SETTINGS, **stored}
 
 
+def _settings_owner(conn) -> Optional[int]:
+    """Whose settings: the signed-in person (or whom a job acts for); with no one, the admin's (instance-wide jobs)."""
+    from app.auth.context import current_user
+
+    user = current_user.get()
+    if user is not None:
+        return int(user["id"])
+    admin = conn.execute("SELECT id FROM users WHERE is_admin = 1 ORDER BY id LIMIT 1").fetchone()
+    return admin["id"] if admin else None
+
+
 def _get_user_settings_row(conn) -> Optional[dict[str, Any]]:
-    row = conn.execute("SELECT * FROM user_settings ORDER BY id LIMIT 1").fetchone()
+    row = conn.execute("SELECT * FROM user_settings WHERE user_id = ? ORDER BY id LIMIT 1", (_settings_owner(conn),)).fetchone()
     if row is None:
         return None
     return dict(row)
@@ -146,8 +157,8 @@ def update_user_settings(settings: dict[str, Any]) -> dict[str, Any]:
         row = _get_user_settings_row(conn)
         if row is None:
             conn.execute(
-                "INSERT INTO user_settings (settings, updated_at) VALUES (?, ?)",
-                (json.dumps(settings), _utc_now()),
+                "INSERT INTO user_settings (settings, updated_at, user_id) VALUES (?, ?, ?)",
+                (json.dumps(settings), _utc_now(), _settings_owner(conn)),
             )
             conn.commit()
             return settings
@@ -175,6 +186,9 @@ def get_api_settings() -> dict[str, Any]:
 
 @router.patch("/api")
 def update_api_settings(settings: dict[str, Any]) -> dict[str, Any]:
+    from app.auth.context import require_admin
+
+    require_admin("Changing instance settings")
     conn = _conn()
     try:
         row = conn.execute("SELECT * FROM api_settings ORDER BY id LIMIT 1").fetchone()
@@ -224,7 +238,13 @@ def load_user_settings() -> dict[str, Any]:
 @router.get("/backup")
 def download_backup(request: Request) -> Response:
     """A zip with a consistent copy of the database and the key that decrypts its secrets."""
+    from app.auth.context import require_admin
+
+    require_admin("The whole-database backup (everyone's data and keys)")
     require_local(request, "Backups contain every stored secret, so they can only be downloaded on the machine running Nexus.")
+    if is_postgres():
+        raise HTTPException(status_code=400, detail="This Nexus keeps its data in PostgreSQL: back it up with pg_dump "
+                                                    "(and keep NEXUS_SECRET_KEY with it).")
     with tempfile.TemporaryDirectory() as folder:
         copy_path = Path(folder) / "nexus.db"
         source, target = _conn(), sqlite3.connect(copy_path)

@@ -10,15 +10,21 @@ from typing import Any, Iterator, Optional
 from app.core.database import get_connection
 from app.rag.access import readable_collections
 from app.rag.answer import extract_citations, sources_block
-from app.rag.models import DEFAULT_WORKSPACE, Hit, RetrievalResult
+from app.rag.models import Hit, RetrievalResult
 from app.rag.retrieve import retrieve
 from app.tools.base import Tool
+
+
+def _own_workspace() -> int:
+    from app.rag.store import user_workspace
+
+    return user_workspace()
 
 
 @dataclass
 class Turn:
     """Sources gathered while answering one message, numbered 1.. in the order first seen."""
-    workspace_id: int = DEFAULT_WORKSPACE
+    workspace_id: int = field(default_factory=lambda: _own_workspace())
     session_id: Optional[str] = None
     sources: list[Hit] = field(default_factory=list)
 

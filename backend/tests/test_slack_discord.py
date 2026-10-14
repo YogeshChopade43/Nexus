@@ -171,3 +171,51 @@ def test_discord_setup_link_chat_and_approve(client, llm):
 
 def test_long_discord_replies_are_split():
     assert all(len(p) <= 2000 for p in discord.split("x " * 3000))
+
+
+def test_guessing_the_pairing_code_locks_linking_until_a_new_code(client, llm):
+    """A 6-digit code with unlimited tries can be guessed; after 10 wrong ones, linking stops until you ask for a new code."""
+    item, bot = connect(client, "discord", {"bot_token": "dtoken"})
+    code = item["settings"]["pairing_code"]
+    for n in range(10):
+        client.portal.call(bot.handle_dispatch, *dm("C9", f"link {(int(code) + 1 + n) % 1_000_000:06d}"))
+    client.portal.call(bot.handle_dispatch, *dm("C9", f"link {code}"))  # even the right one, now
+    assert store.get_integration(item["id"])["config"].get("chat_id") is None
+    assert "locked" in discord_posts()[-1]["content"].lower()
+    assert client.get("/api/integrations").json()[-1]["settings"]["pairing_locked"] is True
+
+    fresh = client.post(f"/api/integrations/{item['id']}/pairing-code")
+    assert fresh.status_code == 200, fresh.text
+    settings = fresh.json()["settings"]
+    assert settings["pairing_code"] != code and not settings.get("pairing_locked")
+    bot = integration_manager.runner(item["id"])
+    client.portal.call(bot.handle_dispatch, *dm("C1", settings["pairing_code"]))
+    assert store.get_integration(item["id"])["config"]["chat_id"] == "C1"
+    client.delete(f"/api/integrations/{item['id']}")
+
+
+def test_bots_act_for_whoever_connected_them_and_reminders_stay_theirs(client, llm):
+    """Ana's bot works as Ana (her chats), and her reminders reach her chat app, never Bo's."""
+    from app.auth.owner import as_user
+    from app.integrations.telegram import notify_all
+
+    ana_item, ana_bot = connect(client, "discord", {"bot_token": "dtoken"})
+    client.portal.call(ana_bot.handle_dispatch, *dm("A1", ana_item["settings"]["pairing_code"]))
+    with TestClient(app, user="bo@example.com") as bo:
+        bo_item = bo.post("/api/integrations", json={"kind": "discord", "name": "Bo's Discord", "config": {"bot_token": "dtoken"}}).json()
+        bo_bot = integration_manager.runner(bo_item["id"])
+        client.portal.call(bo_bot.handle_dispatch, *dm("B1", bo_item["settings"]["pairing_code"]))
+
+        # Ana's linked chat is a chat of Ana's (Bo can't see it).
+        ana_chat = store.get_integration(ana_item["id"])["config"]["session_id"]
+        assert bo.get(f"/api/agent/sessions/{ana_chat}").status_code == 404
+        assert client.get(f"/api/agent/sessions/{ana_chat}").status_code == 200
+
+        CALLS.clear()
+        ana_id = client.get("/api/auth/me").json()["id"]
+        with as_user(ana_id):
+            client.portal.call(notify_all, "Ana's pills", "")
+        sent_to = {c["method"] for c in CALLS if c["method"].startswith("POST /channels/")}
+        assert sent_to == {"POST /channels/A1/messages"}  # not B1
+        bo.delete(f"/api/integrations/{bo_item['id']}")
+    client.delete(f"/api/integrations/{ana_item['id']}")

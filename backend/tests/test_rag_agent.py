@@ -48,15 +48,16 @@ def tool_calls(llm):
 
 def test_tool_offered_only_with_readable_documents(client, llm):
     conn = get_connection()
-    has_docs = conn.execute("SELECT COUNT(*) FROM documents WHERE status = 'ready'").fetchone()[0]
+    has_docs = conn.execute("SELECT COUNT(*) FROM documents WHERE status = 'ready' AND workspace_id = ?",
+                            (store.user_workspace(),)).fetchone()[0]  # your own documents only
     conn.close()
     sid = session(client)
     client.post("/api/agent/run", json={"message": "hello", "session_id": sid})
     offered = any("nexus__search_documents" in c["tools"] for c in tool_calls(llm))
     assert offered == bool(has_docs)
 
-    lib = store.create_collection(1, "Agent policies")
-    ready(ingest.submit(1, lib["id"], "shipping.md", b"# Shipping\n\nShipping to Pune takes 5 business days."))
+    lib = store.create_collection(store.user_workspace(), "Agent policies")
+    ready(ingest.submit(store.user_workspace(), lib["id"], "shipping.md", b"# Shipping\n\nShipping to Pune takes 5 business days."))
     llm.calls.clear()
     client.post("/api/agent/run", json={"message": "hello again", "session_id": sid})
     first = tool_calls(llm)[0]
@@ -76,8 +77,8 @@ def test_tool_returns_numbered_sources_and_citations(client, llm):
 
 
 def test_automatic_retrieval_with_attached_library(client, llm):
-    lib = store.create_collection(1, "Auto library")
-    ready(ingest.submit(1, lib["id"], "returns.md", b"# Returns\n\nRefunds are accepted within 30 days."))
+    lib = store.create_collection(store.user_workspace(), "Auto library")
+    ready(ingest.submit(store.user_workspace(), lib["id"], "returns.md", b"# Returns\n\nRefunds are accepted within 30 days."))
     llm.script = lambda m, t: {"content": "You have 30 days [1].", "tool_calls": []}
     sid = session(client)
     r = client.post("/api/agent/run", json={"message": "what is the refund window?", "session_id": sid,
@@ -91,8 +92,8 @@ def test_automatic_retrieval_with_attached_library(client, llm):
 
 def test_chat_attachment_scope(client, llm):
     chat_x, chat_y = session(client), session(client)
-    collection = store.chat_collection(1, chat_x)
-    ready(ingest.submit(1, collection["id"], "private.md", b"# Private\n\nThe locker code is otter."))
+    collection = store.chat_collection(store.user_workspace(), chat_x)
+    ready(ingest.submit(store.user_workspace(), collection["id"], "private.md", b"# Private\n\nThe locker code is otter."))
     llm.script = lambda m, t: (
         {"content": m[-1]["content"][:300], "tool_calls": []} if m[-1]["role"] == "tool"
         else ("nexus__search_documents", {"query": "locker code otter"}))
@@ -103,12 +104,13 @@ def test_chat_attachment_scope(client, llm):
 
 def test_delete_conversation_deletes_chat_collection(client):
     sid = session(client)
-    collection = store.chat_collection(1, sid)
-    doc = ready(ingest.submit(1, collection["id"], "temp.md", b"# T\n\ntemporary"))
+    collection = store.chat_collection(store.user_workspace(), sid)
+    doc = ready(ingest.submit(store.user_workspace(), collection["id"], "temp.md", b"# T\n\ntemporary"))
     assert client.delete(f"/api/agent/sessions/{sid}").status_code == 200
     assert store.get_collection(collection["id"]) is None and store.get_document(doc["id"]) is None
 
 
+@pytest.mark.sqlite_only
 def test_legacy_import(client):
     text = ("Jane Doe, AI Engineer. " * 80).strip()
     conn = get_connection()

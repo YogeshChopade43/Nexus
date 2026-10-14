@@ -11,7 +11,8 @@ import logging
 import uuid
 from typing import Any, Optional
 
-from app.core.database import get_connection
+from app.auth.owner import owner_id
+from app.core.database import get_connection, is_postgres
 
 logger = logging.getLogger(__name__)
 
@@ -41,10 +42,10 @@ def create_session(
     try:
         conn.execute(
             """
-            INSERT OR IGNORE INTO agent_sessions (session_id, title, messages, metadata, created_at, updated_at)
-            VALUES (?, ?, '[]', ?, ?, ?)
+            INSERT OR IGNORE INTO agent_sessions (session_id, title, messages, metadata, created_at, updated_at, user_id)
+            VALUES (?, ?, '[]', ?, ?, ?, ?)
             """,
-            (session_id, title or "", json.dumps(metadata or {}), _now(), _now()),
+            (session_id, title or "", json.dumps(metadata or {}), _now(), _now(), owner_id()),
         )
         conn.commit()
     finally:
@@ -56,7 +57,7 @@ def get_session(session_id: str) -> Optional[dict[str, Any]]:
     conn = get_connection()
     try:
         row = conn.execute(
-            "SELECT * FROM agent_sessions WHERE session_id = ?", (session_id,)
+            "SELECT * FROM agent_sessions WHERE session_id = ? AND user_id = ?", (session_id, owner_id())
         ).fetchone()
         if row is None:
             return None
@@ -73,6 +74,13 @@ def get_session(session_id: str) -> Optional[dict[str, Any]]:
         conn.close()
 
 
+def _pinned() -> str:
+    """SQL: whether a conversation is pinned (its metadata JSON's "pinned")."""
+    if is_postgres():
+        return "COALESCE((metadata::jsonb->>'pinned')::boolean, false)"
+    return "COALESCE(json_extract(metadata, '$.pinned'), 0)"
+
+
 def list_sessions(limit: int = 50, query: str = "") -> list[dict[str, Any]]:
     """Session summaries (no message bodies) for the conversation list; ``query`` matches title or messages."""
     conn = get_connection()
@@ -80,15 +88,17 @@ def list_sessions(limit: int = 50, query: str = "") -> list[dict[str, Any]]:
         if query:
             # Escape LIKE wildcards; search decoded message text (the column is JSON with \u escapes).
             pattern = "%" + query.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%"
+            messages = ("jsonb_array_elements(agent_sessions.messages::jsonb) m WHERE m->>'content'" if is_postgres() else
+                        "json_each(agent_sessions.messages) WHERE json_extract(value, '$.content')")
             rows = conn.execute(
-                "SELECT * FROM agent_sessions WHERE title LIKE :p ESCAPE '!' OR EXISTS ("
-                "  SELECT 1 FROM json_each(agent_sessions.messages) WHERE json_extract(value, '$.content') LIKE :p ESCAPE '!'"
-                ") ORDER BY COALESCE(json_extract(metadata, '$.pinned'), 0) DESC, updated_at DESC LIMIT :limit",
-                {"p": pattern, "limit": limit},
+                "SELECT * FROM agent_sessions WHERE user_id = :owner AND (title LIKE :p ESCAPE '!' OR EXISTS ("
+                f"  SELECT 1 FROM {messages} LIKE :p ESCAPE '!'"
+                f")) ORDER BY {_pinned()} DESC, updated_at DESC LIMIT :limit",
+                {"p": pattern, "limit": limit, "owner": owner_id()},
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM agent_sessions ORDER BY COALESCE(json_extract(metadata, '$.pinned'), 0) DESC, updated_at DESC LIMIT ?", (limit,)
+                f"SELECT * FROM agent_sessions WHERE user_id = ? ORDER BY {_pinned()} DESC, updated_at DESC LIMIT ?", (owner_id(), limit)
             ).fetchall()
         return [
             {
@@ -116,8 +126,8 @@ def update_session(session_id: str, title: Optional[str] = None, pinned: Optiona
         metadata["pinned"] = pinned
     conn = get_connection()
     try:
-        conn.execute("UPDATE agent_sessions SET title = ?, metadata = ? WHERE session_id = ?",
-                     (title if title is not None else session["title"], json.dumps(metadata, default=str), session_id))
+        conn.execute("UPDATE agent_sessions SET title = ?, metadata = ? WHERE session_id = ? AND user_id = ?",
+                     (title if title is not None else session["title"], json.dumps(metadata, default=str), session_id, owner_id()))
         conn.commit()
     finally:
         conn.close()
@@ -130,10 +140,10 @@ def delete_session(session_id: str) -> bool:
 
     conn = get_connection()
     try:
-        cursor = conn.execute("DELETE FROM agent_sessions WHERE session_id = ?", (session_id,))
+        cursor = conn.execute("DELETE FROM agent_sessions WHERE session_id = ? AND user_id = ?", (session_id, owner_id()))
         conn.commit()
         deleted = cursor.rowcount > 0
-        chat = conn.execute("SELECT id FROM collections WHERE kind = 'chat' AND session_id = ?", (session_id,)).fetchone()
+        chat = conn.execute("SELECT id FROM collections WHERE kind = 'chat' AND session_id = ?", (session_id,)).fetchone() if deleted else None
     finally:
         conn.close()
     if chat:
@@ -147,8 +157,8 @@ def append_message(session_id: str, message: dict[str, Any]) -> dict[str, Any]:
     if session is None:
         create_session(session_id=session_id)
         session = get_session(session_id)
-        if session is None:
-            raise RuntimeError(f"Failed to create session {session_id}")
+        if session is None:  # that id is someone else's conversation
+            raise LookupError("Conversation not found")
 
     messages = list(session.get("messages", []))
     messages.append(message)
@@ -164,9 +174,9 @@ def append_message(session_id: str, message: dict[str, Any]) -> dict[str, Any]:
             """
             UPDATE agent_sessions
             SET messages = ?, title = ?, updated_at = ?
-            WHERE session_id = ?
+            WHERE session_id = ? AND user_id = ?
             """,
-            (json.dumps(messages, default=str), title, _now(), session_id),
+            (json.dumps(messages, default=str), title, _now(), session_id, owner_id()),
         )
         conn.commit()
     finally:
@@ -182,8 +192,8 @@ def replace_messages(session_id: str, messages: list[dict[str, Any]]) -> None:
     conn = get_connection()
     try:
         conn.execute(
-            "UPDATE agent_sessions SET messages = ?, updated_at = ? WHERE session_id = ?",
-            (json.dumps(messages, default=str), _now(), session_id),
+            "UPDATE agent_sessions SET messages = ?, updated_at = ? WHERE session_id = ? AND user_id = ?",
+            (json.dumps(messages, default=str), _now(), session_id, owner_id()),
         )
         conn.commit()
     finally:
@@ -194,8 +204,8 @@ def set_metadata(session_id: str, metadata: dict[str, Any]) -> None:
     conn = get_connection()
     try:
         conn.execute(
-            "UPDATE agent_sessions SET metadata = ?, updated_at = ? WHERE session_id = ?",
-            (json.dumps(metadata, default=str), _now(), session_id),
+            "UPDATE agent_sessions SET metadata = ?, updated_at = ? WHERE session_id = ? AND user_id = ?",
+            (json.dumps(metadata, default=str), _now(), session_id, owner_id()),
         )
         conn.commit()
     finally:

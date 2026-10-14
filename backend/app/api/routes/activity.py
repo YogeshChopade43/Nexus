@@ -6,6 +6,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
+from app.auth.owner import owner_id
 from app.core.database import get_connection
 
 router = APIRouter(prefix="/api/activity", tags=["activity"])
@@ -39,6 +40,14 @@ def _row_to_activity(row: Any) -> dict[str, Any]:
     }
 
 
+def _mine() -> tuple[str, tuple[Any, ...]]:
+    """Your activity; the admin also sees events that don't belong to anyone yet (system events)."""
+    from app.auth.context import require_user
+
+    user = require_user()
+    return "(user_id = ? OR (user_id IS NULL AND ? = 1))", (int(user["id"]), int(bool(user.get("is_admin"))))
+
+
 @router.get("/")
 def list_activity(
     types: Optional[str] = Query(None, description="Comma-separated activity types"),
@@ -49,8 +58,9 @@ def list_activity(
 ) -> dict[str, Any]:
     conn = get_connection()
     try:
-        conditions: list[str] = []
-        params: list[Any] = []
+        mine, mine_params = _mine()
+        conditions: list[str] = [mine]
+        params: list[Any] = list(mine_params)
 
         if types:
             type_list = [t.strip() for t in types.split(",") if t.strip()]
@@ -98,7 +108,7 @@ def create_activity(activity: dict[str, Any]) -> dict[str, Any]:
         title = activity.get("title", "")
         description = activity.get("description", "")
         metadata = activity.get("metadata", {})
-        user_id = activity.get("userId", activity.get("user_id", "user"))
+        user_id = owner_id()  # always yours, whatever the request says
         timestamp = activity.get("timestamp") or _utc_now()
 
         cursor = conn.execute(
@@ -132,7 +142,7 @@ def create_activities(activities: list[dict[str, Any]]) -> dict[str, Any]:
             title = activity.get("title", "")
             description = activity.get("description", "")
             metadata = activity.get("metadata", {})
-            user_id = activity.get("userId", activity.get("user_id", "user"))
+            user_id = owner_id()
             timestamp = activity.get("timestamp") or _utc_now()
             conn.execute(
                 """
@@ -153,8 +163,8 @@ def get_recent(limit: int = Query(20, ge=1, le=100)) -> dict[str, Any]:
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT * FROM activity_log ORDER BY timestamp DESC, id DESC LIMIT ?",
-            (limit,),
+            f"SELECT * FROM activity_log WHERE {_mine()[0]} ORDER BY timestamp DESC, id DESC LIMIT ?",
+            (*_mine()[1], limit),
         ).fetchall()
         return {
             "activities": [_row_to_activity(row) for row in rows],
@@ -169,7 +179,7 @@ def get_recent(limit: int = Query(20, ge=1, le=100)) -> dict[str, Any]:
 def delete_activity(activity_id: int) -> dict[str, Any]:
     conn = get_connection()
     try:
-        cursor = conn.execute("DELETE FROM activity_log WHERE id = ?", (activity_id,))
+        cursor = conn.execute("DELETE FROM activity_log WHERE id = ? AND user_id = ?", (activity_id, owner_id()))
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="Activity not found")
         conn.commit()
@@ -182,7 +192,7 @@ def delete_activity(activity_id: int) -> dict[str, Any]:
 def clear_activities() -> dict[str, Any]:
     conn = get_connection()
     try:
-        cursor = conn.execute("DELETE FROM activity_log")
+        cursor = conn.execute("DELETE FROM activity_log WHERE user_id = ?", (owner_id(),))
         conn.commit()
         return {"deleted": cursor.rowcount}
     finally:
@@ -203,10 +213,12 @@ def get_notifications(limit: int = Query(20, ge=1, le=100)) -> dict[str, Any]:
     conn = get_connection()
     try:
         rows = conn.execute(
-            f"SELECT * FROM activity_log WHERE type IN ({marks}) ORDER BY id DESC LIMIT ?", (*types, limit)
+            f"SELECT * FROM activity_log WHERE type IN ({marks}) AND {_mine()[0]} ORDER BY id DESC LIMIT ?",
+            (*types, *_mine()[1], limit)
         ).fetchall()
         unread = conn.execute(
-            f"SELECT COUNT(*) FROM activity_log WHERE type IN ({marks}) AND timestamp > ?", (*types, read_at)
+            f"SELECT COUNT(*) FROM activity_log WHERE type IN ({marks}) AND timestamp > ? AND {_mine()[0]}",
+            (*types, read_at, *_mine()[1])
         ).fetchone()[0]
     finally:
         conn.close()

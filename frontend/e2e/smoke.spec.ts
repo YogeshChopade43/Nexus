@@ -246,3 +246,59 @@ test('run once: make one that waits for you to go quiet, check in, edit its step
   const listed = await (await page.request.get('http://localhost:8765/api/run-once')).json();
   for (const item of listed.items) await page.request.delete(`http://localhost:8765/api/run-once/${item.id}`);
 });
+
+test('accounts: sign out, the sign-in page appears, sign back in', async ({ page }) => {
+  // A session of its own, so signing out here doesn't end the one the other tests share.
+  await page.context().clearCookies();
+  const login = await page.request.post('http://localhost:8765/api/auth/login',
+    { data: { email: 'owner@example.com', password: 'e2e password 123' }, headers: { origin: 'http://localhost:5765' } });
+  expect(login.ok()).toBeTruthy();
+  await page.goto('/');
+  await page.getByRole('button', { name: /account menu/ }).click();
+  await page.getByRole('menuitem', { name: 'Sign out' }).click();
+  await expect(page.getByRole('heading', { name: 'Sign in to Nexus' })).toBeVisible();
+  await expect(page.getByRole('link', { name: /Create an account/ })).toHaveCount(0);  // sign-ups closed after the owner
+  await page.getByLabel('Email').fill('owner@example.com');
+  await page.getByLabel('Password').fill('wrong password here');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('alert')).toContainText('Wrong email or password');
+  await page.getByLabel('Password').fill('e2e password 123');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('heading', { name: 'How can I help?' })).toBeVisible();
+});
+
+test('admin: the publishing checklist, the accounts and the rules for everyone', async ({ page }) => {
+  await page.goto('/settings?tab=admin');
+  await expect(page.getByRole('heading', { name: 'Ready to publish?' })).toBeVisible();
+  await expect(page.getByText('HTTPS', { exact: true })).toBeVisible();  // plain http here: needs attention
+  await expect(page.getByRole('cell', { name: /owner@example.com/ })).toBeVisible();
+  await page.getByLabel('Storage per person (MB)').fill('2048');
+  await page.getByRole('button', { name: 'Save' }).click();
+  await expect(page.getByRole('status')).toHaveText('Saved.');
+});
+
+// Last: resetting a password signs out every session, the shared one too.
+test('accounts: forgot password, the emailed link, a new password', async ({ page }) => {
+  const fs = await import('node:fs');
+  const nodePath = await import('node:path');
+  const { MAILBOX } = await import('../playwright.config');
+  await page.context().clearCookies();
+  await page.goto('/login');
+  await page.getByRole('link', { name: 'Forgot password?' }).click();
+  await page.getByLabel('Email').fill('owner@example.com');
+  await page.getByRole('button', { name: 'Send reset link' }).click();
+  await expect(page.getByRole('status')).toContainText("If there's an account for owner@example.com");
+
+  await expect.poll(() => {  // the email arrives as a file in the mailbox folder
+    const files = fs.existsSync(MAILBOX) ? fs.readdirSync(MAILBOX).filter(f => f.endsWith('.eml')).sort() : [];
+    return files.length ? fs.readFileSync(nodePath.join(MAILBOX, files[files.length - 1]), 'utf8') : '';
+  }).toContain('/reset-password?token=');
+  const files = fs.readdirSync(MAILBOX).filter(f => f.endsWith('.eml')).sort();
+  const text = fs.readFileSync(nodePath.join(MAILBOX, files[files.length - 1]), 'utf8');
+  const link = text.match(/http:\/\/localhost:5765\/reset-password\?token=[\w-]+/)![0];
+
+  await page.goto(link);
+  await page.getByLabel('New password').fill('a brand new e2e password');
+  await page.getByRole('button', { name: 'Set new password' }).click();
+  await expect(page.getByRole('heading', { name: 'How can I help?' })).toBeVisible();  // signed in with the new one
+});

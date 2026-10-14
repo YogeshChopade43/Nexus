@@ -1,1 +1,2 @@
 pytest==9.1.1
+pgserver==0.1.4  # NEXUS_TEST_POSTGRES=1: the suite on a private throwaway PostgreSQL

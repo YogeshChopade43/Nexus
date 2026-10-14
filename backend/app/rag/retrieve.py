@@ -13,7 +13,7 @@ from app.core.database import get_connection
 from app.rag import store
 from app.rag.access import readable_collections
 from app.rag.embeddings import get_embedder
-from app.rag.models import DEFAULT_WORKSPACE, Hit, RetrievalResult
+from app.rag.models import Hit, RetrievalResult
 from app.rag.rerank import get_reranker
 from app.rag.tokens import count_tokens
 
@@ -86,7 +86,7 @@ def _log(workspace_id: int, session_id: Optional[str], query: str, collection_id
         conn.close()
 
 
-def retrieve(query: str, *, workspace_id: int = DEFAULT_WORKSPACE, session_id: Optional[str] = None,
+def retrieve(query: str, *, workspace_id: Optional[int] = None, session_id: Optional[str] = None,
              collection_ids: Optional[list[int]] = None, budget_tokens: int = 3000, keep: int = 8) -> RetrievalResult:
     timings: dict[str, float] = {}
     clock = time.perf_counter()
@@ -97,6 +97,10 @@ def retrieve(query: str, *, workspace_id: int = DEFAULT_WORKSPACE, session_id: O
         timings[stage] = round((now - clock) * 1000, 1)
         clock = now
 
+    if workspace_id is None:  # the signed-in person's own
+        from app.rag.store import user_workspace
+
+        workspace_id = user_workspace()
     scope = readable_collections(workspace_id, session_id, collection_ids)
     query = (query or "").strip()
     if not query or not scope:

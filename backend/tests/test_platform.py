@@ -47,5 +47,6 @@ def test_serves_built_frontend(tmp_path, monkeypatch):
     assert web.get("/workflows").text == "<html>nexus</html>"  # client-side route
     assert web.get("/assets/app.js").text == "console.log(1)"
     assert "nope" not in web.get("/..%2Fsecret.txt").text
-    assert web.get("/api/does-not-exist").status_code == 404
+    missing = web.get("/api/does-not-exist")
+    assert missing.status_code in (401, 404) and "<html>" not in missing.text  # never the app's page for an API path
     assert web.get("/health").json()["status"] == "ok"

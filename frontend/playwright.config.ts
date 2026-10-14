@@ -6,7 +6,11 @@ import path from 'node:path';
 const API_PORT = 8765;
 const WEB_PORT = 5765;
 export const LLM_PORT = 8766;
-const database = path.join(os.tmpdir(), `nexus-e2e-${Date.now()}`, 'nexus.db');
+// Decided once and handed to the test workers (which load this file again) through the environment.
+const run = (process.env.NEXUS_E2E_RUN ??= path.join(os.tmpdir(), `nexus-e2e-${Date.now()}`));
+const database = path.join(run, 'nexus.db');
+// Emails (password reset) land here as files; the tests read the links from them.
+export const MAILBOX = path.join(run, 'mail');
 const python = process.env.NEXUS_PYTHON
   ?? (process.platform === 'win32' ? '../backend/.venv311/Scripts/python.exe' : '../backend/.venv311/bin/python');
 
@@ -21,6 +25,11 @@ export default defineConfig({
     channel: process.env.CI ? undefined : 'chrome',
     trace: 'retain-on-failure',
   },
+  projects: [
+    // Signs up the owner on the fresh install and saves the session; the tests start signed in.
+    { name: 'setup', testMatch: /auth\.setup\.ts/ },
+    { name: 'app', dependencies: ['setup'], use: { storageState: 'e2e/.auth/owner.json' } },
+  ],
   webServer: [
     {
       // Stands in for an AI provider, so chat can be tested without a real model.
@@ -40,6 +49,8 @@ export default defineConfig({
         NEXUS_RAG_RERANKER: 'fake',
         NEXUS_REGISTRY_URL: `http://127.0.0.1:${LLM_PORT}`, // fake MCP Registry for the Marketplace
         CORS_ORIGINS: `http://localhost:${WEB_PORT}`,
+        NEXUS_MAIL_DIR: MAILBOX,
+        NEXUS_APP_URL: `http://localhost:${WEB_PORT}`,
       },
       reuseExistingServer: false,
       timeout: 60_000,

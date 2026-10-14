@@ -144,6 +144,23 @@ async def update(integration_id: int, body: IntegrationPatch) -> dict[str, Any]:
     return _view(integration, message)
 
 
+@router.post("/{integration_id}/pairing-code")
+def new_pairing_code(integration_id: int) -> dict[str, Any]:
+    """A fresh code for linking a chat app (and unlocking linking after too many wrong codes)."""
+    import secrets as random
+
+    current = store.get_integration(integration_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail="Integration not found")
+    if current["kind"] not in CHANNELS or current["config"].get("chat_id"):
+        raise HTTPException(status_code=409, detail="Only a chat app that isn't linked yet takes a pairing code")
+    config = {**current["config"], "pairing_code": f"{random.randbelow(1_000_000):06d}", "pairing_failures": 0,
+              "pairing_locked": False}
+    integration = store.update_integration(integration_id, config=config)
+    integration_manager.apply(integration)
+    return _view(integration)
+
+
 @router.post("/{integration_id}/test")
 async def test(integration_id: int) -> dict[str, Any]:
     integration = store.get_integration(integration_id)

@@ -86,7 +86,9 @@ class IntegrationTool(Tool):
 async def fetch_text(url: str) -> str:
     """Download a feed with a size cap; errors say what went wrong."""
     try:
-        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+        from app.integrations.web import guard_request
+
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True, event_hooks={"request": [guard_request]}) as client:
             async with client.stream("GET", url, headers={"User-Agent": "Nexus/0.2"}) as response:
                 if response.status_code >= 400:
                     raise ValueError(f"Couldn't download {url}: {response.status_code}")

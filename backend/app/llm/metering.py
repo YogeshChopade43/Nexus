@@ -50,6 +50,13 @@ def usage_total(records: list[dict[str, Any]]) -> dict[str, Any]:
     return total
 
 
+def _acting_user_id() -> Optional[int]:
+    """Whose tokens these are: the signed-in person, or whom a background job acts for."""
+    from app.core.database import _acting_user_id as acting
+
+    return acting()
+
+
 def _today() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
@@ -58,7 +65,8 @@ def tokens_used_today() -> int:
     conn = get_connection()
     try:
         row = conn.execute(
-            "SELECT COALESCE(SUM(input_tokens + output_tokens), 0) FROM llm_usage WHERE timestamp >= ?", (_today(),)
+            "SELECT COALESCE(SUM(input_tokens + output_tokens), 0) FROM llm_usage WHERE timestamp >= ? AND user_id IS ?",
+            (_today(), _acting_user_id())
         ).fetchone()
         return int(row[0])
     finally:
@@ -92,10 +100,10 @@ def record_usage(provider_id: Optional[int], provider: str, model: str, input_to
     conn = get_connection()
     try:
         conn.execute(
-            "INSERT INTO llm_usage (timestamp, provider_id, provider, model, input_tokens, output_tokens, estimated) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO llm_usage (timestamp, provider_id, provider, model, input_tokens, output_tokens, estimated, user_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"), provider_id, provider, model or "",
-             int(input_tokens or 0), int(output_tokens or 0), int(estimated)),
+             int(input_tokens or 0), int(output_tokens or 0), int(estimated), _acting_user_id()),
         )
         conn.commit()
     finally:

@@ -80,11 +80,11 @@ def test_old_files_are_cleaned_up_with_the_retention_setting(client):
     import time
 
     old, new = create(filename="old.txt", content="x"), create(filename="new.txt", content="y")
-    folder = files._root() / old["id"]
+    folder = files._own_root() / old["id"]
     stamp = time.time() - 40 * 86400
     os.utime(folder, (stamp, stamp))
     assert files.purge_older_than(30) >= 1
-    assert not folder.exists() and (files._root() / new["id"]).exists()
+    assert not folder.exists() and (files._own_root() / new["id"]).exists()
     assert files.purge_older_than(0) == 0  # 0 keeps everything
 
 

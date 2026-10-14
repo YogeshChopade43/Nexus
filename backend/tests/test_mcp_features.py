@@ -8,7 +8,7 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from app.core.database import MIGRATIONS, get_db_path, run_migrations
+from app.core.database import MIGRATIONS, get_connection, get_db_path, run_migrations
 from app.main import app
 from app.mcp import mcp_manager, store
 from app.mcp.manager import _Runtime, _TokenStorage
@@ -108,7 +108,9 @@ def test_oauth_redirect_and_callback(client):
 
     asyncio.run(flow())
     assert store.get_server(config.id).signed_in
-    raw = sqlite3.connect(get_db_path()).execute("SELECT oauth FROM mcp_servers WHERE id = ?", (config.id,)).fetchone()[0]
+    conn = get_connection()
+    raw = conn.execute("SELECT oauth FROM mcp_servers WHERE id = ?", (config.id,)).fetchone()[0]
+    conn.close()
     assert raw.startswith("fernet:") and "tok" not in raw  # tokens are encrypted at rest
 
     page = client.get("/api/mcp/servers/oauth/callback", params={"code": "c", "state": "nobody-waiting"})
@@ -117,13 +119,15 @@ def test_oauth_redirect_and_callback(client):
     client.delete(f"/api/mcp/servers/{config.id}")
 
 
+@pytest.mark.sqlite_only
 def test_migrations_run_once(client):
     conn = sqlite3.connect(get_db_path())
     conn.row_factory = sqlite3.Row
     try:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-        assert not {"users", "user_sessions", "audit_log"} & tables  # login was removed (migration 4)
+        assert not {"user_sessions", "audit_log"} & tables  # the old login was removed (migration 4)
+        assert {"users", "sessions"} <= tables  # accounts came back properly (migration 18)
         run_migrations(conn)  # already applied: nothing to do, no "duplicate column" error
         assert conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
     finally:

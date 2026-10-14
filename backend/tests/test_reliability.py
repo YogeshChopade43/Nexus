@@ -91,6 +91,7 @@ def test_purge_old_records(client):
     assert client.get("/api/settings/user").json()["retentionDays"] == 30
 
 
+@pytest.mark.sqlite_only
 def test_backup_contains_database_and_key(client):
     r = client.get("/api/settings/backup")
     assert r.status_code == 200 and r.headers["content-type"] == "application/zip"

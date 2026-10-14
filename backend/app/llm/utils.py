@@ -4,6 +4,7 @@ from typing import Any, Optional
 
 from fastapi import HTTPException
 
+from app.auth.owner import owner_id
 from app.core.database import get_connection
 from app.llm.metering import Metered
 from app.llm.registry import LLMRegistry
@@ -18,21 +19,21 @@ def get_active_llm_provider(provider_id: Optional[int] = None, provider_name: Op
     try:
         if provider_id is not None:
             row = conn.execute(
-                "SELECT * FROM llm_providers WHERE id = ? AND enabled = 1",
-                (provider_id,),
+                "SELECT * FROM llm_providers WHERE id = ? AND enabled = 1 AND user_id = ?",
+                (provider_id, owner_id()),
             ).fetchone()
             if row is None:
                 raise HTTPException(status_code=400, detail="LLM provider not found or disabled")
         elif provider_name:
             row = conn.execute(
-                "SELECT * FROM llm_providers WHERE provider_name = ? AND enabled = 1 ORDER BY id DESC LIMIT 1",
-                (provider_name,),
+                "SELECT * FROM llm_providers WHERE provider_name = ? AND enabled = 1 AND user_id = ? ORDER BY id DESC LIMIT 1",
+                (provider_name, owner_id()),
             ).fetchone()
             if row is None:
                 raise HTTPException(status_code=400, detail=f"No enabled LLM provider named '{provider_name}'")
         else:
             row = conn.execute(
-                "SELECT * FROM llm_providers WHERE enabled = 1 ORDER BY id DESC LIMIT 1"
+                "SELECT * FROM llm_providers WHERE enabled = 1 AND user_id = ? ORDER BY id DESC LIMIT 1", (owner_id(),)
             ).fetchone()
             if row is None:
                 raise HTTPException(status_code=400, detail="No LLM provider configured")
@@ -55,7 +56,7 @@ def get_default_llm_provider():
     conn = get_connection()
     try:
         row = conn.execute(
-            "SELECT id FROM llm_providers WHERE enabled = 1 ORDER BY id DESC LIMIT 1"
+            "SELECT id FROM llm_providers WHERE enabled = 1 AND user_id = ? ORDER BY id DESC LIMIT 1", (owner_id(),)
         ).fetchone()
     finally:
         conn.close()

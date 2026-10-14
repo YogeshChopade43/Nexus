@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, Optional
 
@@ -20,6 +21,7 @@ from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, Field, model_validator
 
 from app.api.routes.settings import load_user_settings, update_user_settings
+from app.auth.owner import as_user, owner_id
 from app.core.database import get_connection, log_activity
 from app.workflows.scheduler import CATCH_UP_WINDOW, _run_scheduled
 
@@ -78,11 +80,14 @@ def last_check_in() -> Optional[datetime]:
     return _time((load_user_settings().get("checkIn") or {}).get("last"))
 
 
-def _rows() -> list[dict[str, Any]]:
+def _rows(all_owners: bool = False) -> list[dict[str, Any]]:
+    """The signed-in person's run-onces (``all_owners``: everyone's, for the background check only)."""
     conn = get_connection()
     try:
-        rows = conn.execute("SELECT r.*, w.name AS name, w.nodes AS nodes, w.edges AS edges FROM run_once r "
-                            "JOIN workflows w ON w.id = r.workflow_id ORDER BY r.id").fetchall()
+        mine = "" if all_owners else "WHERE w.user_id = ? "
+        rows = conn.execute("SELECT r.*, w.name AS name, w.nodes AS nodes, w.edges AS edges, w.user_id AS owner "
+                            "FROM run_once r JOIN workflows w ON w.id = r.workflow_id " + mine + "ORDER BY r.id",
+                            () if all_owners else (owner_id(),)).fetchall()
         # A workflow deleted in the Workflows page takes its run-once with it.
         conn.execute("DELETE FROM run_once WHERE workflow_id NOT IN (SELECT id FROM workflows)")
         conn.commit()
@@ -294,15 +299,15 @@ async def _check(row: dict[str, Any], now: datetime) -> Optional[str]:
 async def tick(now: Optional[datetime] = None) -> list[str]:
     """Check every run-once (each minute). Returns what happened: "ran", "warned", "missed"."""
     now = now or _now()
-    _adopt_legacy_will()
-    _drop_placeholders()
     done = []
-    for row in _rows():
+    for row in _rows(all_owners=True):
         if not row["enabled"] or row["ran_at"] or row["missed_at"]:
             continue
         try:
-            if outcome := await _check(row, now):
-                done.append(outcome)
+            with as_user(int(row["owner"])) if row["owner"] is not None else nullcontext():
+                _drop_placeholders()
+                if outcome := await _check(row, now):
+                    done.append(outcome)
         except Exception:  # one broken run-once must not stop the others
             logger.exception("Run-once %s failed", row["id"])
     return done

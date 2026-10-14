@@ -10,6 +10,7 @@ from typing import Any, AsyncIterator, Optional
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
+from app.rag.store import user_workspace
 from app.agent.sessions import (
     append_message,
     create_session,
@@ -26,7 +27,6 @@ from app import knowledge
 from app.core.database import log_activity
 from app.knowledge import APP_ID as BUILTIN_APP
 from app.rag.answer import sources_block
-from app.rag.models import DEFAULT_WORKSPACE
 from app.rag.retrieve import retrieve
 from app.rag.tool import has_readable_documents, rag_turn, readable_document_names
 from app.llm.metering import usage_scope, usage_total
@@ -240,7 +240,7 @@ class _Prepared:
         if self.settings.servers is not None:  # this chat uses only the chosen servers (plus Nexus's own tools)
             allowed = set(self.settings.servers) | {BUILTIN_APP}
             self.available = [n for n in self.available if self.tools_by_name[n].app_id in allowed]
-        self.document_names = readable_document_names(DEFAULT_WORKSPACE, session_id)
+        self.document_names = readable_document_names(user_workspace(), session_id)
         # "@Notion ..." / "@resume.pdf": the user pointed at an app (only its tools, plus Nexus's own) or a document.
         lowered = self.task.lower()
         from app.integrations import store as integration_store  # built-in integrations can be @-mentioned too
@@ -375,7 +375,7 @@ def _finish(session_id: Optional[str], user_text: Optional[str], result: dict[st
 
 async def _run(prepared: _Prepared, on_event=None) -> dict[str, Any]:
     await prepared.load_history()
-    with rag_turn(DEFAULT_WORKSPACE, prepared.session_id) as turn:
+    with rag_turn(user_workspace(), prepared.session_id) as turn:
         system_extra = prepared.system_extra()
         if prepared.settings.library_id:
             # "Answer from this library": search it for every message and hand the model the sources.
@@ -393,12 +393,12 @@ async def _run(prepared: _Prepared, on_event=None) -> dict[str, Any]:
 
 
 async def _resume(prepared: _Prepared, state: dict[str, Any], approved: bool, on_event=None) -> dict[str, Any]:
-    with rag_turn(DEFAULT_WORKSPACE, prepared.session_id) as turn:
+    with rag_turn(user_workspace(), prepared.session_id) as turn:
         return _cite(await prepared.agent(on_event).resume(state, approved, prepared.llm), turn)
 
 
 async def _resume_answers(prepared: _Prepared, state: dict[str, Any], answers: dict[str, Any], on_event=None) -> dict[str, Any]:
-    with rag_turn(DEFAULT_WORKSPACE, prepared.session_id) as turn:
+    with rag_turn(user_workspace(), prepared.session_id) as turn:
         return _cite(await prepared.agent(on_event).resume_with_answers(state, answers, prepared.llm), turn)
 
 

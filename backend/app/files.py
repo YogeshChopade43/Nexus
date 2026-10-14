@@ -29,6 +29,20 @@ def _root() -> Path:
     return get_db_path().parent / "files"
 
 
+def _own_root() -> Path:
+    """The signed-in person's (or a job's owner's) files: files/<user id>/<file id>/<name>."""
+    from app.auth.owner import owner_id
+
+    return _root() / str(owner_id())
+
+
+def _is_admin() -> bool:
+    from app.auth.context import current_user
+
+    user = current_user.get()
+    return bool(user and user.get("is_admin"))
+
+
 def _safe_name(filename: str) -> str:
     name = re.sub(r"[^\w.\- ]+", "_", Path(filename.replace("\\", "/")).name).strip(" ._") or "file.txt"
     if Path(name).suffix.lower() not in FORMATS:
@@ -153,8 +167,11 @@ def render(name: str, content: str) -> bytes:
 
 
 def _store(name: str, data: bytes) -> dict[str, Any]:
+    from app.quota import check_storage
+
+    check_storage(len(data))
     file_id = secrets.token_hex(8)
-    folder = _root() / file_id
+    folder = _own_root() / file_id
     folder.mkdir(parents=True, exist_ok=True)
     (folder / name).write_bytes(data)
     return {"id": file_id, "name": name, "size": len(data), "url": f"/api/files/{file_id}/{name}"}
@@ -170,7 +187,9 @@ def create_file(filename: str, content: str) -> dict[str, Any]:
 def _path(file_id: str) -> Path:
     if not re.fullmatch(r"[0-9a-f]{16}", file_id or ""):
         raise ValueError(f"No file {file_id}")
-    folder = _root() / file_id
+    folder = _own_root() / file_id
+    if not folder.is_dir() and _is_admin():  # made before accounts: the install owner's
+        folder = _root() / file_id
     found = [p for p in folder.iterdir() if p.is_file()] if folder.is_dir() else []
     if not found:
         raise ValueError(f"No file {file_id}")
@@ -195,7 +214,10 @@ def purge_older_than(days: int) -> int:
     if days <= 0 or not _root().is_dir():
         return 0
     cutoff, removed = time.time() - days * 86400, 0
-    for folder in _root().iterdir():
+    # files/<user>/<file>/ and, from before accounts, files/<file>/
+    folders = [f for owner in _root().iterdir() if owner.is_dir() and owner.name.isdigit() for f in owner.iterdir()]
+    folders += [f for f in _root().iterdir() if f.is_dir() and not f.name.isdigit()]
+    for folder in folders:
         if folder.is_dir() and folder.stat().st_mtime < cutoff:
             shutil.rmtree(folder, ignore_errors=True)
             removed += 1

@@ -52,9 +52,23 @@ class ServerPatch(BaseModel):
     tool_policies: Optional[dict[str, Literal["allow", "ask", "block"]]] = None
 
 
+def _require_reachable(transport: str, url: str) -> None:
+    """A hosted server's address must be on the public internet, unless you're the admin (ponytail: checked when saved)."""
+    from app.integrations.web import check_destination
+
+    if transport != "stdio" and url:
+        try:
+            check_destination(url)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+
+
 def _require_local_for_stdio(request: Request, transport: str) -> None:
     if transport != "stdio":
         return
+    from app.auth.context import require_admin
+
+    require_admin("Running programs on the server (local MCP servers)")
     if not store.local_servers_allowed():
         raise HTTPException(status_code=422, detail="Nexus connects to hosted MCP servers only: add the server's URL.")
     if os.getenv("NEXUS_ALLOW_REMOTE_STDIO", "").lower() != "true":
@@ -98,6 +112,7 @@ def get_server(server_id: int) -> dict[str, Any]:
 @router.post("/")
 async def create_server(req: ServerIn, request: Request) -> dict[str, Any]:
     _require_local_for_stdio(request, req.transport)
+    _require_reachable(req.transport, req.url)
     config = store.create_server(req.model_dump())
     await mcp_manager.apply(config, config.id)
     await mcp_manager.wait_ready(config.id)
@@ -115,6 +130,7 @@ async def update_server(server_id: int, req: ServerPatch, request: Request) -> d
     # Changing what gets launched counts as configuring a command; toggling enabled does not.
     if set(changes) - {"enabled", "name", "tool_policies"}:
         _require_local_for_stdio(request, transport)
+        _require_reachable(transport, changes.get("url", current.url))
     try:
         ServerIn(**{**current.public(), "env": current.env, "headers": current.headers, **changes})
     except ValueError as exc:

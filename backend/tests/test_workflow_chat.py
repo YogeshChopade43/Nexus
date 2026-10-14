@@ -33,7 +33,12 @@ def workflow(client):
 
 
 def run(coro):
-    return asyncio.run(coro)
+    """The agent's tools run inside a signed-in chat: here, as the test account."""
+    from app.auth import store
+    from app.auth.owner import as_user
+
+    with as_user(store._row("email = ?", "tester@example.com")["id"]):
+        return asyncio.run(coro)
 
 
 def test_list_shows_each_workflow_with_its_state_and_next_run(client, workflow):

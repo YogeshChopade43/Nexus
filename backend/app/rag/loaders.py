@@ -18,8 +18,25 @@ TEXT_EXTENSIONS = {
 }
 
 
+MAX_UNCOMPRESSED = 1024 * 1024 * 1024  # 1 GB: a 25 MB upload can't honestly reach this; a bomb declares many GB
+MAX_RATIO = 200  # real Office files expand ~5-30x; 200x+ is a compression bomb
+
+
 class UnsupportedFile(ValueError):
     """The file can't be added; the message is shown to the user."""
+
+
+def _guard_zip(data: bytes) -> None:
+    """Refuse a docx/xlsx (zip) that declares more uncompressed bytes than we would ever read, before touching a
+    member: a few-KB upload can expand to gigabytes and OOM the shared ingest worker.
+    ponytail: trusts the zip directory's sizes (honest in real-world bombs); the container memory limit is the backstop."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            total = sum(info.file_size for info in archive.infolist())
+    except zipfile.BadZipFile:
+        return  # not a real zip; detect_kind reports the unsupported type
+    if total > MAX_UNCOMPRESSED or total > max(len(data), 1) * MAX_RATIO:
+        raise UnsupportedFile(f"This file is too large to open (it expands to about {total // (1024 * 1024)} MB).")
 
 
 def detect_kind(name: str, data: bytes) -> Kind:
@@ -29,6 +46,7 @@ def detect_kind(name: str, data: bytes) -> Kind:
     if data.startswith(b"%PDF-"):
         return "pdf"
     if data.startswith(b"PK\x03\x04"):
+        _guard_zip(data)
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as archive:
                 types = archive.read("[Content_Types].xml").decode("utf-8", "ignore")

@@ -134,8 +134,12 @@ def get_status(workflow_id: int) -> Optional[dict[str, Any]]:
 
 async def fetch_items(config: Any) -> list:
     """Call the trigger's tool and return its items. Raises ValueError with a user-facing message."""
+    from app.auth.owner import owns_app
+
     try:
         tool = get_tool_registry().get_tool(config.tool)
+        if not owns_app(tool.app_id):  # someone else's app: as if it weren't connected
+            raise AppNotConnectedError(tool.app_id)
         result = await tool.execute(dict(config.parameters))
     except (ToolNotFoundError, AppNotConnectedError):
         raise ValueError(f"{config.tool.split('__')[0]} is not connected")
@@ -153,6 +157,21 @@ async def latest_item_trigger(config: Any) -> dict[str, Any]:
 
 
 async def poll_once(workflow_id: int) -> dict[str, Any]:
+    """One check for new items, as the workflow's owner (the scheduler has no one signed in)."""
+    from app.auth.owner import as_user
+
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT user_id FROM workflows WHERE id = ?", (workflow_id,)).fetchone()
+    finally:
+        conn.close()
+    if row is None or row["user_id"] is None:
+        return await _poll_once(workflow_id)
+    with as_user(int(row["user_id"])):
+        return await _poll_once(workflow_id)
+
+
+async def _poll_once(workflow_id: int) -> dict[str, Any]:
     from app.workflows.engine import run_workflow
     from app.workflows.scheduler import parse_trigger
 

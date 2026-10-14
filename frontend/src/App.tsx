@@ -4,6 +4,8 @@ import { Layout } from './components/layout'
 import { ErrorBoundary } from './components/layout/ErrorBoundary'
 import { ChatArea } from './components/chat'
 import { ChatProvider } from './hooks/useChatContext'
+import { AuthProvider } from './hooks/useAuth'
+import { AuthGate } from './pages/AuthPage'
 
 // Pages other than chat load on first visit, keeping the initial download small.
 const MarketplacePage = lazy(() => import('./components/marketplace/MarketplacePage').then(m => ({ default: m.MarketplacePage })))
@@ -17,6 +19,8 @@ const SettingsPage = lazy(() => import('./pages/SettingsPage').then(m => ({ defa
 function App() {
   const location = useLocation()
   return (
+    <AuthProvider>
+    <AuthGate>
     <ChatProvider>
       <Layout>
         {/* Keyed by path so navigating away from a crashed page recovers. */}
@@ -39,6 +43,8 @@ function App() {
         </ErrorBoundary>
       </Layout>
     </ChatProvider>
+    </AuthGate>
+    </AuthProvider>
   )
 }
 

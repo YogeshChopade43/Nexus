@@ -337,7 +337,9 @@ async def _run_action(config, context, tool_registry, app_connections) -> dict[s
     if not tool_name:
         raise ValueError("No tool selected for this action")
     tool = tool_registry.get_tool(tool_name)
-    if not app_connections.get(tool.app_id, False):
+    from app.auth.owner import owns_app
+
+    if not owns_app(tool.app_id) or not app_connections.get(tool.app_id, False):  # someone else's app: never
         raise PermissionError(f"App '{tool.app_id}' is not connected")
     parameters = render_value(config.get("parameters") or config.get("params") or {}, context)
     if not isinstance(parameters, dict):
@@ -551,7 +553,10 @@ async def _run_http(config, context) -> dict[str, Any]:
         kwargs["json"] = body
     elif body is not None:
         kwargs["content"] = str(body)
-    async with httpx.AsyncClient(timeout=float(config.get("request_timeout") or 30), follow_redirects=True) as client:
+    from app.integrations.web import guard_request
+
+    async with httpx.AsyncClient(timeout=float(config.get("request_timeout") or 30), follow_redirects=True,
+                                 event_hooks={"request": [guard_request]}) as client:
         response = await client.request(method, url, **kwargs)
     try:
         data: Any = response.json()
@@ -836,7 +841,29 @@ def _semaphore(workflow_id: int, limit: int) -> Optional[asyncio.Semaphore]:
     return current[1]
 
 
-async def run_workflow(
+async def run_workflow(workflow_id: int, *args: Any, **kwargs: Any) -> WorkflowRunResult:
+    """Run a workflow as its owner: scheduled runs, webhooks and run-once have no signed-in person, and a
+    sub-workflow step can only call its owner's own workflows."""
+    from app.auth.context import current_user
+    from app.auth.owner import as_user
+
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT user_id FROM workflows WHERE id = ?", (workflow_id,)).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        raise ValueError("Workflow not found")
+    owner, acting = row["user_id"], current_user.get()
+    if acting is not None and owner is not None and int(acting["id"]) != int(owner):
+        raise ValueError("Workflow not found")  # someone else's: as if it didn't exist
+    if owner is None or acting is not None:
+        return await _run_workflow_as_owner(workflow_id, *args, **kwargs)
+    with as_user(int(owner)):
+        return await _run_workflow_as_owner(workflow_id, *args, **kwargs)
+
+
+async def _run_workflow_as_owner(
     workflow_id: int,
     tool_registry: ToolRegistry,
     app_connections: dict[str, bool],

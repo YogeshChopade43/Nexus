@@ -4,6 +4,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
+from app.auth.owner import owner_id
 from app.core.database import get_connection
 from app.core.secrets import encrypt_api_key
 from app.llm.registry import LLMRegistry, _load_provider_class, PROVIDER_MAP
@@ -81,6 +82,18 @@ def list_llm_providers(
     return results
 
 
+def _require_reachable(provider_name: str, base_url: Optional[str]) -> None:
+    """The model's address must be on the public internet, unless you're the admin (Ollama on this machine is theirs)."""
+    from app.integrations.web import check_destination
+
+    url = base_url or ("http://localhost:11434" if provider_name == "ollama" else "")
+    if url:
+        try:
+            check_destination(url)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+
+
 @router.post("/")
 def create_llm_provider(req: LLMCreateRequest) -> dict[str, Any]:
     if req.provider_name not in PROVIDER_MAP:
@@ -89,14 +102,15 @@ def create_llm_provider(req: LLMCreateRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="A model is required")
     if req.provider_name not in ("ollama", "litellm") and not req.api_key:
         raise HTTPException(status_code=400, detail="An API key is required for this provider")
+    _require_reachable(req.provider_name, req.base_url)
     conn = get_connection()
     try:
         cursor = conn.execute(
             """
-            INSERT INTO llm_providers (provider_name, model, api_key, base_url, enabled)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO llm_providers (provider_name, model, api_key, base_url, enabled, user_id)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (req.provider_name, req.model, encrypt_api_key(req.api_key), req.base_url, int(req.enabled)),
+            (req.provider_name, req.model, encrypt_api_key(req.api_key), req.base_url, int(req.enabled), owner_id()),
         )
         conn.commit()
         return {"id": cursor.lastrowid, "provider_name": req.provider_name, "model": req.model}
@@ -108,7 +122,7 @@ def create_llm_provider(req: LLMCreateRequest) -> dict[str, Any]:
 def update_llm_provider(provider_id: int, req: LLMUpdateRequest) -> dict[str, Any]:
     conn = get_connection()
     try:
-        row = conn.execute("SELECT * FROM llm_providers WHERE id = ?", (provider_id,)).fetchone()
+        row = conn.execute("SELECT * FROM llm_providers WHERE id = ? AND user_id = ?", (provider_id, owner_id())).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="LLM provider not found")
 
@@ -121,6 +135,7 @@ def update_llm_provider(provider_id: int, req: LLMUpdateRequest) -> dict[str, An
             updates.append("api_key = ?")
             values.append(encrypt_api_key(req.api_key))
         if req.base_url is not None:
+            _require_reachable(row["provider_name"], req.base_url)
             updates.append("base_url = ?")
             values.append(req.base_url)
         if req.enabled is not None:
@@ -167,7 +182,7 @@ async def get_context_window(provider_id: Optional[int] = None) -> dict[str, Any
 def get_llm_provider(provider_id: int) -> dict[str, Any]:
     conn = get_connection()
     try:
-        row = conn.execute("SELECT * FROM llm_providers WHERE id = ?", (provider_id,)).fetchone()
+        row = conn.execute("SELECT * FROM llm_providers WHERE id = ? AND user_id = ?", (provider_id, owner_id())).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="LLM provider not found")
         config = dict(row)

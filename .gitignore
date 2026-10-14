@@ -54,3 +54,4 @@ backend/data/models/
 # and files attached in chat or made by the agent
 backend/data/browser/
 backend/data/files/
+frontend/e2e/.auth/

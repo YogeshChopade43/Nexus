@@ -8,6 +8,7 @@ they are removed and the task reconnects with exponential backoff.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
@@ -254,7 +255,7 @@ class MCPManager:
     # ---- lifecycle -----------------------------------------------------
 
     async def start_all(self) -> None:
-        for config in list_servers():
+        for config in list_servers(all_owners=True):
             if config.enabled:
                 self._start(config)
 
@@ -450,9 +451,13 @@ class MCPManager:
 
             if not runtime.stopping and not runtime.restart_requested:
                 runtime.log(f"Failed: {runtime.error or 'Connection lost'}")
-                if attempt == 0:  # once per outage, not on every retry
-                    log_activity("server_error", f"MCP server '{runtime.config.name}' is not connected",
-                                 runtime.error or "Connection lost", {"server": runtime.config.slug})
+                if attempt == 0:  # once per outage, not on every retry: in the bell of whoever connected it
+                    from app.auth.owner import app_owners, as_user
+
+                    owner = app_owners().get(runtime.config.slug)
+                    with as_user(int(owner)) if owner is not None else contextlib.nullcontext():
+                        log_activity("server_error", f"MCP server '{runtime.config.name}' is not connected",
+                                     runtime.error or "Connection lost", {"server": runtime.config.slug})
 
             if runtime.stopping:
                 break
@@ -570,7 +575,7 @@ class MCPManager:
     def server_states(self) -> dict[str, dict[str, bool]]:
         """``{slug: {enabled, connected, available}}`` for every configured server."""
         states = {}
-        for config in list_servers():
+        for config in list_servers(all_owners=True):
             runtime = self._runtimes.get(config.id)
             connected = bool(runtime and runtime.status == "connected")
             states[config.slug] = {"enabled": config.enabled, "connected": connected, "available": config.enabled and connected}

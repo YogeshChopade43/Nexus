@@ -80,7 +80,7 @@ def auth_url(integration_id: int, config: dict[str, Any], redirect_uri: str) -> 
 async def finish_sign_in(state: str, code: str) -> Optional[dict[str, Any]]:
     """Trade Google's code for tokens; None for an unknown or used sign-in link."""
     pending = _pending.pop(state, None)
-    integration = store.get_integration(pending[0]) if pending else None
+    integration = store.get_integration(pending[0], all_owners=True) if pending else None  # checked by state
     if integration is None:
         return None
     config = dict(integration["config"])
@@ -101,7 +101,7 @@ async def _access_token(config: dict[str, Any], force: bool = False) -> str:
                            "client_id": config["client_id"], "client_secret": config["client_secret"]})
     config.update(access_token=tokens["access_token"], expires_at=time.time() + int(tokens.get("expires_in") or 3600) - 60)
     integration_id = config.get("_integration_id")
-    saved = store.get_integration(integration_id) if integration_id else None
+    saved = store.get_integration(integration_id, all_owners=True) if integration_id else None
     if saved:  # keep the new token for the next call and the next start
         store.update_integration(integration_id, config={**saved["config"], "access_token": config["access_token"],
                                                          "expires_at": config["expires_at"]})

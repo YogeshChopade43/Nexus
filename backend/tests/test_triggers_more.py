@@ -75,6 +75,14 @@ def write_feed(items):
 @pytest.fixture(scope="module")
 def client():
     write_feed([])
+    from app.core.database import get_connection
+
+    conn = get_connection()
+    try:  # instance-wide webhooks (secrets in the environment) start the admin's workflows: test as the admin
+        conn.execute("UPDATE users SET is_admin = 1 WHERE email = 'tester@example.com'")
+        conn.commit()
+    finally:
+        conn.close()
     with TestClient(app) as c:
         r = c.post("/api/mcp/servers", json={"name": "Feed2", "transport": "stdio", "command": sys.executable,
                                              "args": [FIXTURE], "env": {"FEED_FILE": str(FEED)}})

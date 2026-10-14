@@ -45,6 +45,9 @@ def submit(workspace_id: int, collection_id: int, name: str, data: bytes) -> dic
     """Validate and store an upload, and queue it unless the same file is already there."""
     if len(data) > MAX_FILE_BYTES:
         raise ValueError(f"{name} is larger than 25 MB")
+    from app.quota import check_storage
+
+    check_storage(len(data))
     kind = detect_kind(name, data)  # raises UnsupportedFile for files we can't read
     document, created = store.create_document(workspace_id, collection_id, name, MIME[kind], data)
     if created:
@@ -167,6 +170,23 @@ def process_job(job: dict) -> None:
 
 
 def _run_one(job: dict) -> None:
+    """Process a claimed job as the document's owner (their bell hears how it went)."""
+    from app.auth.owner import as_user
+    from app.core.database import get_connection
+
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT user_id FROM workspaces WHERE id = ?", (job.get("workspace_id"),)).fetchone()
+    finally:
+        conn.close()
+    if row is None or row["user_id"] is None:
+        _run_one_as_owner(job)
+        return
+    with as_user(int(row["user_id"])):
+        _run_one_as_owner(job)
+
+
+def _run_one_as_owner(job: dict) -> None:
     """Process a claimed job and record the outcome (retry, failure, or nothing to do)."""
     document_id = job["document_id"]
     if not embeddings.prepare_models():

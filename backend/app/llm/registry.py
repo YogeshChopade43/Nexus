@@ -4,6 +4,7 @@ import importlib
 import inspect
 from typing import Any, Optional
 
+from app.auth.owner import owner_id
 from app.core.database import get_connection
 from app.core.secrets import decrypt_api_key
 from app.llm.base import BaseLLMProvider
@@ -73,7 +74,7 @@ class LLMRegistry:
     def list_configs(self) -> list[dict[str, Any]]:
         conn = get_connection()
         try:
-            rows = conn.execute("SELECT * FROM llm_providers ORDER BY id").fetchall()
+            rows = conn.execute("SELECT * FROM llm_providers WHERE user_id = ? ORDER BY id", (owner_id(),)).fetchall()
             results = []
             for row in rows:
                 config = dict(row)
@@ -89,10 +90,10 @@ class LLMRegistry:
         try:
             cursor = conn.execute(
                 """
-                INSERT INTO llm_providers (provider_name, model, api_key, base_url, enabled)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO llm_providers (provider_name, model, api_key, base_url, enabled, user_id)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (provider_name, model, encrypt_api_key(api_key), base_url, int(enabled)),
+                (provider_name, model, encrypt_api_key(api_key), base_url, int(enabled), owner_id()),
             )
             conn.commit()
             return cursor.lastrowid
@@ -102,7 +103,7 @@ class LLMRegistry:
     def delete_config(self, provider_id: int) -> bool:
         conn = get_connection()
         try:
-            cursor = conn.execute("DELETE FROM llm_providers WHERE id = ?", (provider_id,))
+            cursor = conn.execute("DELETE FROM llm_providers WHERE id = ? AND user_id = ?", (provider_id, owner_id()))
             conn.commit()
         finally:
             conn.close()

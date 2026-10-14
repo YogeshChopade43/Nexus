@@ -16,4 +16,8 @@ from app.api.routes.marketplace import router as marketplace_router
 from app.api.routes.integrations import router as integrations_router
 from app.api.routes.briefing import router as briefing_router
 from app.api.routes.run_once import router as run_once_router
+from app.api.routes.auth import router as auth_router
+from app.api.routes.auth_google import router as auth_google_router
+from app.api.routes.account import router as account_router
 from app.files import router as files_router
+from app.api.routes.admin import router as admin_router

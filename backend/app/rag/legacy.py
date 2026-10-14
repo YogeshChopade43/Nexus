@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 
-from app.core.database import get_connection
+from app.core.database import get_connection, is_postgres
 from app.rag import ingest, store
 from app.rag.models import DEFAULT_WORKSPACE
 
@@ -39,6 +39,8 @@ def _join(chunks: list[str]) -> tuple[str, bool]:
 
 
 def _legacy_tables(conn) -> bool:
+    if is_postgres():
+        return False  # PostgreSQL installs start after the old knowledge base
     names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE name IN ('legacy_documents', 'legacy_document_chunks')")}
     return names == {"legacy_documents", "legacy_document_chunks"}
 

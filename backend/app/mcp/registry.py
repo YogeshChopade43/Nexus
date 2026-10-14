@@ -16,7 +16,7 @@ from typing import Any, Optional
 
 import httpx
 
-from app.core.database import get_connection
+from app.core.database import get_connection, is_postgres
 from app.mcp import store
 from app.mcp.recipes import plan
 
@@ -148,10 +148,10 @@ def backfill_flags() -> None:
 
 
 def _delete(conn, name: str) -> None:
-    row = conn.execute("SELECT rowid FROM registry_servers WHERE name = ?", (name,)).fetchone()
+    row = conn.execute("SELECT id FROM registry_servers WHERE name = ?", (name,)).fetchone()
     if row:
         conn.execute("DELETE FROM registry_fts WHERE rowid = ?", (row[0],))
-        conn.execute("DELETE FROM registry_servers WHERE rowid = ?", (row[0],))
+        conn.execute("DELETE FROM registry_servers WHERE id = ?", (row[0],))
 
 
 def _store(conn, item: dict[str, Any]) -> None:
@@ -303,17 +303,23 @@ def search(q: str = "", sort: str = "relevance", offset: int = 0, limit: int = 3
     where.append("NOT EXISTS (SELECT 1 FROM registry_servers d WHERE d.title = s.title AND s.title != '' "
                  "AND substr(d.name, 1, instr(d.name, '/')) = substr(s.name, 1, instr(s.name, '/')) "
                  "AND COALESCE(d.updated_at, '') > COALESCE(s.updated_at, ''))")
-    by_name = "COALESCE(NULLIF(s.title, ''), s.name) COLLATE NOCASE"
+    by_name = "lower(COALESCE(NULLIF(s.title, ''), s.name))"
     if words:
-        sql = "SELECT s.* FROM registry_fts JOIN registry_servers s ON s.rowid = registry_fts.rowid"
-        where.insert(0, "registry_fts MATCH ?")
-        params.insert(0, " ".join(f'"{word}"*' for word in words))  # quoted: FTS syntax in q is just text
+        sql = "SELECT s.* FROM registry_fts JOIN registry_servers s ON s.id = registry_fts.rowid"
+        if is_postgres():
+            where.insert(0, "registry_fts.tsv @@ to_tsquery('english', ?)")
+            params.insert(0, " & ".join(f"{word}:*" for word in words))  # \w+ only: no tsquery syntax gets in
+        else:
+            where.insert(0, "registry_fts MATCH ?")
+            params.insert(0, " ".join(f'"{word}"*' for word in words))  # quoted: FTS syntax in q is just text
         # An official listing goes first only when the search is about it ("notion" -> Notion's own server),
         # not when its description merely mentions the words.
         about = " AND ".join("lower(COALESCE(s.title, '') || ' ' || s.name) LIKE ?" for _ in words)
         order_params = [f"%{word.lower()}%" for word in words]
+        if is_postgres():
+            order_params.append(params[0])  # ts_rank's query
         order = (f"CASE WHEN COALESCE(s.official, 0) = 1 AND {about} THEN 0 ELSE 1 END, COALESCE(s.junk, 0), "
-                 "bm25(registry_fts)"
+                 + ("-ts_rank(registry_fts.tsv, to_tsquery('english', ?))" if is_postgres() else "bm25(registry_fts)")
                  if sort == "relevance" else "s.updated_at DESC")
         if sort != "relevance":
             order_params = []
@@ -335,7 +341,7 @@ def installed_map() -> dict[str, int]:
     found: dict[str, int] = {}
     conn = get_connection()
     try:
-        for server in store.list_servers():
+        for server in store.list_servers(all_owners=True):
             if server.registry_name:
                 found.setdefault(server.registry_name, server.id)
                 continue

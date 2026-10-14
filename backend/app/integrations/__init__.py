@@ -50,7 +50,7 @@ class IntegrationManager:
         self._slugs.pop(integration_id, None)
 
     def load_all(self) -> None:
-        for integration in store.list_integrations():
+        for integration in store.list_integrations(all_owners=True):
             try:
                 self.apply(integration)
             except Exception as exc:  # one broken integration must not stop the others

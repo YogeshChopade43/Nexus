@@ -1,4 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
-  <rect width="32" height="32" rx="6" fill="#0a0e17"/>
-  <path d="M8 16L14 22L24 10" stroke="#00d4aa" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="12 18 96 76">
+<style>g{stroke:#0E1116}@media (prefers-color-scheme:dark){g{stroke:#E6E8EE}}</style>
+<g fill="none" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
+<path d="M25.33 81.01L42.67 54.99M50.88 53.49L69.12 66.51M76.98 64.79L94.03 34.95"/>
+<circle cx="22" cy="86" r="6"/><circle cx="46" cy="50" r="6"/><circle cx="74" cy="70" r="6"/>
+<circle cx="98" cy="28" r="8" fill="#3B5BFF" stroke="#3B5BFF"/>
+</g>
 </svg>

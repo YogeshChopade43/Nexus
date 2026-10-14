@@ -33,6 +33,7 @@ export default {
       fontFamily: {
         mono: ['JetBrains Mono', 'Fira Code', 'monospace'],
         sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+        brand: ['Sora', 'Helvetica Neue', 'Arial', 'sans-serif'],
       },
       animation: {
         'fade-in': 'fadeIn 0.15s ease-out',

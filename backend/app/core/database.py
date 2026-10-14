@@ -19,12 +19,34 @@ def get_db_path() -> Path:
     return path
 
 
+def database_url() -> str:
+    """PostgreSQL (production) when DATABASE_URL names one; otherwise SQLite at DATABASE_PATH (local, tests)."""
+    url = os.getenv("DATABASE_URL", "")
+    return url if url.startswith(("postgresql://", "postgres://")) else ""
+
+
+def is_postgres() -> bool:
+    return bool(database_url())
+
+
 def get_connection() -> sqlite3.Connection:
+    if is_postgres():
+        from app.core import pg
+
+        return pg.connect(database_url())  # type: ignore[return-value]  # the sqlite3 API subset the app uses
     # timeout: wait on locks instead of failing when the scheduler and API write concurrently.
     conn = sqlite3.connect(get_db_path(), timeout=15)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
+
+
+def _acting_user_id() -> Optional[int]:
+    """Whom an activity belongs to: the signed-in person, or the person a background job acts for (None: no one yet)."""
+    from app.auth.context import current_user
+
+    user = current_user.get()
+    return int(user["id"]) if user else None
 
 
 def log_activity(
@@ -38,13 +60,14 @@ def log_activity(
         conn = get_connection()
         try:
             conn.execute(
-                "INSERT INTO activity_log (type, title, description, metadata, timestamp) VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO activity_log (type, title, description, metadata, timestamp, user_id) VALUES (?, ?, ?, ?, ?, ?)",
                 (
                     activity_type,
                     title[:200],
                     description[:1000],
                     json.dumps(metadata or {}, default=str),
                     datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    _acting_user_id(),
                 ),
             )
             conn.commit()
@@ -56,6 +79,8 @@ def log_activity(
 
 # Schema changes after the baseline in init_db, applied once each in order. The database's
 # PRAGMA user_version records how many have run. Append only: never edit or reorder an entry.
+# PostgreSQL installs start from schema_postgres.sql (everything below included) and run only later entries, so
+# a new entry must be SQL both accept (ALTER TABLE ... ADD COLUMN, CREATE TABLE/INDEX) and goes into that file too.
 MIGRATIONS: list[str] = [
     # 1: OAuth tokens and client registration for hosted MCP servers (encrypted JSON)
     "ALTER TABLE mcp_servers ADD COLUMN oauth TEXT DEFAULT ''",
@@ -283,6 +308,62 @@ MIGRATIONS: list[str] = [
         created_at TEXT NOT NULL
     )
     """,
+    # 18: accounts and their sign-in sessions (only a token's SHA-256 is kept)
+    """
+    CREATE TABLE users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL DEFAULT '',
+        password_hash TEXT,
+        email_verified INTEGER NOT NULL DEFAULT 0,
+        google_sub TEXT UNIQUE,
+        is_admin INTEGER NOT NULL DEFAULT 0,
+        disabled INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL
+    );
+    CREATE TABLE sessions (
+        token_hash TEXT PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        user_agent TEXT NOT NULL DEFAULT ''
+    )
+    """,
+    # 19: an owner for each "root" row (children are reached through them); NULL = from before accounts,
+    # claimed by the first account
+    """
+    ALTER TABLE workflows ADD COLUMN user_id INTEGER;
+    CREATE INDEX IF NOT EXISTS idx_workflows_user ON workflows(user_id);
+    ALTER TABLE agent_sessions ADD COLUMN user_id INTEGER;
+    CREATE INDEX IF NOT EXISTS idx_agent_sessions_user ON agent_sessions(user_id);
+    ALTER TABLE llm_providers ADD COLUMN user_id INTEGER;
+    CREATE INDEX IF NOT EXISTS idx_llm_providers_user ON llm_providers(user_id);
+    ALTER TABLE mcp_servers ADD COLUMN user_id INTEGER;
+    CREATE INDEX IF NOT EXISTS idx_mcp_servers_user ON mcp_servers(user_id);
+    ALTER TABLE integrations ADD COLUMN user_id INTEGER;
+    CREATE INDEX IF NOT EXISTS idx_integrations_user ON integrations(user_id);
+    ALTER TABLE memories ADD COLUMN user_id INTEGER;
+    CREATE INDEX IF NOT EXISTS idx_memories_user ON memories(user_id);
+    ALTER TABLE activity_log RENAME COLUMN user_id TO legacy_user;
+    ALTER TABLE activity_log ADD COLUMN user_id INTEGER;
+    CREATE INDEX IF NOT EXISTS idx_activity_log_user ON activity_log(user_id);
+    ALTER TABLE llm_usage ADD COLUMN user_id INTEGER;
+    CREATE INDEX IF NOT EXISTS idx_llm_usage_user ON llm_usage(user_id);
+    ALTER TABLE user_settings ADD COLUMN user_id INTEGER;
+    CREATE INDEX IF NOT EXISTS idx_user_settings_user ON user_settings(user_id);
+    ALTER TABLE workspaces ADD COLUMN user_id INTEGER;
+    CREATE INDEX IF NOT EXISTS idx_workspaces_user ON workspaces(user_id)
+    """,
+    # 20: one-time links sent by email (verify an address, reset a password); only a token's SHA-256 is kept
+    """
+    CREATE TABLE email_tokens (
+        token_hash TEXT PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        purpose TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        used_at TEXT
+    )
+    """,
 ]
 
 
@@ -310,8 +391,30 @@ def purge_old_records(days: int) -> dict[str, int]:
     return {"runs": runs, "activity": activity}
 
 
+def _init_postgres(conn: Any) -> None:
+    """A fresh database gets the whole schema at once; later migrations (written to run on both) apply in order."""
+    conn.execute("SELECT pg_advisory_xact_lock(4711)")  # several app processes starting together: one sets up
+    conn.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
+    row = conn.execute("SELECT version FROM schema_version").fetchone()
+    if row is None:
+        conn.executescript((Path(__file__).parent / "schema_postgres.sql").read_text(encoding="utf-8"))
+        conn.execute("INSERT INTO schema_version (version) VALUES (?)", (len(MIGRATIONS),))
+    else:
+        for number, statement in enumerate(MIGRATIONS[row[0]:], start=row[0] + 1):
+            logger.info("Applying database migration %d", number)
+            conn.executescript(statement)
+            conn.execute("UPDATE schema_version SET version = ?", (number,))
+    conn.commit()
+
+
 def init_db() -> None:
     conn = get_connection()
+    if is_postgres():
+        try:
+            _init_postgres(conn)
+        finally:
+            conn.close()
+        return
     try:
         conn.executescript(
             """

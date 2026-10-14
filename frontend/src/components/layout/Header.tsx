@@ -4,6 +4,7 @@ import { Button } from '../ui/Button';
 import { Dropdown, DropdownItem } from '../ui/Dropdown';
 import { useSettings } from '../../hooks/useSettings';
 import { NotificationBell } from './NotificationBell';
+import { UserMenu } from './UserMenu';
 import { OPEN_SEARCH_EVENT } from './CommandPalette';
 import { NAV_SECTIONS, SETTINGS_ITEM, isActivePath } from './Sidebar';
 
@@ -61,6 +62,7 @@ export function Header({ onMenuClick }: HeaderProps) {
           items={themeOptions}
         />
         <NotificationBell />
+        <UserMenu />
       </div>
     </header>
   );

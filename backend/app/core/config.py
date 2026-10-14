@@ -61,6 +61,8 @@ def ensure_secret_key(database_path: str = DATABASE_PATH, environ=os.environ) ->
     """
     if environ.get("NEXUS_SECRET_KEY") or ENVIRONMENT == "production":
         return
+    if environ.get("DATABASE_URL"):  # a key on this disk could not tell whether that database already has secrets
+        raise SystemExit("Set NEXUS_SECRET_KEY when using DATABASE_URL (the same key every time: it decrypts stored credentials).")
     key_file = Path(database_path).parent / ".nexus_secret_key"
     use_keychain = environ.get("NEXUS_KEYCHAIN", "").lower() == "true"
     if use_keychain:

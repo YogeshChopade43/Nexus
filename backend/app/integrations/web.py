@@ -5,6 +5,7 @@ refused, so a page (or a prompt hidden in one) can't steer the agent into the us
 """
 from __future__ import annotations
 
+import asyncio
 import io
 import ipaddress
 import re
@@ -43,6 +44,21 @@ def _check_public(url: str) -> None:
         ip = ipaddress.ip_address(address)
         if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
             raise ValueError(f"Nexus only reads pages on the public web, not {parsed.hostname} (a private address)")
+
+
+def check_destination(url: str) -> None:
+    """Where the server may send a request for the acting person: anywhere for the admin (their own machine and
+    network), only the public internet for anyone else (a shared server's network, cloud metadata, its database)."""
+    from app.auth.context import current_user
+
+    user = current_user.get()
+    if user is not None and not user.get("is_admin"):
+        _check_public(url)
+
+
+async def guard_request(request: httpx.Request) -> None:
+    """httpx event hook: checks every request a client sends, each redirect included."""
+    await asyncio.to_thread(check_destination, str(request.url))
 
 
 async def fetch(url: str) -> tuple[str, str, bytes]:
@@ -136,6 +152,7 @@ class ReadPage(IntegrationTool):
                          "(articles, docs, links the user shares).", {
                              "properties": {"url": {"type": "string", "description": "The full http(s) address"}},
                              "required": ["url"]}, read_page, title="Read web page")
+        self.link_args = ("url",)  # an address the model built (not one seen in the chat) needs your OK
 
     async def execute(self, parameters: dict[str, Any]) -> dict[str, Any]:
         return await self._run(parameters or {})

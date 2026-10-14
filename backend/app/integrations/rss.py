@@ -1,6 +1,7 @@
 """RSS and Atom feeds: blogs, changelogs, news, release notes, job boards, YouTube channels, subreddits."""
 from __future__ import annotations
 
+import re
 from typing import Any
 from xml.etree import ElementTree
 
@@ -18,8 +19,13 @@ def _text(element: Any, tag: str) -> str:
 
 def parse(text: str) -> tuple[str, list[dict[str, Any]]]:
     """(feed title, items newest first as published) from RSS 2.0 or Atom."""
+    raw = text.encode("utf-8") if isinstance(text, str) else text
+    # A real feed never declares a DOCTYPE or entities; a crafted one uses them to blow up memory (billion laughs).
+    # stdlib ElementTree expands internal entities and the Python docs call it unsafe on hostile input, so refuse first.
+    if re.search(rb"<!(DOCTYPE|ENTITY)\b", raw, re.IGNORECASE):
+        raise ValueError("That address isn't a valid RSS or Atom feed.")
     try:
-        root = ElementTree.fromstring(text.encode("utf-8") if isinstance(text, str) else text)
+        root = ElementTree.fromstring(raw)
     except ElementTree.ParseError as exc:
         raise ValueError(f"That address isn't an RSS or Atom feed: {exc}") from exc
     items = []

@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 from app.api.routes.settings import user_timezone
+from app.auth.owner import owner_id
 from app.core.database import get_connection, log_activity
 from app.mcp import server_availability
 from app.models.workflow import (
@@ -38,6 +39,17 @@ from app.workflows.templates import TEMPLATES, get_template
 from app.workflows.scheduler import cron_trigger, next_run_time, parse_trigger, sync_workflow_schedule
 
 router = APIRouter(prefix="/api/workflows", tags=["workflows"])
+
+
+def _own(workflow_id: Any) -> None:
+    """404 unless this workflow is the signed-in person's (someone else's looks just like a missing one)."""
+    conn = get_connection()
+    try:
+        mine = conn.execute("SELECT 1 FROM workflows WHERE id = ? AND user_id = ?", (workflow_id, owner_id())).fetchone()
+    finally:
+        conn.close()
+    if mine is None:
+        raise HTTPException(status_code=404, detail="Workflow not found")
 
 
 def _utc_now() -> str:
@@ -242,7 +254,8 @@ def _save_folders(folders: list[str]) -> None:
 def _folder_counts() -> dict[str, int]:
     conn = get_connection()
     try:
-        rows = conn.execute("SELECT folder, COUNT(*) AS n FROM workflows WHERE folder != '' GROUP BY folder").fetchall()
+        rows = conn.execute("SELECT folder, COUNT(*) AS n FROM workflows WHERE folder != '' AND user_id = ? GROUP BY folder",
+                            (owner_id(),)).fetchall()
     finally:
         conn.close()
     return {row["folder"]: row["n"] for row in rows}
@@ -280,7 +293,7 @@ def rename_folder(name: str, body: FolderName) -> list[dict[str, Any]]:
         raise HTTPException(status_code=409, detail=f"There's already a folder called {clash}")
     conn = get_connection()
     try:
-        conn.execute("UPDATE workflows SET folder = ? WHERE folder = ?", (new, old))
+        conn.execute("UPDATE workflows SET folder = ? WHERE folder = ? AND user_id = ?", (new, old, owner_id()))
         conn.commit()
     finally:
         conn.close()
@@ -296,7 +309,7 @@ def delete_folder(name: str) -> Response:
         raise HTTPException(status_code=404, detail="Folder not found")
     conn = get_connection()
     try:
-        conn.execute("UPDATE workflows SET folder = '' WHERE folder = ?", (old,))
+        conn.execute("UPDATE workflows SET folder = '' WHERE folder = ? AND user_id = ?", (old, owner_id()))
         conn.commit()
     finally:
         conn.close()
@@ -332,6 +345,7 @@ async def test_step(payload: dict[str, Any]) -> dict[str, Any]:
                "loop": sample.get("loop"), "error": sample.get("error")}
     provider_id = None
     if payload.get("workflow_id"):
+        _own(payload["workflow_id"])
         conn = get_connection()
         try:
             row = conn.execute("SELECT llm_provider_id FROM workflows WHERE id = ?", (payload["workflow_id"],)).fetchone()
@@ -377,8 +391,8 @@ def list_workflows(
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT * FROM workflows ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
-            (limit, offset),
+            "SELECT * FROM workflows WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
+            (owner_id(), limit, offset),
         ).fetchall()
         return [_response_from_row(row) for row in rows]
     finally:
@@ -387,6 +401,7 @@ def list_workflows(
 
 @router.get("/{workflow_id}", response_model=WorkflowResponse)
 def get_workflow(workflow_id: int) -> WorkflowResponse:
+    _own(workflow_id)
     conn = get_connection()
     try:
         row = conn.execute("SELECT * FROM workflows WHERE id = ?", (workflow_id,)).fetchone()
@@ -412,12 +427,13 @@ def create_workflow(req: WorkflowCreate) -> WorkflowResponse:
         cursor = conn.execute(
             """
             INSERT INTO workflows
-                (name, description, steps, nodes, edges, version, enabled, is_active, trigger, llm_provider_id, updated_at, folder)
-            VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
+                (name, description, steps, nodes, edges, version, enabled, is_active, trigger, llm_provider_id, updated_at, folder,
+                 user_id)
+            VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 req.name.strip(), req.description, json.dumps(steps), json.dumps(nodes), json.dumps(edges),
-                int(is_active), int(is_active), trigger, req.llm_provider_id, _utc_now(), req.folder.strip(),
+                int(is_active), int(is_active), trigger, req.llm_provider_id, _utc_now(), req.folder.strip(), owner_id(),
             ),
         )
         conn.commit()
@@ -440,6 +456,7 @@ def _get_with_warnings(workflow_id: int, warnings: list[str]) -> WorkflowRespons
 
 @router.patch("/{workflow_id}", response_model=WorkflowResponse)
 def update_workflow(workflow_id: int, req: WorkflowUpdate) -> WorkflowResponse:
+    _own(workflow_id)
     conn = get_connection()
     try:
         row = conn.execute("SELECT * FROM workflows WHERE id = ?", (workflow_id,)).fetchone()
@@ -515,6 +532,7 @@ def _snapshot(row: Any) -> dict[str, Any]:
 
 @router.get("/{workflow_id}/versions")
 def list_versions(workflow_id: int) -> list[dict[str, Any]]:
+    _own(workflow_id)
     conn = get_connection()
     try:
         rows = conn.execute(
@@ -532,6 +550,7 @@ def list_versions(workflow_id: int) -> list[dict[str, Any]]:
 
 @router.post("/{workflow_id}/versions/{version}/restore", response_model=WorkflowResponse)
 def restore_version(workflow_id: int, version: int) -> WorkflowResponse:
+    _own(workflow_id)
     conn = get_connection()
     try:
         row = conn.execute(
@@ -550,6 +569,7 @@ def restore_version(workflow_id: int, version: int) -> WorkflowResponse:
 
 @router.get("/{workflow_id}/export")
 def export_workflow(workflow_id: int) -> dict[str, Any]:
+    _own(workflow_id)
     conn = get_connection()
     try:
         row = conn.execute("SELECT * FROM workflows WHERE id = ?", (workflow_id,)).fetchone()
@@ -564,6 +584,7 @@ def export_workflow(workflow_id: int) -> dict[str, Any]:
 
 @router.delete("/{workflow_id}", status_code=204)
 def delete_workflow(workflow_id: int) -> Response:
+    _own(workflow_id)
     conn = get_connection()
     try:
         row = conn.execute("SELECT name FROM workflows WHERE id = ?", (workflow_id,)).fetchone()
@@ -583,6 +604,7 @@ async def run_workflow_endpoint(
     workflow_id: int, req: WorkflowRunRequest, background: bool = Query(False),
 ) -> WorkflowRunResult:
     """Run now. With ``background=true`` the run starts and its id returns at once; poll it for progress."""
+    _own(workflow_id)
     from app.api.routes import run_once
 
     run_once.refuse_manual_run(workflow_id, req.confirm)
@@ -615,6 +637,7 @@ async def run_workflow_endpoint(
 
 @router.post("/{workflow_id}/runs/{run_id}/cancel")
 def cancel_workflow_run(workflow_id: int, run_id: str) -> dict[str, Any]:
+    _own(workflow_id)
     if not cancel_run(run_id):
         raise HTTPException(status_code=409, detail="This run is not running")
     return {"run_id": run_id, "cancelled": True}
@@ -623,6 +646,7 @@ def cancel_workflow_run(workflow_id: int, run_id: str) -> dict[str, Any]:
 @router.post("/{workflow_id}/runs/{run_id}/rerun", response_model=WorkflowRunResult)
 async def rerun_from_failure(workflow_id: int, run_id: str) -> WorkflowRunResult:
     """Run again, reusing the outputs of steps that succeeded last time so they are not repeated."""
+    _own(workflow_id)
     conn = get_connection()
     try:
         row = conn.execute("SELECT * FROM workflow_runs WHERE id = ? AND workflow_id = ?", (run_id, workflow_id)).fetchone()
@@ -662,6 +686,7 @@ def _run_from_row(row: Any) -> dict[str, Any]:
 
 @router.get("/{workflow_id}/runs")
 def get_workflow_runs(workflow_id: int, limit: int = Query(20, ge=1, le=200)) -> dict[str, Any]:
+    _own(workflow_id)
     conn = get_connection()
     try:
         row = conn.execute("SELECT id, name, last_run FROM workflows WHERE id = ?", (workflow_id,)).fetchone()
@@ -685,6 +710,7 @@ def get_workflow_runs(workflow_id: int, limit: int = Query(20, ge=1, le=200)) ->
 @router.get("/{workflow_id}/trace")
 def get_workflow_trace(workflow_id: int) -> dict[str, Any]:
     """Trace of the most recent run (empty when the workflow has never run)."""
+    _own(workflow_id)
     conn = get_connection()
     try:
         row = conn.execute("SELECT id, last_run FROM workflows WHERE id = ?", (workflow_id,)).fetchone()
@@ -708,6 +734,7 @@ def get_workflow_trace(workflow_id: int) -> dict[str, Any]:
 
 @router.get("/{workflow_id}/runs/{run_id}", response_model=WorkflowRunResult)
 def get_workflow_run(workflow_id: int, run_id: str) -> WorkflowRunResult:
+    _own(workflow_id)
     conn = get_connection()
     try:
         row = conn.execute(

@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from app.core.database import get_connection
+from app.core.database import _acting_user_id, get_connection
 from app.core.secrets import decrypt_config, encrypt_config
 from app.mcp.store import slugify
 
@@ -20,18 +20,29 @@ def _row(row: Any) -> dict[str, Any]:
             "config": decrypt_config(row["config"]), "enabled": bool(row["enabled"]), "created_at": row["created_at"]}
 
 
-def list_integrations() -> list[dict[str, Any]]:
+def _scope(all_owners: bool) -> tuple[str, tuple]:
+    """Only the signed-in person's rows, unless a background job (connecting everyone's apps) asks for all."""
+    if all_owners:
+        return "", ()
+    from app.auth.owner import owner_id
+
+    return " AND user_id = ?", (owner_id(),)
+
+
+def list_integrations(all_owners: bool = False) -> list[dict[str, Any]]:
+    where, args = _scope(all_owners)
     conn = get_connection()
     try:
-        return [_row(r) for r in conn.execute("SELECT * FROM integrations ORDER BY id")]
+        return [_row(r) for r in conn.execute(f"SELECT * FROM integrations WHERE 1 = 1{where} ORDER BY id", args)]
     finally:
         conn.close()
 
 
-def get_integration(integration_id: int) -> Optional[dict[str, Any]]:
+def get_integration(integration_id: int, all_owners: bool = False) -> Optional[dict[str, Any]]:
+    where, args = _scope(all_owners)
     conn = get_connection()
     try:
-        row = conn.execute("SELECT * FROM integrations WHERE id = ?", (integration_id,)).fetchone()
+        row = conn.execute(f"SELECT * FROM integrations WHERE id = ?{where}", (integration_id, *args)).fetchone()
         return _row(row) if row else None
     finally:
         conn.close()
@@ -41,14 +52,14 @@ def create_integration(kind: str, name: str, config: dict[str, Any]) -> dict[str
     conn = get_connection()
     try:
         cursor = conn.execute(
-            "INSERT INTO integrations (kind, name, slug, config, enabled, created_at) VALUES (?, ?, ?, ?, 1, ?)",
+            "INSERT INTO integrations (kind, name, slug, config, enabled, created_at, user_id) VALUES (?, ?, ?, ?, 1, ?, ?)",
             (kind, name, slugify(name, taken_slugs(conn)), encrypt_config(config),
-             datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")))
+             datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"), _acting_user_id()))
         conn.commit()
         integration_id = cursor.lastrowid
     finally:
         conn.close()
-    return get_integration(integration_id)
+    return get_integration(integration_id, all_owners=True)
 
 
 def update_integration(integration_id: int, **changes: Any) -> Optional[dict[str, Any]]:
@@ -63,7 +74,7 @@ def update_integration(integration_id: int, **changes: Any) -> Optional[dict[str
             conn.commit()
         finally:
             conn.close()
-    return get_integration(integration_id)
+    return get_integration(integration_id, all_owners=True)  # routes check ownership first
 
 
 def delete_integration(integration_id: int) -> bool:

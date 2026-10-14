@@ -18,6 +18,13 @@ function errorMessage(data: { message?: string; detail?: unknown }, fallback: st
   return fallback;
 }
 
+/** A 401 outside signing in means the session ended or expired: tell the app to show the sign-in page. */
+export function signedOutOn(response: Response, endpoint: string): void {
+  if (response.status === 401 && !endpoint.startsWith('/api/auth/') && typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('nexus:signed-out'));
+  }
+}
+
 async function failure(response: Response): Promise<ApiError> {
   const errorData = await response.json().catch(() => ({}));
   return { code: `HTTP_${response.status}`, message: errorMessage(errorData, response.statusText), details: errorData };
@@ -55,9 +62,11 @@ class ApiService {
     const response = await fetch(url, {
       ...options,
       headers,
+      credentials: 'include',  // the session cookie
     });
 
     if (!response.ok) {
+      signedOutOn(response, endpoint);
       throw await failure(response);
     }
 
@@ -96,8 +105,8 @@ class ApiService {
     });
   }
 
-  async delete<T>(endpoint: string): Promise<T> {
-    return this.request<T>(endpoint, { method: 'DELETE' });
+  async delete<T>(endpoint: string, data?: unknown): Promise<T> {
+    return this.request<T>(endpoint, { method: 'DELETE', ...(data === undefined ? {} : { body: JSON.stringify(data) }) });
   }
 
   async stream<T>(
@@ -114,9 +123,11 @@ class ApiService {
       method: 'POST',
       headers: this.defaultHeaders,
       body: JSON.stringify(data),
+      credentials: 'include',
     });
 
     if (!response.ok) {
+      signedOutOn(response, endpoint);
       throw await failure(response);
     }
 

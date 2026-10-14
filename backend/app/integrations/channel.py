@@ -6,11 +6,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+from contextlib import nullcontext
 from typing import Any, Optional
 
+from app.core.database import get_connection
 from app.integrations import store
 
 logger = logging.getLogger(__name__)
+
+# A 6-digit code with unlimited tries can be guessed; after this many wrong ones, linking stops until a new code.
+MAX_PAIRING_TRIES = 10
 
 Buttons = list[list[dict[str, str]]]  # rows of {"text": label, "data": what tapping sends back}
 
@@ -67,12 +73,28 @@ class ChatChannel:
     # -- shared --
     def _save(self, **changes: Any) -> None:
         self.config.update(changes)
-        saved = store.get_integration(self.integration_id)
+        saved = store.get_integration(self.integration_id, all_owners=True)
         if saved:
             store.update_integration(self.integration_id, config={**saved["config"], **changes})
 
+    def owner(self) -> Optional[int]:
+        """Who connected this bot: it acts for them (their chats, memory, apps), and only their reminders come here."""
+        conn = get_connection()
+        try:
+            row = conn.execute("SELECT user_id FROM integrations WHERE id = ?", (self.integration_id,)).fetchone()
+        finally:
+            conn.close()
+        return int(row["user_id"]) if row and row["user_id"] is not None else None
+
     async def receive(self, chat_id: Any, text: str = "", tap: Optional[str] = None, message_ref: Any = None) -> None:
-        """A message (``text``) or a button tap (``tap``) from ``chat_id``."""
+        """A message (``text``) or a button tap (``tap``) from ``chat_id``, handled as the bot's owner."""
+        from app.auth.owner import as_user
+
+        owner = self.owner()
+        with as_user(owner) if owner is not None else nullcontext():
+            await self._receive(chat_id, text, tap, message_ref)
+
+    async def _receive(self, chat_id: Any, text: str, tap: Optional[str], message_ref: Any) -> None:
         async with self.lock:  # one at a time: answers must follow their questions
             if chat_id != self.config.get("chat_id"):
                 await self._stranger(chat_id, text.strip())
@@ -89,13 +111,28 @@ class ChatChannel:
 
     async def _stranger(self, chat_id: Any, text: str) -> None:
         code = self.config.get("pairing_code")
-        if not self.config.get("chat_id") and code and text in (f"/start {code}", f"link {code}", code):
-            from app.agent.sessions import create_session
+        if not self.config.get("chat_id") and code:
+            if self.config.get("pairing_locked"):
+                await self.say(chat_id, "Linking is locked after too many wrong codes. Get a new code in Nexus to link this chat.")
+                return
+            if text in (f"/start {code}", f"link {code}", code):
+                from app.agent.sessions import create_session
 
-            self._save(chat_id=chat_id, session_id=create_session(title=self.NAME))
-            await self.say(chat_id, "Linked to Nexus. Message me anything, like you would in the Nexus chat. "
-                                    f"Reminders will arrive here too. Send {self.NEW_COMMANDS[0]} to start a fresh conversation.")
-            return
+                self._save(chat_id=chat_id, session_id=create_session(title=self.NAME), pairing_failures=0)
+                await self.say(chat_id, "Linked to Nexus. Message me anything, like you would in the Nexus chat. "
+                                        f"Reminders will arrive here too. Send {self.NEW_COMMANDS[0]} to start a fresh conversation.")
+                return
+            if re.search(r"\d{4,}", text):  # a try at the code
+                tries = int(self.config.get("pairing_failures") or 0) + 1
+                self._save(pairing_failures=tries, pairing_locked=tries >= MAX_PAIRING_TRIES)
+                if tries >= MAX_PAIRING_TRIES:
+                    from app.core.database import log_activity
+
+                    logger.warning("%s: linking locked after %d wrong codes", self.NAME, tries)
+                    log_activity("server_error", f"{self.NAME} linking locked",
+                                 f"{tries} wrong codes were sent to the bot. Get a new code in the Marketplace to link your chat.")
+                    await self.say(chat_id, "Linking is locked after too many wrong codes. Get a new code in Nexus to link this chat.")
+                    return
         await self.say(chat_id, "This is a private Nexus bot. To link it, use the link or code shown in Nexus.")
 
     async def _message(self, chat_id: Any, text: str) -> None:
@@ -192,9 +229,15 @@ class ChatChannel:
 
 
 def linked_channels() -> list[ChatChannel]:
+    """The linked chat apps of the person acting now (a reminder goes to its owner's apps, nobody else's)."""
+    from app.auth.context import current_user
     from app.integrations import integration_manager
 
-    return [r for r in integration_manager.runners() if isinstance(r, ChatChannel) and r.config.get("chat_id")]
+    user = current_user.get()
+    if user is None:
+        return []
+    return [r for r in integration_manager.runners()
+            if isinstance(r, ChatChannel) and r.config.get("chat_id") and r.owner() == int(user["id"])]
 
 
 def channel_for(config: dict[str, Any]) -> Optional[ChatChannel]:

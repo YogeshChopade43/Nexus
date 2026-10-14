@@ -74,6 +74,7 @@ def test_m9_stop_cancels_a_running_sync(client):
     asyncio.run(scenario())
 
 
+@pytest.mark.sqlite_only
 def test_m10_search_survives_vacuum_after_deletions(client):
     sync([listing("com.a/mcp", "Aardvark"), listing("com.b/mcp", "Badger"), listing("com.c/mcp", "Cheetah")])
     sync([{**listing("com.a/mcp", "Aardvark"), "_meta": {OFFICIAL: {"status": "deleted", "isLatest": True}}}])

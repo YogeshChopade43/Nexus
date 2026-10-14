@@ -14,7 +14,7 @@ from array import array
 from datetime import datetime, timezone
 from typing import Any, Iterable, Literal, Optional
 
-from app.core.database import get_connection
+from app.core.database import get_connection, is_postgres
 from app.rag.chunking import context_header
 from app.rag.embeddings import DIM
 from app.rag.models import ChunkDraft, Hit
@@ -46,6 +46,8 @@ def _load_vec(conn: sqlite3.Connection) -> bool:
 
 def vector_backend() -> Literal["sqlite-vec", "python"]:
     global _backend
+    if is_postgres():
+        return "python"  # ponytail: Python cosine scan on PostgreSQL; pgvector when collections get large
     if _backend is None:
         probe = sqlite3.connect(":memory:")
         _backend = "sqlite-vec" if _load_vec(probe) else "python"
@@ -63,6 +65,8 @@ def connect() -> sqlite3.Connection:
 
 
 def ensure_vector_table(conn: sqlite3.Connection) -> None:
+    if is_postgres():
+        return  # in schema_postgres.sql
     if vector_backend() == "sqlite-vec":
         conn.execute(f"CREATE VIRTUAL TABLE IF NOT EXISTS chunk_vec USING vec0("
                      f"workspace_id integer partition key, collection_id integer, embedding float[{DIM}])")
@@ -73,6 +77,8 @@ def ensure_vector_table(conn: sqlite3.Connection) -> None:
 
 
 def _vector_tables(conn: sqlite3.Connection) -> set[str]:
+    if is_postgres():
+        return {"chunk_vectors"}
     return {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE name IN ('chunk_vec', 'chunk_vectors')")}
 
 
@@ -81,6 +87,23 @@ def _blob(vector: list[float]) -> bytes:
 
 
 # ---- collections --------------------------------------------------------------------------
+
+def user_workspace() -> int:
+    """The signed-in person's workspace (their libraries, chat files and passages), made on first use."""
+    from app.auth.owner import owner_id
+
+    owner = owner_id()
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT id FROM workspaces WHERE user_id = ? ORDER BY id LIMIT 1", (owner,)).fetchone()
+        if row:
+            return int(row[0])
+        cursor = conn.execute("INSERT INTO workspaces (name, user_id) VALUES (?, ?)", ("Personal", owner))
+        conn.commit()
+        return int(cursor.lastrowid)
+    finally:
+        conn.close()
+
 
 def create_collection(workspace_id: int, name: str, kind: str = "library", session_id: Optional[str] = None) -> dict:
     name = name.strip()
@@ -133,7 +156,7 @@ def list_collections(workspace_id: int) -> list[dict]:
             "SELECT c.*, COUNT(d.id) AS documents, "
             "SUM(CASE WHEN d.status = 'ready' THEN 1 ELSE 0 END) AS ready "
             "FROM collections c LEFT JOIN documents d ON d.collection_id = c.id "
-            "WHERE c.workspace_id = ? AND c.kind = 'library' GROUP BY c.id ORDER BY c.name COLLATE NOCASE",
+            "WHERE c.workspace_id = ? AND c.kind = 'library' GROUP BY c.id ORDER BY lower(c.name)",
             (workspace_id,),
         ).fetchall()
         return [{**dict(r), "ready": r["ready"] or 0} for r in rows]
@@ -386,6 +409,16 @@ def keyword_search(workspace_id: int, collection_ids: list[int], query: str, lim
     marks = ",".join("?" * len(collection_ids))
     conn = get_connection()
     try:
+        if is_postgres():
+            words = match.replace('"', "").replace(" OR ", " | ")  # the same words, as a tsquery
+            rows = conn.execute(
+                f"SELECT {_HIT_COLUMNS}, -ts_rank(chunk_fts.tsv, to_tsquery('english', ?)) AS rank FROM chunk_fts "
+                f"JOIN chunks c ON c.id = chunk_fts.rowid JOIN documents d ON d.id = c.document_id "
+                f"WHERE chunk_fts.tsv @@ to_tsquery('english', ?) AND d.workspace_id = ? AND d.collection_id IN ({marks}) "
+                f"AND d.status = 'ready' ORDER BY rank LIMIT ?",
+                (words, words, workspace_id, *collection_ids, limit),
+            ).fetchall()
+            return [_hit(r, -float(r["rank"])) for r in rows]
         rows = conn.execute(
             f"SELECT {_HIT_COLUMNS}, bm25(chunk_fts) AS rank FROM chunk_fts "
             f"JOIN chunks c ON c.id = chunk_fts.rowid JOIN documents d ON d.id = c.document_id "

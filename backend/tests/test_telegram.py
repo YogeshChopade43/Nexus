@@ -148,7 +148,10 @@ def test_question_cards_are_buttons_or_typed_answers(client, bot, llm):
 def test_reminders_reach_the_phone(client, bot):
     item, runner = bot
     link(client, item, runner)
-    client.portal.call(get_tool_registry().get_tool("nexus__notify").execute, {"title": "Take your medicines", "message": "2 tablets"})
+    from app.auth.owner import as_user
+
+    with as_user(client.get("/api/auth/me").json()["id"]):  # a reminder runs as its owner (a workflow or chat)
+        client.portal.call(get_tool_registry().get_tool("nexus__notify").execute, {"title": "Take your medicines", "message": "2 tablets"})
     assert "Take your medicines" in texts()[-1] and "2 tablets" in texts()[-1]
 
 

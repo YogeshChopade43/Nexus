@@ -107,13 +107,21 @@ def matching_workflows(event: TriggerEvent) -> list[TriggerMatch]:
     try:
         rows = conn.execute(
             """
-            SELECT id, trigger FROM workflows
+            SELECT id, trigger, user_id FROM workflows
             WHERE enabled = 1 AND is_active = 1 AND trigger IS NOT NULL AND trigger != 'manual'
             ORDER BY id
             """
         ).fetchall()
+        admins = {r["id"] for r in conn.execute("SELECT id FROM users WHERE is_admin = 1").fetchall()}
     finally:
         conn.close()
+    from app.auth.owner import app_owners
+
+    # Only the workflows of whoever connected the app; an instance-wide source (a webhook secret set in the
+    # deployment) starts the admins' workflows.
+    owners = app_owners()
+    allowed = {owners[event.app_id]} if event.app_id in owners else admins
+    rows = [row for row in rows if row["user_id"] in allowed or (row["user_id"] is None and not allowed)]
 
     matches = []
     for row in rows:

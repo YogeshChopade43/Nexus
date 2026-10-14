@@ -22,10 +22,16 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+def _owner() -> int:
+    from app.auth.owner import owner_id
+
+    return owner_id()
+
+
 def list_memories() -> list[dict[str, Any]]:
     conn = get_connection()
     try:
-        return [dict(r) for r in conn.execute("SELECT * FROM memories ORDER BY id").fetchall()]
+        return [dict(r) for r in conn.execute("SELECT * FROM memories WHERE user_id = ? ORDER BY id", (_owner(),)).fetchall()]
     finally:
         conn.close()
 
@@ -36,12 +42,13 @@ def add_memory(content: str, source: str = "manual") -> dict[str, Any]:
         raise ValueError("Nothing to remember")
     conn = get_connection()
     try:
-        existing = conn.execute("SELECT * FROM memories WHERE lower(content) = lower(?)", (content,)).fetchone()
+        existing = conn.execute("SELECT * FROM memories WHERE lower(content) = lower(?) AND user_id = ?", (content, _owner())).fetchone()
         if existing:
             return dict(existing)
-        if conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0] >= MAX_MEMORIES:
+        if conn.execute("SELECT COUNT(*) FROM memories WHERE user_id = ?", (_owner(),)).fetchone()[0] >= MAX_MEMORIES:
             raise ValueError(f"Memory is full ({MAX_MEMORIES} facts). Remove some in Knowledge > Memory.")
-        cursor = conn.execute("INSERT INTO memories (content, created_at, source) VALUES (?, ?, ?)", (content, _now(), source))
+        cursor = conn.execute("INSERT INTO memories (content, created_at, source, user_id) VALUES (?, ?, ?, ?)",
+                              (content, _now(), source, _owner()))
         conn.commit()
         return dict(conn.execute("SELECT * FROM memories WHERE id = ?", (cursor.lastrowid,)).fetchone())
     finally:
@@ -51,7 +58,7 @@ def add_memory(content: str, source: str = "manual") -> dict[str, Any]:
 def delete_memory(memory_id: int) -> bool:
     conn = get_connection()
     try:
-        deleted = conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,)).rowcount
+        deleted = conn.execute("DELETE FROM memories WHERE id = ? AND user_id = ?", (memory_id, _owner())).rowcount
         conn.commit()
         return deleted > 0
     finally:
@@ -260,7 +267,10 @@ def _find_workflow(ref: str) -> dict[str, Any]:
     """A workflow by number, exact name, or a part of its name that only one workflow has."""
     conn = get_connection()
     try:
-        rows = [dict(r) for r in conn.execute("SELECT id, name FROM workflows ORDER BY id").fetchall()]
+        from app.auth.owner import owner_id
+
+        rows = [dict(r) for r in conn.execute("SELECT id, name FROM workflows WHERE user_id = ? ORDER BY id",
+                                              (owner_id(),)).fetchall()]
     finally:
         conn.close()
     ref = ref.strip().lstrip("#")

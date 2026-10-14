@@ -8,6 +8,7 @@ from typing import Any
 
 from fastapi import APIRouter, Query
 
+from app.auth.owner import owner_id
 from app.core.database import get_connection
 from app.llm.metering import tokens_used_today
 
@@ -25,13 +26,14 @@ def dashboard(days: int = Query(14, ge=1, le=90)) -> dict[str, Any]:
     try:
         runs = conn.execute(
             "SELECT workflow_runs.status, workflow_runs.started_at, workflow_runs.events, workflows.name, workflows.id AS wid "
-            "FROM workflow_runs JOIN workflows ON workflows.id = workflow_runs.workflow_id WHERE started_at >= ?",
-            (since,),
+            "FROM workflow_runs JOIN workflows ON workflows.id = workflow_runs.workflow_id WHERE started_at >= ? "
+            "AND workflows.user_id = ?",
+            (since, owner_id()),
         ).fetchall()
         usage = conn.execute(
             "SELECT substr(timestamp, 1, 10) AS day, model, SUM(input_tokens) AS input, SUM(output_tokens) AS output, "
-            "MAX(estimated) AS estimated FROM llm_usage WHERE timestamp >= ? GROUP BY day, model",
-            (since,),
+            "MAX(estimated) AS estimated FROM llm_usage WHERE timestamp >= ? AND user_id = ? GROUP BY day, model",
+            (since, owner_id()),
         ).fetchall()
     finally:
         conn.close()
@@ -119,8 +121,8 @@ def system_status() -> dict[str, Any]:
     conn = get_connection()
     try:
         row = conn.execute("SELECT r.workflow_id, w.name, r.started_at, r.error FROM workflow_runs r "
-                           "JOIN workflows w ON w.id = r.workflow_id WHERE r.status = 'failed' "
-                           "ORDER BY r.started_at DESC LIMIT 1").fetchone()
+                           "JOIN workflows w ON w.id = r.workflow_id WHERE r.status = 'failed' AND w.user_id = ? "
+                           "ORDER BY r.started_at DESC LIMIT 1", (owner_id(),)).fetchone()
     finally:
         conn.close()
     return {

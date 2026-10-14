@@ -83,7 +83,7 @@ def test_delete_cascades(client):
     try:
         assert conn.execute("SELECT COUNT(*) FROM chunks WHERE document_id = ?", (doc["id"],)).fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM document_files WHERE document_id = ?", (doc["id"],)).fetchone()[0] == 0
-        assert conn.execute("SELECT COUNT(*) FROM chunk_fts WHERE chunk_fts MATCH 'ephemeral'").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM chunk_fts WHERE text LIKE '%ephemeral%'").fetchone()[0] == 0
         assert store.vector_search(1, [lib["id"]], embed_cached(["ephemeral"])[0]) == []
     finally:
         conn.close()

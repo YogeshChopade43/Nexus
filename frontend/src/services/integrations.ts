@@ -47,6 +47,8 @@ export const integrationService = {
   update: (id: number, changes: { name?: string; enabled?: boolean; config?: Record<string, unknown> }) =>
     api.patch<Integration>(`/api/integrations/${id}`, changes),
   test: (id: number) => api.post<{ ok: boolean; message: string }>(`/api/integrations/${id}/test`),
+  /** A chat app's fresh linking code (also unlocks linking after too many wrong codes). */
+  newPairingCode: (id: number) => api.post<Integration>(`/api/integrations/${id}/pairing-code`),
   remove: (id: number) => api.delete(`/api/integrations/${id}`),
   googleStart: (name: string, config: Record<string, unknown>) =>
     api.post<{ integration: Integration; auth_url: string }>('/api/integrations/google/start', { name, config }),

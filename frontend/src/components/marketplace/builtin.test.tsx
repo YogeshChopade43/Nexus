@@ -148,3 +148,15 @@ test('a link can open an integration straight away (/servers?connect=telegram)',
   render(<MemoryRouter initialEntries={['/servers?connect=telegram']}><MarketplacePage /></MemoryRouter>);
   expect(await screen.findByRole('dialog', { name: 'Telegram' })).toBeInTheDocument();
 });
+
+test('when linking is locked after wrong codes, it says so and offers a new code', async () => {
+  const calls = serve({});
+  const telegramKind: IntegrationKind = { id: 'telegram', title: 'Telegram', description: '', icon: 'Send', fields: [] };
+  render(<IntegrationModal kind={telegramKind} onClose={() => {}} onChanged={() => {}} integrations={[{
+    ...connected, id: 4, kind: 'telegram', name: 'Telegram', status: 'needs_auth', tools: [],
+    settings: { bot_username: 'nexus_test_bot', pairing_code: '123456', pairing_locked: true } }]} />);
+  expect(screen.getByText(/too many wrong codes/i)).toBeInTheDocument();
+  expect(screen.queryByRole('link', { name: /Open @nexus_test_bot/ })).toBeNull();  // the old code is no use now
+  fireEvent.click(screen.getByRole('button', { name: 'Get a new code' }));
+  await waitFor(() => expect(calls.some(c => c.method === 'POST' && c.path === '/api/integrations/4/pairing-code')).toBe(true));
+});

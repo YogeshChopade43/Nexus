@@ -1,11 +1,12 @@
-import { api } from './api';
+import { api, signedOutOn } from './api';
 import type { ChunkView, Library, RagDocument, RagStatus, SearchResult } from '../types/rag';
 
 /** Multipart upload (the JSON api helper can't send files). */
 export async function uploadFiles<T = RagDocument[]>(endpoint: string, files: File[]): Promise<T> {
   const form = new FormData();
   for (const file of files) form.append('file', file, file.name);
-  const response = await fetch(`${api.getBaseUrl()}${endpoint}`, { method: 'POST', body: form });
+  const response = await fetch(`${api.getBaseUrl()}${endpoint}`, { method: 'POST', body: form, credentials: 'include' });
+  signedOutOn(response, endpoint);
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw { code: `HTTP_${response.status}`, message: typeof body.detail === 'string' ? body.detail : response.statusText };

@@ -262,3 +262,16 @@ def test_email_drafts_go_to_the_drafts_folder(client):
     assert mailbox == '"[Gmail]/Drafts"' and "Draft" in flags
     assert b"1 works" in raw and b"ravi@example.com" in raw
     client.delete(f"/api/integrations/{created['id']}")
+
+
+def test_rss_feed_with_entity_expansion_is_refused():
+    """A feed declaring XML entities (billion-laughs) is rejected instead of being expanded in the polling worker."""
+    from app.integrations import rss
+
+    bomb = (
+        '<?xml version="1.0"?>'
+        '<!DOCTYPE rss [<!ENTITY a "AAAAAAAAAA"><!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;">]>'
+        '<rss version="2.0"><channel><title>&b;</title></channel></rss>'
+    )
+    with pytest.raises(ValueError):
+        rss.parse(bomb)

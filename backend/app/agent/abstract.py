@@ -487,7 +487,9 @@ class BaseAgent(Agent):
         """Run one tool call, record the event, and return the text the LLM sees."""
         try:
             tool = self._tool_registry.get_tool(tool_name)
-            if not self._is_app_connected(tool.app_id):
+            from app.auth.owner import owns_app
+
+            if not owns_app(tool.app_id) or not self._is_app_connected(tool.app_id):  # someone else's app: never
                 raise AppNotConnectedError(f"{tool.app_id} is not connected")
             # A required value left out: don't send the app a broken request; let the model fill it in (or ask).
             required = (getattr(tool, "parameters_schema", None) or {}).get("required") or []

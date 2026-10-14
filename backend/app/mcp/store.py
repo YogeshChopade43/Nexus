@@ -8,7 +8,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from app.core.database import get_connection
+from app.core.database import _acting_user_id, get_connection
 from app.core.secrets import decrypt_config, encrypt_config
 
 MASK = "***"
@@ -110,18 +110,29 @@ def slugify(name: str, taken: set[str]) -> str:
     return slug
 
 
-def list_servers() -> list[ServerConfig]:
+def _scope(all_owners: bool) -> tuple[str, tuple]:
+    """Only the signed-in person's rows, unless a background job (connecting everyone's apps) asks for all."""
+    if all_owners:
+        return "", ()
+    from app.auth.owner import owner_id
+
+    return " AND user_id = ?", (owner_id(),)
+
+
+def list_servers(all_owners: bool = False) -> list[ServerConfig]:
+    where, args = _scope(all_owners)
     conn = get_connection()
     try:
-        return [_from_row(r) for r in conn.execute("SELECT * FROM mcp_servers ORDER BY name").fetchall()]
+        return [_from_row(r) for r in conn.execute(f"SELECT * FROM mcp_servers WHERE 1 = 1{where} ORDER BY name", args).fetchall()]
     finally:
         conn.close()
 
 
-def get_server(server_id: int) -> Optional[ServerConfig]:
+def get_server(server_id: int, all_owners: bool = False) -> Optional[ServerConfig]:
+    where, args = _scope(all_owners)
     conn = get_connection()
     try:
-        row = conn.execute("SELECT * FROM mcp_servers WHERE id = ?", (server_id,)).fetchone()
+        row = conn.execute(f"SELECT * FROM mcp_servers WHERE id = ?{where}", (server_id, *args)).fetchone()
         return _from_row(row) if row else None
     finally:
         conn.close()
@@ -141,25 +152,25 @@ def create_server(data: dict[str, Any]) -> ServerConfig:
         cursor = conn.execute(
             """
             INSERT INTO mcp_servers (slug, name, transport, command, args, env, url, headers, enabled, tool_policies,
-                                     registry_name)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                     registry_name, user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 slugify(data["name"], taken), data["name"], data["transport"], data.get("command", ""),
                 json.dumps(data.get("args", [])), encrypt_config(data.get("env", {})), data.get("url", ""),
                 encrypt_config(data.get("headers", {})), int(data.get("enabled", True)),
-                json.dumps(data.get("tool_policies") or {}), data.get("registry_name", ""),
+                json.dumps(data.get("tool_policies") or {}), data.get("registry_name", ""), _acting_user_id(),
             ),
         )
         conn.commit()
         server_id = cursor.lastrowid
     finally:
         conn.close()
-    return get_server(server_id)
+    return get_server(server_id, all_owners=True)
 
 
 def update_server(server_id: int, data: dict[str, Any]) -> Optional[ServerConfig]:
-    current = get_server(server_id)
+    current = get_server(server_id, all_owners=True)  # routes check ownership first
     if current is None:
         return None
     env = _merge_secrets(data["env"], current.env) if "env" in data else current.env
@@ -183,7 +194,7 @@ def update_server(server_id: int, data: dict[str, Any]) -> Optional[ServerConfig
         conn.commit()
     finally:
         conn.close()
-    return get_server(server_id)
+    return get_server(server_id, all_owners=True)
 
 
 def delete_server(server_id: int) -> bool:

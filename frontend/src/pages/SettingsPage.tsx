@@ -7,7 +7,10 @@ import { Input } from '../components/ui/Input';
 import { TimezoneSelect } from '../components/ui/TimezoneSelect';
 import { Separator } from '../components/ui/Separator';
 import { Badge } from '../components/ui/Badge';
-import { User, Moon, Sun, Monitor, Cpu, Download } from 'lucide-react';
+import { User, Moon, Sun, Monitor, Cpu, Download, UserCircle, ShieldCheck } from 'lucide-react';
+import { AccountSettings } from '../components/settings/AccountSettings';
+import { AdminSettings } from '../components/settings/AdminSettings';
+import { useAuth } from '../hooks/useAuth';
 import { useSearchParams } from 'react-router-dom';
 import { useSettings } from '../hooks/useSettings';
 import { useLLM } from '../hooks/useLLM';
@@ -18,6 +21,8 @@ import { api } from '../services/api';
 const tabs = [
   { id: 'general', label: 'General', icon: User },
   { id: 'ai', label: 'AI', icon: Cpu },
+  { id: 'account', label: 'Account', icon: UserCircle },
+  { id: 'admin', label: 'Admin', icon: ShieldCheck },
 ] as const;
 
 type TabId = typeof tabs[number]['id'];
@@ -32,7 +37,9 @@ export function SettingsPage() {
   const { theme, setTheme } = useSettings();
   const { configs, providerInfo, loading, error: llmError, createConfig, updateConfig, deleteConfig, refreshConfigs, testChat } = useLLM();
   const [searchParams] = useSearchParams();
-  const requested = tabs.find(t => t.id === searchParams.get('tab'))?.id;
+  const { user } = useAuth();
+  const visibleTabs = tabs.filter(t => t.id !== 'admin' || user?.isAdmin);
+  const requested = visibleTabs.find(t => t.id === searchParams.get('tab'))?.id;
   const [activeTab, setActiveTab] = useState<TabId>(requested ?? 'general');
   const [timezone, setTimezone] = useState('');
   const [retentionDays, setRetentionDays] = useState('30');
@@ -71,7 +78,7 @@ export function SettingsPage() {
         <aside className="lg:col-span-1">
           <Card padding="none">
             <nav className="p-1.5 space-y-0.5" aria-label="Settings sections">
-              {tabs.map(tab => {
+              {visibleTabs.map(tab => {
                 const Icon = tab.icon;
                 return (
                   <button
@@ -189,6 +196,9 @@ export function SettingsPage() {
               </CardContent>
             </Card>
           )}
+
+          {activeTab === 'account' && <AccountSettings />}
+          {activeTab === 'admin' && user?.isAdmin && <AdminSettings />}
 
           {activeTab === 'ai' && (
             <>

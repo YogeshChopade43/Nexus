@@ -9,11 +9,11 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
+from app.rag.store import user_workspace
 from app.core.database import get_connection
 from app.rag import ingest, store
 from app.rag.embeddings import models_ready
 from app.rag.loaders import UnsupportedFile
-from app.rag.models import DEFAULT_WORKSPACE
 from app.rag.retrieve import retrieve
 
 router = APIRouter(prefix="/api/rag", tags=["rag"])
@@ -35,14 +35,14 @@ class MoveIn(BaseModel):
 
 def _collection_or_404(collection_id: int) -> dict:
     collection = store.get_collection(collection_id)
-    if collection is None or collection["workspace_id"] != DEFAULT_WORKSPACE:
+    if collection is None or collection["workspace_id"] != user_workspace():
         raise HTTPException(status_code=404, detail="Library not found")
     return collection
 
 
 def _document_or_404(document_id: int) -> dict:
     document = store.get_document(document_id)
-    if document is None or document["workspace_id"] != DEFAULT_WORKSPACE:
+    if document is None or document["workspace_id"] != user_workspace():
         raise HTTPException(status_code=404, detail="Document not found")
     return document
 
@@ -73,7 +73,7 @@ def _submit_all(collection_id: int, files: list[tuple[str, bytes]]) -> list[dict
     documents = []
     for name, data in files:
         try:
-            documents.append(ingest.submit(DEFAULT_WORKSPACE, collection_id, name, data))
+            documents.append(ingest.submit(user_workspace(), collection_id, name, data))
         except (UnsupportedFile, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc))
     return documents
@@ -83,13 +83,13 @@ def _submit_all(collection_id: int, files: list[tuple[str, bytes]]) -> list[dict
 
 @router.get("/collections")
 def collections() -> list[dict[str, Any]]:
-    return store.list_collections(DEFAULT_WORKSPACE)
+    return store.list_collections(user_workspace())
 
 
 @router.post("/collections")
 def create_collection(body: CollectionIn) -> dict[str, Any]:
     try:
-        return store.create_collection(DEFAULT_WORKSPACE, body.name)
+        return store.create_collection(user_workspace(), body.name)
     except ValueError as exc:
         raise _name_error(exc)
 
@@ -125,7 +125,7 @@ async def upload(collection_id: int, request: Request) -> list[dict[str, Any]]:
 @router.post("/chats/{session_id}/documents")
 async def upload_to_chat(session_id: str, request: Request) -> list[dict[str, Any]]:
     """Files attached in a conversation: searchable only in that conversation."""
-    collection = store.chat_collection(DEFAULT_WORKSPACE, session_id)
+    collection = store.chat_collection(user_workspace(), session_id)
     return _submit_all(collection["id"], await _files(request))
 
 
@@ -189,9 +189,9 @@ def status() -> dict[str, Any]:
     conn = get_connection()
     try:
         jobs = dict(conn.execute("SELECT status, COUNT(*) FROM ingestion_jobs WHERE workspace_id = ? GROUP BY status",
-                                 (DEFAULT_WORKSPACE,)).fetchall())
+                                 (user_workspace(),)).fetchall())
         docs = dict(conn.execute("SELECT status, COUNT(*) FROM documents WHERE workspace_id = ? GROUP BY status",
-                                 (DEFAULT_WORKSPACE,)).fetchall())
+                                 (user_workspace(),)).fetchall())
     finally:
         conn.close()
     return {

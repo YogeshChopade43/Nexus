@@ -34,6 +34,7 @@ TOLERANCE = 0.05
 def _golden_database() -> Iterator[int]:
     """A temporary database holding the golden corpus; yields the library id."""
     previous = os.environ.get("DATABASE_PATH")
+    database_url = os.environ.pop("DATABASE_URL", None)  # never the real (PostgreSQL) database
     os.environ["DATABASE_PATH"] = str(Path(tempfile.mkdtemp(prefix="nexus-rag-eval-")) / "eval.db")
     try:
         from app.core.database import init_db
@@ -53,6 +54,8 @@ def _golden_database() -> Iterator[int]:
             raise RuntimeError(f"golden documents failed to index: {failed}")
         yield library["id"]
     finally:
+        if database_url is not None:
+            os.environ["DATABASE_URL"] = database_url
         if previous is None:
             os.environ.pop("DATABASE_PATH", None)
         else:
@@ -70,7 +73,7 @@ def _ranked(mode: str, question: str, library_id: int):
     from app.rag.retrieve import retrieve, rrf
 
     if mode == "hybrid+rerank":
-        result = retrieve(question, collection_ids=[library_id])
+        result = retrieve(question, workspace_id=1, collection_ids=[library_id])  # the golden set lives in workspace 1
         return [(s.document_name, s.text) for s in result.sources], result.insufficient or result.low_confidence
     keyword = store.keyword_search(1, [library_id], question, 40) if mode in ("keyword", "hybrid") else []
     vector = store.vector_search(1, [library_id], embed_cached([question])[0], 40) if mode in ("vector", "hybrid") else []

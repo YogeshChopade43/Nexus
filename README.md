@@ -36,10 +36,11 @@ Ask in plain words: *"What are my open GitHub pull requests?"*, *"What does my c
 ```bash
 git clone https://github.com/YogeshChopade43/Nexus.git
 cd Nexus
-docker compose up --build
+docker build -t nexus .
+docker run -p 127.0.0.1:8000:8000 -v nexus-data:/app/backend/data nexus
 ```
 
-Open **http://localhost:8000**, follow the *Getting started* checklist to add an AI provider, then connect an app from the Marketplace.
+Open **http://localhost:8000** and create your account: the first account owns this Nexus. Then follow the *Getting started* checklist to add an AI provider, and connect an app from the Marketplace. To put Nexus on the internet for others, see [Publishing Nexus](#publishing-nexus).
 
 **For development** (Python 3.11 and Node.js 20):
 
@@ -47,7 +48,36 @@ Open **http://localhost:8000**, follow the *Getting started* checklist to add an
 python start.py    # first run sets up backend/.venv and node_modules, then starts both; open http://localhost:5173
 ```
 
-> Nexus is single-user for now and has no login, so keep it on your own machine. Docker binds it to `127.0.0.1` only.
+## Publishing Nexus
+
+`docker-compose.yml` runs Nexus for other people on your own domain, with three containers:
+- Nexus itself;
+- PostgreSQL;
+- Caddy, which gets the HTTPS certificate automatically.
+
+1. Point your domain's DNS at the server, with ports 80 and 443 open.
+2. Next to `docker-compose.yml`, create `.env`:
+   ```bash
+   NEXUS_DOMAIN=nexus.example.com
+   NEXUS_SECRET_KEY=...       # python -c "import secrets; print(secrets.token_urlsafe(32))". Keep a copy: it decrypts stored keys
+   POSTGRES_PASSWORD=...      # another long random string
+   # Optional: NEXUS_SIGNUPS=open, email (NEXUS_SMTP_HOST, NEXUS_SMTP_PORT, NEXUS_SMTP_USER, NEXUS_SMTP_PASSWORD,
+   # NEXUS_MAIL_FROM, or NEXUS_RESEND_API_KEY) and Google sign-in (NEXUS_GOOGLE_CLIENT_ID, NEXUS_GOOGLE_CLIENT_SECRET)
+   ```
+3. Run `docker compose up -d --build`, open `https://<your domain>` and create the first account. It's the admin.
+
+**Settings › Admin** has three parts:
+- a checklist of what the deployment still needs (HTTPS, email, domain, database, encryption key);
+- every account, with its token use and storage, where you can disable an account or make it an admin;
+- sign-ups and the storage limit per person (1 GB by default; admins have none).
+
+Everyone's data is private to their account. Each person brings their own AI keys.
+
+Back up with `docker compose exec db pg_dump -U nexus nexus > nexus.sql`, and keep `NEXUS_SECRET_KEY` with the backup.
+
+The built-in web browser needs Chrome, which isn't in the image. In Docker, the agent reads pages with the web reader instead.
+
+For Google sign-in, set the OAuth client's redirect URI to `https://<your domain>/api/auth/google/callback`.
 
 ## Why Nexus?
 
@@ -133,7 +163,18 @@ Design: `docs/superpowers/specs/2026-10-08-production-rag-design.md`. Code: `bac
 
 ## Security
 
-- Nexus has no login yet: keep it on your own machine. The backend binds to `127.0.0.1` by default.
+- **Accounts:** email and password (scrypt), or Google. Sessions use HttpOnly cookies.
+  - The first account is the admin.
+  - Sign-ups are closed unless the admin or `NEXUS_SIGNUPS=open` opens them.
+  - Failed sign-ins are rate-limited per address.
+  - With email configured, new accounts verify their address.
+- **Data per account:** chats, workflows, documents, files, apps, AI providers, settings and memory. Nobody else can see them, the admin included.
+- **A shared server's network:** apps, models, feeds, HTTP steps, the web reader and the browser can reach private addresses (this machine, the LAN, cloud metadata) only for the admin. Everyone else reaches the public internet only.
+- **Browser protections:**
+  - security headers on every response: nosniff, `SAMEORIGIN` framing, a referrer policy, and HSTS over HTTPS;
+  - a Content-Security-Policy on the app;
+  - only known host names are answered (`NEXUS_ALLOWED_HOSTS`);
+  - other sites can't make changes (Origin checks).
 - **Machine-level actions** (command-launched MCP servers, backups) are allowed only from this machine. `NEXUS_TRUSTED_NETWORKS` (comma-separated, e.g. `172.16.0.0/12`) counts other networks as this machine; the Docker setup uses it.
 - **OS keychain**: `NEXUS_KEYCHAIN=true` keeps the generated `NEXUS_SECRET_KEY` in Windows Credential Manager / macOS Keychain / Secret Service instead of `data/.nexus_secret_key` (an existing key file is moved there).
 
@@ -190,6 +231,7 @@ Schedules and app checks only run while the workflow is **Active**.
 - `RATE_LIMIT` (default `300/minute`) sets the per-client API rate limit.
 - `NEXUS_KEYCHAIN`, `NEXUS_TRUSTED_NETWORKS`, `NEXUS_PUBLIC_URL`, `NEXUS_RESUME_RUNS`: see the sections above.
 - `NEXUS_STATIC_DIR`: serve a built frontend from the backend (the Docker image sets it; build with `VITE_API_URL=same-origin`).
+- `DATABASE_URL=postgresql://…`: PostgreSQL instead of the SQLite file. The schema is created on first start. It needs `NEXUS_SECRET_KEY` set explicitly.
 
 ## Tests
 
@@ -198,6 +240,8 @@ cd backend
 .\.venv311\Scripts\python -m pytest tests
 .\.venv311\Scripts\python smoke_test.py
 ```
+
+`NEXUS_TEST_POSTGRES=1` runs the same suite on a private, throwaway PostgreSQL (`pgserver`, in `requirements-dev.txt`).
 
 The tests launch a small fixture MCP server (`tests/fixtures/echo_mcp_server.py`) over both stdio and HTTP. Test dependencies: `pip install -r requirements-dev.txt`.
 

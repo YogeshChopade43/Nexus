@@ -22,6 +22,10 @@ from app.api.routes import (
     integrations_router,
     briefing_router,
     run_once_router,
+    auth_router,
+    auth_google_router,
+    account_router,
+    admin_router,
     files_router,
     mcp_router,
     health_router,
@@ -127,6 +131,12 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    from fastapi.responses import JSONResponse
+
+    from app.quota import StorageFull
+
+    app.add_exception_handler(StorageFull, lambda request, exc: JSONResponse(status_code=413, content={"detail": str(exc)}))
+
     for router in (
         health_router,
         dashboard_router,
@@ -136,6 +146,10 @@ def create_app() -> FastAPI:
         integrations_router,
         briefing_router,
         run_once_router,
+        auth_router,
+        auth_google_router,
+        account_router,
+        admin_router,
         files_router,
         mcp_router,
         agent_router,
@@ -162,6 +176,11 @@ def _serve_frontend(app: FastAPI) -> None:
     from fastapi.responses import FileResponse, RedirectResponse, Response
 
     root = Path(static_dir).resolve()
+    # The app's own scripts only; inline styles (React) and Google Fonts; pictures from anywhere (chat answers);
+    # previews of files in frames from this server; no plugins; framed by no other site.
+    policy = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+              "font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; connect-src 'self'; "
+              "frame-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'")
 
     @app.get("/{path:path}", include_in_schema=False)
     def frontend(path: str) -> Response:
@@ -170,9 +189,9 @@ def _serve_frontend(app: FastAPI) -> None:
         if path.startswith("api/"):
             raise HTTPException(status_code=404, detail="Not found")
         file = (root / path).resolve()
-        if path and file.is_file() and file.is_relative_to(root):
+        if path and file.is_file() and file.is_relative_to(root) and file != root / "index.html":
             return FileResponse(file)
-        return FileResponse(root / "index.html")  # client-side routes like /workflows
+        return FileResponse(root / "index.html", headers={"Content-Security-Policy": policy})  # client-side routes too
 
 
 app = create_app()

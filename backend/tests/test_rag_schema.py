@@ -21,6 +21,7 @@ def client():
         yield c
 
 
+@pytest.mark.sqlite_only
 def test_migration_creates_rag_tables_and_retires_legacy(client):
     conn = get_connection()
     try:

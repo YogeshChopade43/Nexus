@@ -78,3 +78,17 @@ def test_detect_kind():
     assert detect_kind("x.md", b"# hi") == "markdown"
     assert detect_kind("x.json", b'{"a": 1}') == "text"
     assert detect_kind("noext", make_pdf(["hi"])) == "pdf"
+
+
+def test_rejects_zip_bomb_before_decompressing_it():
+    """A small Office/zip upload that declares gigabytes of contents is refused (shared-worker memory DoS)."""
+    import io
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", b"<Types>" + b"A" * (300 * 1024 * 1024) + b"</Types>")  # ~300 MB of 'A'
+    bomb = buffer.getvalue()
+    assert len(bomb) < 1_000_000  # compresses tiny
+    with pytest.raises(UnsupportedFile, match="too large|too big"):
+        load("bomb.docx", bomb)

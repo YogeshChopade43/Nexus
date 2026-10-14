@@ -20,7 +20,7 @@ def client():
 
 
 def add(collection_id: int, name: str, text: str) -> dict:
-    doc = ingest.submit(1, collection_id, name, text.encode())
+    doc = ingest.submit(store.user_workspace(), collection_id, name, text.encode())
     deadline = time.time() + 10
     while time.time() < deadline:
         current = store.get_document(doc["id"])
@@ -38,7 +38,7 @@ def test_rrf_math():
 
 
 def test_hybrid_ranks_exact_ids_and_wording_variants(client):
-    lib = store.create_collection(1, "retrieve hybrid")
+    lib = store.create_collection(store.user_workspace(), "retrieve hybrid")
     add(lib["id"], "errors.md", "# Errors\n\nError code E-4012 means the token expired.")
     add(lib["id"], "returns.md", "# Returns\n\nRefunds are accepted within 30 days of delivery.")
     top = retrieve("E-4012", collection_ids=[lib["id"]]).sources[0]
@@ -52,7 +52,7 @@ def test_hybrid_ranks_exact_ids_and_wording_variants(client):
 
 
 def test_diversity_cap(client):
-    lib = store.create_collection(1, "retrieve diversity")
+    lib = store.create_collection(store.user_workspace(), "retrieve diversity")
     add(lib["id"], "repeat.md", "# Lighthouse\n\n" + " ".join(f"The lighthouse keeper logs entry {i}." for i in range(400)))
     add(lib["id"], "other.md", "# Other\n\nThe old lighthouse keeper retired to the harbour.")
     result = retrieve("lighthouse keeper", collection_ids=[lib["id"]])
@@ -60,7 +60,7 @@ def test_diversity_cap(client):
 
 
 def test_parent_expansion_budget(client):
-    lib = store.create_collection(1, "retrieve budget")
+    lib = store.create_collection(store.user_workspace(), "retrieve budget")
     for i in range(6):
         add(lib["id"], f"part{i}.md", f"# Part {i}\n\n" + " ".join(f"Quartz fact {i}-{j} is noted." for j in range(250)))
     result = retrieve("quartz fact", collection_ids=[lib["id"]], budget_tokens=3000)
@@ -72,14 +72,14 @@ def test_parent_expansion_budget(client):
 
 
 def test_low_confidence_keeps_fused_order_and_flags(client):
-    lib = store.create_collection(1, "retrieve no answer")
+    lib = store.create_collection(store.user_workspace(), "retrieve no answer")
     add(lib["id"], "garden.md", "# Garden\n\nTomatoes need sun and water.")
     # Vector search always returns something; the reranker scores it below 0.2.
     unsure = retrieve("quantum chromodynamics lattice", collection_ids=[lib["id"]])
     assert unsure.low_confidence is True and unsure.insufficient is False and unsure.sources
     sure = retrieve("tomatoes need sun", collection_ids=[lib["id"]])
     assert sure.low_confidence is False and sure.sources[0].document_name == "garden.md"
-    empty = store.create_collection(1, "retrieve empty")
+    empty = store.create_collection(store.user_workspace(), "retrieve empty")
     nothing = retrieve("tomatoes", collection_ids=[empty["id"]])
     assert nothing.insufficient is True and nothing.sources == []  # searched, found nothing
     client.patch("/api/settings/user", json={"ragRerank": False})
@@ -90,15 +90,15 @@ def test_low_confidence_keeps_fused_order_and_flags(client):
 
 
 def test_scope(client):
-    chat_x = store.chat_collection(1, "retrieve-chat-x")
+    chat_x = store.chat_collection(store.user_workspace(), "retrieve-chat-x")
     add(chat_x["id"], "private.md", "# Private\n\nThe vault password is walrus.")
     names = lambda result: {s.document_name for s in result.sources}  # noqa: E731
     assert "private.md" in names(retrieve("vault walrus", session_id="retrieve-chat-x"))
     # Other chats (and library-only searches) may get unrelated library passages, never this file.
     assert "private.md" not in names(retrieve("vault walrus", session_id="retrieve-chat-y"))
     assert "private.md" not in names(retrieve("vault walrus"))
-    assert chat_x["id"] in access.readable_collections(1, "retrieve-chat-x")
-    assert chat_x["id"] not in access.readable_collections(1, "retrieve-chat-y")
+    assert chat_x["id"] in access.readable_collections(store.user_workspace(), "retrieve-chat-x")
+    assert chat_x["id"] not in access.readable_collections(store.user_workspace(), "retrieve-chat-y")
 
 
 def test_degenerate_queries(client):
@@ -117,7 +117,7 @@ def test_queries_are_not_stored_in_the_embedding_cache(client):
     def cached():
         return get_connection().execute("SELECT COUNT(*) FROM embedding_cache").fetchone()[0]
 
-    lib = store.create_collection(1, "retrieve cache")
+    lib = store.create_collection(store.user_workspace(), "retrieve cache")
     add(lib["id"], "cache.md", "# Cache\n\nThe kettle whistles at noon.")
     before = cached()
     result = retrieve("a question nobody asked before zebra-17", collection_ids=[lib["id"]])
