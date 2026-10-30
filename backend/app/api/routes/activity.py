@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from app.auth.owner import owner_id
 from app.core.database import get_connection
@@ -232,3 +233,74 @@ def mark_notifications_read() -> dict[str, Any]:
 
     update_user_settings({"notificationsReadAt": _utc_now()})
     return {"unread": 0}
+
+
+def _approved_action(activity_id: int) -> tuple[dict[str, Any], str]:
+    """The entry and its stored metadata text (compared when claiming it for an undo)."""
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT * FROM activity_log WHERE id = ? AND user_id = ? AND type = 'action_approved'",
+                           (activity_id, owner_id())).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Approved action not found")
+    entry = _row_to_activity(row)
+    if entry["metadata"].get("undone_at"):
+        raise HTTPException(status_code=409, detail="This action was already undone")
+    if entry["metadata"].get("undoing"):
+        raise HTTPException(status_code=409, detail="This action is being undone")
+    return entry, row["metadata"]
+
+
+def _set_metadata(activity_id: int, metadata: dict[str, Any], expected: Optional[str] = None) -> bool:
+    """Write the entry's metadata; with ``expected``, only if nobody changed it since (an atomic claim)."""
+    conn = get_connection()
+    try:
+        if expected is None:
+            cursor = conn.execute("UPDATE activity_log SET metadata = ? WHERE id = ?", (json.dumps(metadata, default=str), activity_id))
+        else:
+            cursor = conn.execute("UPDATE activity_log SET metadata = ? WHERE id = ? AND metadata = ?",
+                                  (json.dumps(metadata, default=str), activity_id, expected))
+        conn.commit()
+        return cursor.rowcount == 1
+    finally:
+        conn.close()
+
+
+class UndoCall(BaseModel):
+    tool: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+@router.post("/{activity_id}/undo/plan")
+async def plan_undo(activity_id: int) -> dict[str, Any]:
+    """The call that would reverse an approved action, for the user to confirm."""
+    from app import undo
+
+    entry, _ = _approved_action(activity_id)
+    try:
+        return await undo.plan_undo(entry)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/{activity_id}/undo/run")
+async def run_undo(activity_id: int, body: UndoCall) -> dict[str, Any]:
+    """Run the reverse call the user confirmed. Each action can be undone once."""
+    from app import undo
+    from app.core.database import log_activity
+
+    entry, stored = _approved_action(activity_id)
+    # Claim it first, so two clicks (or two tabs) can't both run the reverse call.
+    if not _set_metadata(activity_id, {**entry["metadata"], "undoing": _utc_now()}, expected=stored):
+        raise HTTPException(status_code=409, detail="This action is being undone")
+    try:
+        result = await undo.run_undo(entry, body.tool, body.arguments)
+    except Exception as exc:  # wrong app, app not connected, or the app refused: the action stays undoable
+        _set_metadata(activity_id, entry["metadata"])
+        detail = str(exc) if isinstance(exc, (ValueError, PermissionError)) else f"The undo failed: {exc}"
+        raise HTTPException(status_code=400, detail=detail)
+    _set_metadata(activity_id, {**entry["metadata"], "undone_at": _utc_now(), "undo": body.model_dump()})
+    log_activity("action_undone", f"Undid: {entry['title']}", metadata={"of": activity_id, **body.model_dump()})
+    return {"undone": True, "result": result}

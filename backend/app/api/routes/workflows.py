@@ -657,8 +657,9 @@ async def rerun_from_failure(workflow_id: int, run_id: str) -> WorkflowRunResult
     previous = _run_from_row(row)
     input_data = dict(previous["input_data"])
     trigger = input_data.pop("trigger", None)
+    practice = input_data.pop("practice", False) is True  # a practice run's re-run is a practice run too
     new_id = start_background_run(
-        workflow_id, get_tool_registry(), server_availability(), WorkflowRunRequest(input_data=input_data),
+        workflow_id, get_tool_registry(), server_availability(), WorkflowRunRequest(input_data=input_data, practice=practice),
         trigger=trigger, reuse=reusable_outputs(previous["events"]),
     )
     return WorkflowRunResult(id=new_id, workflow_id=workflow_id, workflowId=str(workflow_id), status="running")

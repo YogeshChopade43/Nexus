@@ -116,9 +116,23 @@ async def _resume(runs: list) -> None:
     await resume_interrupted_runs(runs, get_tool_registry(), server_availability)
 
 
+def setup_error_reports() -> bool:
+    """Send unexpected errors to Sentry when SENTRY_DSN is set; nothing is sent otherwise.
+    Never personal data: no cookies, IPs or emails, and no request bodies (sign-in carries passwords)."""
+    dsn = os.getenv("SENTRY_DSN")
+    if not dsn:
+        return False
+    import sentry_sdk
+
+    sentry_sdk.init(dsn=dsn, send_default_pii=False, max_request_body_size="never", traces_sample_rate=0.0,
+                    environment=os.getenv("ENVIRONMENT", "development"))
+    return True
+
+
 def create_app() -> FastAPI:
     validate_environment()
     validate_cors_origins()
+    setup_error_reports()
 
     app = FastAPI(title="Nexus Backend", version="0.2.0", lifespan=lifespan)
     setup_middleware(app)

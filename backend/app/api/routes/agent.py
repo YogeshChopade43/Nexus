@@ -576,9 +576,39 @@ def save_chat_settings(session_id: str, settings: ChatSettings) -> dict[str, Any
     return metadata["settings"]
 
 
+def _replay(calls: list[dict[str, Any]], request: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Every call exactly as it ran: the fallback when the AI can't draft a cleaner workflow."""
+    nodes: list[dict[str, Any]] = [{"id": "trigger_1", "type": "trigger", "name": "Trigger", "config": {"trigger_type": "manual"}}]
+    for index, call in enumerate(calls, start=1):
+        nodes.append({"id": f"action_{index}", "type": "action", "name": call["tool_name"].split("__")[-1],
+                      "config": {"tool": call["tool_name"], "parameters": call.get("arguments") or {}}})
+    references = " ".join(f"{{{{ steps.action_{i}.text }}}}" for i in range(1, len(calls) + 1))
+    nodes.append({"id": "llm_1", "type": "llm", "name": "Answer", "config": {
+        "prompt": f"Using these results:\n{references}\n\nAnswer this request: {request}"}})
+    edges = [{"id": f"edge-{a['id']}-{b['id']}", "source": a["id"], "target": b["id"]} for a, b in zip(nodes, nodes[1:])]
+    return nodes, edges
+
+
+def _from_chat_prompt(requests: list[str], calls: list[dict[str, Any]]) -> str:
+    asked = "\n".join(f"- {r}" for r in requests)
+    ran = "\n".join(f"{i}. {c['tool_name']}({json.dumps(c.get('arguments') or {}, default=str)[:400]})"
+                    for i, c in enumerate(calls, start=1))
+    return (f"Turn this chat into a workflow the user can re-run.\n\nWhat the user asked:\n{asked}\n\n"
+            f"Tool calls that succeeded, in order:\n{ran}\n\n"
+            "- Keep only the calls needed for the final result; drop ones that just explored, looked up IDs the "
+            "workflow can fix in place, or repeated an earlier call.\n"
+            "- If the user asked for it to happen on a schedule (every day, each Monday, hourly...), use a "
+            "\"recurrence\" trigger and keep the values fixed.\n"
+            "- Otherwise use a \"manual\" trigger, and make values that would differ next time (a search term, a "
+            "name, an ID or date the user gave) inputs with the chat's value as \"default\", used as "
+            "{{ trigger.inputs.<name> }}. Keep values that stay the same (the user's own account, a project) fixed.\n"
+            "- End with an \"llm\" step that answers the request from the step results.")
+
+
 @router.post("/sessions/{session_id}/workflow")
-def conversation_to_workflow(session_id: str) -> dict[str, Any]:
-    """Turn the tool calls made in a conversation into a workflow you can re-run with one click."""
+async def conversation_to_workflow(session_id: str) -> dict[str, Any]:
+    """Turn the tool calls made in a conversation into a workflow you can re-run, with what changes between runs
+    as inputs (or on a schedule when the chat asked for one)."""
     session = get_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -588,22 +618,25 @@ def conversation_to_workflow(session_id: str) -> dict[str, Any]:
     ]
     if not calls:
         raise HTTPException(status_code=400, detail="This conversation didn't use any tools, so there is nothing to automate")
-    request = next((m["content"] for m in session["messages"] if m.get("role") == "user"), "")
-    request = request.split("\n\nAttached file '")[0][:500]  # attachment bodies don't belong in the workflow
-    nodes: list[dict[str, Any]] = [{"id": "trigger_1", "type": "trigger", "name": "Trigger", "config": {"trigger_type": "manual"}}]
-    for index, call in enumerate(calls, start=1):
-        nodes.append({"id": f"action_{index}", "type": "action", "name": call["tool_name"].split("__")[-1],
-                      "config": {"tool": call["tool_name"], "parameters": call.get("arguments") or {}}})
-    references = " ".join(f"{{{{ steps.action_{i}.text }}}}" for i in range(1, len(calls) + 1))
-    nodes.append({"id": "llm_1", "type": "llm", "name": "Answer", "config": {
-        "prompt": f"Using these results:\n{references}\n\nAnswer this request: {request}"}})
-    edges = [{"id": f"edge-{a['id']}-{b['id']}", "source": a["id"], "target": b["id"]} for a, b in zip(nodes, nodes[1:])]
+    # Attachment bodies don't belong in the workflow.
+    requests = [m["content"].split("\n\nAttached file '")[0][:500] for m in session["messages"] if m.get("role") == "user"]
+    request = requests[0] if requests else ""
+    name, description = (session.get("title") or "Chat workflow")[:60], f"Created from a chat: {request[:200]}"
+
+    from app.workflows import drafting
+
+    try:
+        draft = await drafting.draft_workflow(_from_chat_prompt(requests[-10:], calls[:30]))
+        nodes, edges, name = draft["nodes"], draft["edges"], draft.get("name") or name
+    except Exception as exc:  # no AI, over budget, or nothing valid: the literal replay still works
+        logger.info("Drafting a workflow from chat %s failed, replaying its calls: %s", session_id, exc)
+        nodes, edges = _replay(calls, request)
 
     from app.api.routes.workflows import create_workflow
     from app.models.workflow import WorkflowCreate
 
-    created = create_workflow(WorkflowCreate(
-        name=(session.get("title") or "Chat workflow")[:60], description=f"Created from a chat: {request[:200]}",
-        nodes=nodes, edges=edges, isActive=True,
-    ))
+    trigger = next((n.get("config") or {} for n in nodes if n.get("type") == "trigger"), {})
+    # A schedule starts off: it would run unattended, so the user switches it on after a look in the editor.
+    active = trigger.get("trigger_type", "manual") in ("manual", "webhook")
+    created = create_workflow(WorkflowCreate(name=name[:60], description=description, nodes=nodes, edges=edges, isActive=active))
     return created.model_dump()

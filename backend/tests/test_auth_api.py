@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.routes import auth
+from app.auth import store
 from app.core.database import get_connection, init_db
 from app.main import app
 
@@ -28,7 +29,7 @@ def anonymous():
     auth.FAILED_LOGINS.clear()
 
 
-def test_first_visit_creates_the_owner_then_signups_close(anonymous):
+def test_first_visit_creates_the_owner_and_others_can_sign_up(anonymous):
     status = anonymous.get("/api/auth/status").json()
     assert {k: status[k] for k in ("hasUsers", "signupsOpen", "user")} == {"hasUsers": False, "signupsOpen": True, "user": None}
     made = anonymous.post("/api/auth/signup", json={"email": "Ana@Example.com", "password": PASSWORD, "name": "Ana"})
@@ -37,9 +38,10 @@ def test_first_visit_creates_the_owner_then_signups_close(anonymous):
                            "emailVerified": False, "hasPassword": True, "google": False}
     cookie = made.headers["set-cookie"].lower()
     assert "nexus_session=" in cookie and "httponly" in cookie and "samesite=lax" in cookie
-    assert anonymous.get("/api/auth/status").json()["signupsOpen"] is False
+    anonymous.cookies.clear()
+    assert anonymous.get("/api/auth/status").json()["signupsOpen"] is True  # open by default: a shared Nexus
     second = anonymous.post("/api/auth/signup", json={"email": "bo@example.com", "password": PASSWORD})
-    assert second.status_code == 403 and "closed" in second.json()["detail"].lower()
+    assert second.status_code == 200 and second.json()["isAdmin"] is False  # a regular account, not another admin
 
 
 def test_login_logout_me(anonymous):
@@ -72,10 +74,56 @@ def test_password_guessing_is_rate_limited(anonymous):
     assert blocked.status_code == 429  # even the right one, until the minute is up
 
 
-def test_signups_can_be_opened_for_everyone(anonymous, monkeypatch):
+def test_signups_can_be_closed(anonymous, monkeypatch):
     anonymous.post("/api/auth/signup", json={"email": "ana@example.com", "password": PASSWORD})
     anonymous.cookies.clear()
-    monkeypatch.setenv("NEXUS_SIGNUPS", "open")
-    assert anonymous.get("/api/auth/status").json()["signupsOpen"] is True
+    monkeypatch.setenv("NEXUS_SIGNUPS", "closed")
+    assert anonymous.get("/api/auth/status").json()["signupsOpen"] is False
     second = anonymous.post("/api/auth/signup", json={"email": "bo@example.com", "password": PASSWORD})
-    assert second.status_code == 200 and second.json()["isAdmin"] is False  # a regular account, not another admin
+    assert second.status_code == 403 and "closed" in second.json()["detail"].lower()
+
+
+def lookup(client, email: str) -> str:
+    return client.post("/api/auth/lookup", json={"email": email}).json()["next"]
+
+
+def test_lookup_says_what_comes_after_the_email(anonymous, monkeypatch):
+    assert lookup(anonymous, "ana@example.com") == "create"  # a fresh install: the owner's account
+    anonymous.post("/api/auth/signup", json={"email": "ana@example.com", "password": PASSWORD})
+    anonymous.cookies.clear()
+    assert lookup(anonymous, " ANA@example.com ") == "password"
+    assert lookup(anonymous, "bo@example.com") == "create"
+    store.create_user("gabi@example.com", None, "Gabi", google_sub="google-1")
+    assert lookup(anonymous, "gabi@example.com") == "google"  # signs in with Google, no password to ask for
+    store._update_user(store._row("email = ?", "ana@example.com")["id"], "disabled = 1")
+    assert lookup(anonymous, "ana@example.com") == "password"  # a disabled account isn't revealed as such
+    monkeypatch.setenv("NEXUS_SIGNUPS", "closed")
+    assert lookup(anonymous, "bo@example.com") == "closed"
+    assert anonymous.post("/api/auth/lookup", json={"email": "not-an-email"}).status_code == 422
+
+
+def test_lookup_is_rate_limited(anonymous):
+    for n in range(auth.LOOKUP_LIMIT):
+        anonymous.post("/api/auth/lookup", json={"email": f"user{n}@example.com"})
+    assert anonymous.post("/api/auth/lookup", json={"email": "sweep@example.com"}).status_code == 429
+
+
+@pytest.mark.parametrize("weak", ["aaaaaaaaaa", "1212121212", "1234567890", "password123", "ana@example.com"])
+def test_signup_rejects_weak_passwords(anonymous, weak):
+    r = anonymous.post("/api/auth/signup", json={"email": "ana@example.com", "password": weak})
+    assert r.status_code == 422, (weak, r.text)
+
+
+def test_signup_is_rate_limited_per_ip(anonymous):
+    for n in range(auth.SIGNUP_LIMIT):
+        anonymous.post("/api/auth/signup", json={"email": f"user{n}@example.com", "password": PASSWORD})
+    blocked = anonymous.post("/api/auth/signup", json={"email": "one-too-many@example.com", "password": PASSWORD})
+    assert blocked.status_code == 429
+
+
+def test_forgot_password_is_rate_limited(anonymous):
+    anonymous.post("/api/auth/signup", json={"email": "ana@example.com", "password": PASSWORD})
+    for _ in range(auth.EMAIL_LIMIT):
+        anonymous.post("/api/auth/forgot-password", json={"email": "ana@example.com"})
+    blocked = anonymous.post("/api/auth/forgot-password", json={"email": "ana@example.com"})
+    assert blocked.status_code == 429

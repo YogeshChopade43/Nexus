@@ -7,7 +7,8 @@ from typing import Any, Optional
 
 from app.core.database import get_connection, get_db_path
 
-DEFAULT_INSTANCE = {"signups": None, "storageLimitMb": 1024}  # signups None: NEXUS_SIGNUPS decides
+# signups None: NEXUS_SIGNUPS decides. privacyUrl / termsUrl: the operator's own policies, linked on the sign-in page.
+DEFAULT_INSTANCE = {"signups": None, "storageLimitMb": 1024, "privacyUrl": "", "termsUrl": ""}
 
 
 class StorageFull(Exception):
@@ -41,8 +42,9 @@ def save_instance(changes: dict[str, Any]) -> dict[str, Any]:
 
 
 def signups_setting() -> bool:
+    """Anyone can sign up, unless the admin closed it (Settings › Admin) or the server sets NEXUS_SIGNUPS=closed."""
     choice = instance()["signups"]
-    return choice == "open" if choice else os.getenv("NEXUS_SIGNUPS", "").lower() == "open"
+    return choice == "open" if choice else os.getenv("NEXUS_SIGNUPS", "").lower() != "closed"
 
 
 def storage_used(user_id: int) -> int:

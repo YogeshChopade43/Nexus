@@ -26,7 +26,7 @@ def member(account):
 @pytest.fixture(autouse=True)
 def _defaults(admin):
     yield
-    admin.patch("/api/admin/instance", json={"signups": None, "storageLimitMb": 1024})
+    admin.patch("/api/admin/instance", json={"signups": None, "storageLimitMb": 1024, "privacyUrl": "", "termsUrl": ""})
     member_row = store._row("email = ?", MEMBER)
     if member_row:
         admin.patch(f"/api/admin/users/{member_row['id']}", json={"disabled": False, "isAdmin": False})
@@ -100,3 +100,23 @@ def test_admins_are_not_limited_and_zero_means_no_limit(admin, member):
     assert admin.post("/api/files", files={"file": ("big.txt", b"x" * 1_100_000, "text/plain")}).status_code == 200
     admin.patch("/api/admin/instance", json={"storageLimitMb": 0})
     assert member.post("/api/files", files={"file": ("big.txt", b"x" * 1_100_000, "text/plain")}).status_code == 200
+
+
+def test_privacy_and_terms_links_show_on_the_sign_in_page(admin):
+    saved = admin.patch("/api/admin/instance", json={"privacyUrl": "https://example.com/privacy",
+                                                     "termsUrl": "https://example.com/terms"})
+    assert saved.status_code == 200 and saved.json()["privacyUrl"] == "https://example.com/privacy"
+    status = TestClient(app, auto_login=False).get("/api/auth/status").json()
+    assert (status["privacyUrl"], status["termsUrl"]) == ("https://example.com/privacy", "https://example.com/terms")
+    for bad in ("javascript:alert(1)", "example.com/privacy", "ftp://example.com/x"):
+        assert admin.patch("/api/admin/instance", json={"privacyUrl": bad}).status_code == 422, bad
+    admin.patch("/api/admin/instance", json={"privacyUrl": "", "termsUrl": ""})  # cleared: no links shown
+    assert TestClient(app, auto_login=False).get("/api/auth/status").json()["privacyUrl"] == ""
+
+
+def test_the_checklist_says_whether_errors_are_reported(admin, monkeypatch):
+    monkeypatch.delenv("SENTRY_DSN", raising=False)
+    checks = {c["id"]: c for c in admin.get("/api/admin/deployment").json()}
+    assert checks["error_reports"]["ok"] is False and "SENTRY_DSN" in checks["error_reports"]["detail"]
+    monkeypatch.setenv("SENTRY_DSN", "https://key@sentry.example/1")
+    assert {c["id"]: c for c in admin.get("/api/admin/deployment").json()}["error_reports"]["ok"] is True

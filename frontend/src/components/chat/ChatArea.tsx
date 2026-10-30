@@ -5,7 +5,7 @@ import { MessageList, MessageListRef } from './MessageList';
 import { GettingStarted } from './GettingStarted';
 import { Composer } from './Composer';
 import { Button } from '../ui/Button';
-import { Bot, Plus, AlertCircle, Workflow, History, SlidersHorizontal } from 'lucide-react';
+import { Bot, Plus, AlertCircle, Workflow, History, SlidersHorizontal, X } from 'lucide-react';
 import { ChatSettingsModal } from './ChatSettingsModal';
 import { ConversationPanel } from './ConversationPanel';
 import { useChatContext } from '../../hooks/useChatContext';
@@ -25,6 +25,7 @@ export function ChatArea({ className }: ChatAreaProps) {
   const [convertError, setConvertError] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [dismissedFor, setDismissedFor] = useState<string | null>(null);
   const navigate = useNavigate();
   const {
     messages, sending, error, sendMessage, answerApproval, answerQuestions, stop, retry, clearMessages, hasLLM,
@@ -49,6 +50,10 @@ export function ChatArea({ className }: ChatAreaProps) {
   const lastStatus = messages[messages.length - 1]?.status;
   const awaiting = lastStatus === 'needs_approval' || lastStatus === 'needs_input';
   const usedTools = messages.some(m => m.events?.some(e => e.type === 'tool_executed'));
+  // A reply that took several app steps is worth offering to repeat; once per chat.
+  const last = messages[messages.length - 1];
+  const suggestWorkflow = !!sessionId && !sending && !awaiting && dismissedFor !== sessionId && last?.role === 'assistant'
+    && (last.events?.filter(e => e.type === 'tool_executed').length ?? 0) >= 2;
   const turnIntoWorkflow = async () => {
     if (!sessionId) return;
     setConverting(true);
@@ -106,7 +111,7 @@ export function ChatArea({ className }: ChatAreaProps) {
               onClick={() => void turnIntoWorkflow()}
               disabled={converting || sending}
               className="gap-1.5"
-              title="Save the tool calls from this conversation as a workflow you can re-run"
+              title="Save what this conversation did as a workflow you can re-run, with what changes as inputs"
             >
               <Workflow className="w-3.5 h-3.5" />
               {converting ? 'Creating…' : 'Turn into workflow'}
@@ -160,6 +165,18 @@ export function ChatArea({ className }: ChatAreaProps) {
         onPickPrompt={hasLLM && !sending ? (text) => void handleSend(text, [], []) : undefined}
         autoScroll={true}
       />
+      {suggestWorkflow && (
+        <div className="mx-4 mb-2 flex items-center gap-2 rounded-lg border border-nexus-border bg-nexus-bg-secondary px-3 py-2 text-[13px] text-nexus-text-muted lg:mx-6">
+          <Workflow className="h-4 w-4 shrink-0 text-nexus-accent-text" aria-hidden />
+          <span className="min-w-0 flex-1">Doing this again later? Save it as a workflow you can re-run or schedule.</span>
+          <Button variant="secondary" size="sm" onClick={() => void turnIntoWorkflow()} disabled={converting}>
+            {converting ? 'Creating…' : 'Save as workflow'}
+          </Button>
+          <Button variant="ghost" size="sm" className="w-8 px-0" onClick={() => setDismissedFor(sessionId)} aria-label="Dismiss">
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+      )}
       <Composer
         onSend={handleSend}
         disabled={sending || !hasLLM || awaiting}

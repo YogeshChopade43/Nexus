@@ -31,7 +31,7 @@ Ask in plain words: *"What are my open GitHub pull requests?"*, *"What does my c
 
 ## Quick start
 
-**With Docker** (one container, nothing else to install):
+**With Docker or Podman** (one container, nothing else to install; with Podman, type `podman` instead of `docker`):
 
 ```bash
 git clone https://github.com/YogeshChopade43/Nexus.git
@@ -42,7 +42,7 @@ docker run -p 127.0.0.1:8000:8000 -v nexus-data:/app/backend/data nexus
 
 Open **http://localhost:8000** and create your account: the first account owns this Nexus. Then follow the *Getting started* checklist to add an AI provider, and connect an app from the Marketplace. To put Nexus on the internet for others, see [Publishing Nexus](#publishing-nexus).
 
-**For development** (Python 3.11 and Node.js 20):
+**For development** (Python 3.11 and Node.js 22):
 
 ```bash
 python start.py    # first run sets up backend/.venv and node_modules, then starts both; open http://localhost:5173
@@ -61,10 +61,10 @@ python start.py    # first run sets up backend/.venv and node_modules, then star
    NEXUS_DOMAIN=nexus.example.com
    NEXUS_SECRET_KEY=...       # python -c "import secrets; print(secrets.token_urlsafe(32))". Keep a copy: it decrypts stored keys
    POSTGRES_PASSWORD=...      # another long random string
-   # Optional: NEXUS_SIGNUPS=open, email (NEXUS_SMTP_HOST, NEXUS_SMTP_PORT, NEXUS_SMTP_USER, NEXUS_SMTP_PASSWORD,
+   # Optional: NEXUS_SIGNUPS=closed (anyone can sign up otherwise), email (NEXUS_SMTP_HOST, NEXUS_SMTP_PORT, NEXUS_SMTP_USER, NEXUS_SMTP_PASSWORD,
    # NEXUS_MAIL_FROM, or NEXUS_RESEND_API_KEY) and Google sign-in (NEXUS_GOOGLE_CLIENT_ID, NEXUS_GOOGLE_CLIENT_SECRET)
    ```
-3. Run `docker compose up -d --build`, open `https://<your domain>` and create the first account. It's the admin.
+3. Run `docker compose up -d --build` (or `podman compose up -d --build`), open `https://<your domain>` and create the first account. It's the admin.
 
 **Settings › Admin** has three parts:
 - a checklist of what the deployment still needs (HTTPS, email, domain, database, encryption key);
@@ -73,11 +73,27 @@ python start.py    # first run sets up backend/.venv and node_modules, then star
 
 Everyone's data is private to their account. Each person brings their own AI keys.
 
-Back up with `docker compose exec db pg_dump -U nexus nexus > nexus.sql`, and keep `NEXUS_SECRET_KEY` with the backup.
 
-The built-in web browser needs Chrome, which isn't in the image. In Docker, the agent reads pages with the web reader instead.
+The image includes a headless Chromium, so the built-in web browser works in the container too.
+
+**Backups** run by themselves: the `backup` container takes a compressed PostgreSQL dump at start and then daily,
+keeping the last 14. Copy them off the server regularly with `docker compose cp backup:/backups ./backups`
+(or `podman compose cp ...`), and keep `NEXUS_SECRET_KEY` with them. Restore one with
+`docker compose exec -T db pg_restore -U nexus -d nexus --clean < backups/nexus-<date>.dump`.
+
+**Monitoring:** point a free uptime checker (UptimeRobot, Better Stack) at `https://<your domain>/health/`.
+Set `SENTRY_DSN` to get crash reports (no passwords, cookies or personal data are sent). Settings › Admin shows
+whether it's on.
 
 For Google sign-in, set the OAuth client's redirect URI to `https://<your domain>/api/auth/google/callback`.
+
+**With Podman** (`podman compose` runs the same `docker-compose.yml`):
+- **Ports 80 and 443:** rootless Podman can't open ports below 1024. Allow it once with
+  `sudo sysctl -w net.ipv4.ip_unprivileged_port_start=80`, and keep it across reboots with
+  `echo net.ipv4.ip_unprivileged_port_start=80 | sudo tee /etc/sysctl.d/99-podman-ports.conf`. Or run Podman rootful.
+- **After a reboot:** Podman has no always-running daemon, so containers come back only if you enable
+  `loginctl enable-linger $USER` and `systemctl --user enable --now podman-restart.service` once.
+- **Windows and macOS:** run `podman machine start` first.
 
 ## Why Nexus?
 
@@ -165,7 +181,8 @@ Design: `docs/superpowers/specs/2026-10-08-production-rag-design.md`. Code: `bac
 
 - **Accounts:** email and password (scrypt), or Google. Sessions use HttpOnly cookies.
   - The first account is the admin.
-  - Sign-ups are closed unless the admin or `NEXUS_SIGNUPS=open` opens them.
+  - Anyone can sign up, unless the admin closes sign-ups in Settings › Admin (or the server sets `NEXUS_SIGNUPS=closed`).
+  - Sign-in asks for the email first, then for the password, or offers to create the account. The email lookup is rate-limited.
   - Failed sign-ins are rate-limited per address.
   - With email configured, new accounts verify their address.
 - **Data per account:** chats, workflows, documents, files, apps, AI providers, settings and memory. Nobody else can see them, the admin included.

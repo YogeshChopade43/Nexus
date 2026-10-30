@@ -54,9 +54,28 @@ def check_password(password: str, stored: Optional[str]) -> bool:
     return hmac.compare_digest(actual, base64.b64decode(expected))
 
 
-def check_password_rules(password: str) -> None:
-    if len(password or "") < MIN_PASSWORD:
+# The ways a 10-char password is still trivially guessable: common strings, and ones made of a few repeated
+# characters (aaaaaaaaaa, 1212121212). A small list plus a character-variety floor catches these cheaply without
+# shipping a full breach dictionary.
+WEAK_PASSWORDS = {
+    "password", "password1", "password12", "password123", "password1234", "passw0rd123", "1234567890", "12345678",
+    "123456789", "0123456789", "1234512345", "qwertyuiop", "qwerty12345", "1q2w3e4r5t", "abcdefghij", "iloveyou123",
+    "letmein123", "admin12345", "welcome123", "monkey12345", "trustno1234", "sunshine12", "princess12", "football12",
+}
+
+
+def check_password_rules(password: str, email: Optional[str] = None) -> None:
+    pw = password or ""
+    if len(pw) < MIN_PASSWORD:
         raise ValueError(f"Use at least {MIN_PASSWORD} characters for your password")
+    if len(set(pw)) < 5:
+        raise ValueError("Mix in more different characters — that one is too easy to guess")
+    if pw.lower() in WEAK_PASSWORDS:
+        raise ValueError("That password is too common — choose something harder to guess")
+    if email:
+        address = normalise_email(email)
+        if pw.lower() in (address, address.split("@")[0]):
+            raise ValueError("Don't use your email address as your password")
 
 
 def _row(where: str, *args: Any) -> Optional[dict[str, Any]]:
@@ -87,7 +106,7 @@ def create_user(email: str, password: Optional[str], name: str = "", *, email_ve
     if not EMAIL.match(email):
         raise ValueError("Enter a valid email address")
     if password is not None:
-        check_password_rules(password)
+        check_password_rules(password, email)
     conn = get_connection()
     try:
         if conn.execute("SELECT 1 FROM users WHERE email = ?", (email,)).fetchone():

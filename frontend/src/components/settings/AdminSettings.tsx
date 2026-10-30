@@ -18,12 +18,19 @@ export function AdminSettings() {
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [signups, setSignups] = useState('');
   const [storage, setStorage] = useState('1024');
+  const [privacyUrl, setPrivacyUrl] = useState('');
+  const [termsUrl, setTermsUrl] = useState('');
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
 
   useEffect(() => {
     adminService.deployment().then(setChecks, () => {});
     adminService.users().then(setUsers, () => {});
-    adminService.instance().then(i => { setSignups(i.signups ?? ''); setStorage(String(i.storageLimitMb)); }, () => {});
+    adminService.instance().then(i => {
+      setSignups(i.signups ?? '');
+      setStorage(String(i.storageLimitMb));
+      setPrivacyUrl(i.privacyUrl ?? '');
+      setTermsUrl(i.termsUrl ?? '');
+    }, () => {});
   }, []);
 
   const change = async (user: AdminUser, changes: { disabled?: boolean; isAdmin?: boolean }) => {
@@ -38,7 +45,7 @@ export function AdminSettings() {
   const save = async () => {
     try {
       await adminService.changeInstance({ signups: signups === '' ? null : signups as 'open' | 'closed',
-        storageLimitMb: Math.max(0, Number(storage) || 0) });
+        storageLimitMb: Math.max(0, Number(storage) || 0), privacyUrl: privacyUrl.trim(), termsUrl: termsUrl.trim() });
       setNote({ ok: true, text: 'Saved.' });
       adminService.deployment().then(setChecks, () => {});
     } catch (err) {
@@ -74,14 +81,17 @@ export function AdminSettings() {
       <Card>
         <CardHeader>
           <CardTitle>Rules for everyone</CardTitle>
-          <CardDescription>Admins have no storage limit. 0 MB means no limit for anyone.</CardDescription>
+          <CardDescription>
+            Admins have no storage limit; 0 MB means no limit for anyone. Your privacy policy and terms (pages you host
+            anywhere) are linked on the sign-in page.
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="flex flex-wrap items-end gap-3">
             <label className="block space-y-1">
               <span className="block text-[13px] font-medium text-nexus-text">Sign-ups</span>
               <select aria-label="Sign-ups" className={fieldClass} value={signups} onChange={e => setSignups(e.target.value)}>
-                <option value="">As the server is set (NEXUS_SIGNUPS)</option>
+                <option value="">Server default: open, unless NEXUS_SIGNUPS=closed</option>
                 <option value="open">Open: anyone can create an account</option>
                 <option value="closed">Closed: existing accounts only</option>
               </select>
@@ -91,8 +101,20 @@ export function AdminSettings() {
               <input aria-label="Storage per person (MB)" type="number" min={0} className={cn(fieldClass, 'w-32')}
                 value={storage} onChange={e => setStorage(e.target.value)} />
             </label>
-            <Button size="sm" onClick={() => void save()}>Save</Button>
           </div>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <label className="block space-y-1">
+              <span className="block text-[13px] font-medium text-nexus-text">Privacy policy link</span>
+              <input aria-label="Privacy policy link" type="url" placeholder="https://example.com/privacy" className={fieldClass}
+                value={privacyUrl} onChange={e => setPrivacyUrl(e.target.value)} />
+            </label>
+            <label className="block space-y-1">
+              <span className="block text-[13px] font-medium text-nexus-text">Terms link</span>
+              <input aria-label="Terms link" type="url" placeholder="https://example.com/terms" className={fieldClass}
+                value={termsUrl} onChange={e => setTermsUrl(e.target.value)} />
+            </label>
+          </div>
+          <div className="mt-3"><Button size="sm" onClick={() => void save()}>Save</Button></div>
           {note && <p role={note.ok ? 'status' : 'alert'} className={cn('mt-2 text-xs', note.ok ? 'text-nexus-success' : 'text-nexus-danger')}>{note.text}</p>}
         </CardContent>
       </Card>

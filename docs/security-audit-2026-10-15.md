@@ -87,11 +87,32 @@ security and multi-user work and held up. Suite: 506 backend / 155 frontend / 10
 
 - **PDF decompression bombs** (pypdf) and **forged-size zips** aren't bounded in-process; the 2 GB
   container memory limit is the backstop. A per-worker memory cap would be stronger.
-- **Signup email enumeration:** signup returns 409 for an existing email (standard UX). Forgot-password
-  already returns 204 regardless, so that path doesn't enumerate.
+- **Account existence is visible:** the email-first sign-in page (`POST /api/auth/lookup`) says whether an
+  email has an account, by design, as sign-up must with open sign-ups. It is rate-limited to 20 lookups per
+  minute per IP so it can't sweep a list; forgot-password still answers the same either way.
 - **URL re-validation (TOCTOU):** MCP/LLM URLs are checked for being public when saved; a domain whose
   DNS later resolves to a private address could slip through on use. Feeds and HTTP steps re-check live.
 - **OAuth state is in-process:** fine for the single-process deployment; would need shared storage if
   Nexus is ever run with multiple worker processes.
 - **Soft storage quota:** concurrent uploads can race past the limit slightly (bounded overrun, not a
   breach).
+
+---
+
+## Follow-up, 2026-10-15: dependencies and a real deployment
+
+- **pip-audit** over the full resolved `backend/requirements.txt`: no known vulnerabilities.
+- **npm audit**: 17 advisories (2 critical, 8 high) down to 7.
+  - `react-router` 6 → 7 fixed the only advisory in code that ships to browsers (an open redirect via
+    backslash links, GHSA-wrjc-x8rr-h8h6).
+  - vite 5 → 8 and vitest 2 → 5 fixed the critical vitest/tinypool and the esbuild dev-server advisories.
+  - **Accepted:** the remaining 7 are all in Tailwind v3's build-time file watcher (`braces`, `micromatch`,
+    `chokidar` and friends). They run only while building, on globs from our own config, and never ship.
+    Removing them means migrating to Tailwind v4, which restyles every page; worth doing as its own change.
+- **Container:** runs as an unprivileged user (uid 10001). The runtime image no longer carries Node, npm
+  or uv: they only served local MCP servers, which Nexus refuses outside the test suite.
+- **Deployed with Podman** (`podman compose` running `docker-compose.yml`: Nexus, PostgreSQL 16, Caddy),
+  and checked through Caddy's HTTPS: security headers and HSTS, owner sign-up, the admin checklist all
+  green (PostgreSQL, HTTPS, email, key, domain), a second account's verification email and link, data in
+  PostgreSQL, sessions surviving a restart. Ten wrong passwords, each with a forged `X-Forwarded-For`, were
+  still rate-limited on the eleventh: uvicorn trusts forwarded addresses only from Caddy's pinned IP.

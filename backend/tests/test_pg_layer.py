@@ -101,3 +101,26 @@ def test_a_fresh_postgres_install_has_sqlite_s_schema_and_restarts_cleanly(serve
         conn.close()
     postgres_only = {"schema_version", "chunk_fts", "registry_fts", "chunk_vectors"}  # SQLite: FTS5/sqlite-vec tables
     assert {t: c for t, c in actual.items() if t not in postgres_only} == expected  # regenerate schema_postgres.sql if not
+
+
+def test_connections_are_reused_from_a_pool(database):
+    server_processes = set()
+    for _ in range(30):  # 30 opens and closes, as 30 requests would
+        conn = pg.connect(database)
+        server_processes.add(conn.execute("SELECT pg_backend_pid()").fetchone()[0])
+        conn.close()
+    assert len(server_processes) <= 3  # a few pooled connections, not 30 new ones
+
+
+def test_a_returned_connection_leaves_nothing_behind(database):
+    conn = pg.connect(database)
+    conn.executescript("DROP TABLE IF EXISTS notes; CREATE TABLE notes (id SERIAL PRIMARY KEY, body TEXT);")
+    conn.commit()
+    conn.execute("INSERT INTO notes (body) VALUES (?)", ("never committed",))
+    conn.close()  # like sqlite3: closing without commit discards the change
+    conn.close()  # and closing twice is harmless
+    again = pg.connect(database)
+    try:
+        assert again.execute("SELECT COUNT(*) FROM notes").fetchone()[0] == 0
+    finally:
+        again.close()

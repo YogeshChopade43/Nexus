@@ -256,13 +256,20 @@ test('accounts: sign out, the sign-in page appears, sign back in', async ({ page
   await page.goto('/');
   await page.getByRole('button', { name: /account menu/ }).click();
   await page.getByRole('menuitem', { name: 'Sign out' }).click();
-  await expect(page.getByRole('heading', { name: 'Sign in to Nexus' })).toBeVisible();
-  await expect(page.getByRole('link', { name: /Create an account/ })).toHaveCount(0);  // sign-ups closed after the owner
+  await expect(page.getByRole('heading', { name: 'Welcome to Nexus' })).toBeVisible();
+  // An email with no account is offered one...
+  await page.getByLabel('Email').fill('newcomer@example.com');
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await expect(page.getByRole('heading', { name: 'Create your account' })).toBeVisible();
+  await page.getByRole('button', { name: 'Change email' }).click();
+  // ...and a known one is asked for its password.
   await page.getByLabel('Email').fill('owner@example.com');
-  await page.getByLabel('Password').fill('wrong password here');
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await expect(page.getByRole('heading', { name: 'Welcome back' })).toBeVisible();
+  await page.getByLabel('Password', { exact: true }).fill('wrong password here');
   await page.getByRole('button', { name: 'Sign in' }).click();
   await expect(page.getByRole('alert')).toContainText('Wrong email or password');
-  await page.getByLabel('Password').fill('e2e password 123');
+  await page.getByLabel('Password', { exact: true }).fill('e2e password 123');
   await page.getByRole('button', { name: 'Sign in' }).click();
   await expect(page.getByRole('heading', { name: 'How can I help?' })).toBeVisible();
 });
@@ -284,8 +291,10 @@ test('accounts: forgot password, the emailed link, a new password', async ({ pag
   const { MAILBOX } = await import('../playwright.config');
   await page.context().clearCookies();
   await page.goto('/login');
-  await page.getByRole('link', { name: 'Forgot password?' }).click();
   await page.getByLabel('Email').fill('owner@example.com');
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await page.getByRole('link', { name: 'Forgot password?' }).click();
+  await expect(page.getByLabel('Email')).toHaveValue('owner@example.com');  // carried over from sign-in
   await page.getByRole('button', { name: 'Send reset link' }).click();
   await expect(page.getByRole('status')).toContainText("If there's an account for owner@example.com");
 

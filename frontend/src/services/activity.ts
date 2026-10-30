@@ -1,5 +1,5 @@
 import { api } from './api';
-import type { Activity, ActivityFilter, ActivityResponse } from '../types/activity';
+import type { Activity, ActivityFilter, ActivityResponse, UndoPlan } from '../types/activity';
 
 export interface Notifications {
   unread: number;
@@ -20,4 +20,7 @@ export const activityService = {
 
   getNotifications: () => api.get<Notifications>('/api/activity/notifications'),
   markNotificationsRead: () => api.post<{ unread: number }>('/api/activity/notifications/read'),
+  planUndo: (id: string) => api.post<UndoPlan>(`/api/activity/${id}/undo/plan`),
+  runUndo: (id: string, plan: UndoPlan) =>
+    api.post<{ undone: boolean }>(`/api/activity/${id}/undo/run`, { tool: plan.tool, arguments: plan.arguments }),
 };

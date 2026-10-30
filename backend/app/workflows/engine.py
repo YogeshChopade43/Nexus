@@ -484,9 +484,10 @@ async def resume_interrupted_runs(
     for run in runs:
         input_data = _load_dict(run["input_data"])
         trigger = input_data.pop("trigger", None)
+        practice = input_data.pop("practice", False) is True
         try:
             new_id = start_background_run(
-                run["workflow_id"], tool_registry, app_connections(), WorkflowRunRequest(input_data=input_data),
+                run["workflow_id"], tool_registry, app_connections(), WorkflowRunRequest(input_data=input_data, practice=practice),
                 trigger=trigger, reuse=reusable_outputs(_load_list(run["events"])),
             )
         except Exception:
@@ -537,6 +538,8 @@ class RunState:
     events: list[dict[str, Any]] = field(default_factory=list)
     counter: list[int] = field(default_factory=lambda: [0])
     progress: Optional[Callable[[], None]] = None
+    practice: bool = False
+    skipped: list[str] = field(default_factory=list)  # node ids a practice run skipped
 
 
 # ---- per-type executors (each returns {"input": ..., "output": ...}) ---------------
@@ -591,16 +594,19 @@ async def _run_code(config, context) -> dict[str, Any]:
     return {"output": {"value": value}}
 
 
-async def _run_subworkflow(config, context, state: RunState) -> dict[str, Any]:
+async def _run_subworkflow(node_id: str, config, context, state: RunState) -> dict[str, Any]:
     if state.depth >= MAX_WORKFLOW_DEPTH:
         raise RuntimeError(f"Sub-workflows are nested too deep (max {MAX_WORKFLOW_DEPTH})")
     workflow_id = int(config.get("workflow_id") or 0)
     values = render_value(config.get("inputs") or {}, context)
     child = await run_workflow(
-        workflow_id, state.tool_registry, state.app_connections, WorkflowRunRequest(input_data=values),
+        workflow_id, state.tool_registry, state.app_connections, WorkflowRunRequest(input_data=values, practice=state.practice),
         trigger={"type": "manual", "inputs": values}, depth=state.depth + 1,
     )
     output = {"status": child.status, "run_id": child.id, "result": child.output.get("result", {})}
+    for event in child.events:  # the parent's practice summary lists what the sub-workflow would have changed
+        if event.get("practice_skipped"):
+            state.events.append({**event, "id": f"{node_id}-{event['id']}", "parent": node_id})
     if child.status == "failed":
         raise RuntimeError(f"Sub-workflow failed: {child.error}")
     return {"input": values, "output": output}
@@ -646,11 +652,46 @@ async def _run_parallel(node_id, config, context, state: RunState) -> dict[str, 
     return {"output": {"branches": [final for _, _, final in outcomes]}}
 
 
+def _practice_skip(node_type: str, config: dict[str, Any], context: dict[str, Any], state: RunState) -> Optional[dict[str, Any]]:
+    """In a practice run, what a step that would change something would have done, instead of doing it."""
+    if not state.practice:
+        return None
+    if node_type == "http":
+        method = str(config.get("method") or "GET").upper()
+        if method == "GET":
+            return None
+        label = f"HTTP {method}"
+        would_call = f"{label} {render_value(config.get('url') or '', context)}"
+        parameters = render_value(config.get("body") or {}, context)
+    elif node_type == "action":
+        tool_name = str(config.get("tool") or "")
+        if not tool_name and config.get("app") and config.get("action"):  # the older {app, action} shape
+            tool_name = f"{config['app']}_{config['action']}"
+        try:
+            tool = state.tool_registry.get_tool(tool_name)
+        except Exception:
+            return None  # an unknown tool fails the normal way, changing nothing
+        # 'ask' tools change data; so do write tools the user lets run without asking (drafts, files, memory).
+        changes = getattr(tool, "policy", "allow") == "ask" or getattr(tool, "read_only", None) is False
+        if not changes and tool_name != "nexus__notify":
+            return None
+        label = would_call = tool_name
+        parameters = render_value(config.get("parameters") or config.get("params") or {}, context)
+    else:
+        return None
+    return {"skipped": True, "would_call": would_call, "input": parameters, "attempts": 1,
+            "output": {"text": f"[practice run: {label} skipped]", "data": {}}}
+
+
 async def run_node(node: dict[str, Any], context: dict[str, Any], state: RunState) -> dict[str, Any]:
     """Execute one step (with retries and timeout). Raises on failure."""
     node_id = str(node.get("id"))
     node_type = _node_type(node)
     config = _node_config(node)
+    practice = _practice_skip(node_type, config, context, state)
+    if practice:
+        state.skipped.append(node_id)
+        return practice
     retries = max(0, min(int(config.get("retries") or 0), MAX_RETRIES))
 
     async def once() -> dict[str, Any]:
@@ -659,7 +700,11 @@ async def run_node(node: dict[str, Any], context: dict[str, Any], state: RunStat
         if node_type == "llm":
             return await _run_llm(config, context, state.workflow_provider_id)
         if node_type == "condition":
-            return {"output": {"result": evaluate_condition(config, context)}}
+            result = {"output": {"result": evaluate_condition(config, context)}}
+            field_path = str(config.get("field") or "")
+            if any(field_path.startswith(f"steps.{skipped}.") for skipped in state.skipped):
+                result["uncertain"] = True  # it read the placeholder of a step the practice run skipped
+            return result
         if node_type == "transform":
             return _run_transform(config, context)
         if node_type == "delay":
@@ -671,7 +716,7 @@ async def run_node(node: dict[str, Any], context: dict[str, Any], state: RunStat
         if node_type == "code":
             return await _run_code(config, context)
         if node_type == "workflow":
-            return await _run_subworkflow(config, context, state)
+            return await _run_subworkflow(node_id, config, context, state)
         if node_type == "loop":
             return await _run_loop(node_id, config, context, state)
         if node_type == "parallel":
@@ -762,9 +807,13 @@ async def _execute_graph(
             if node_type == "condition":
                 branch[node_id] = bool(output.get("result"))
                 event["condition"] = branch[node_id]
-            if node_type == "action":
+            if node_type == "action" and not result.get("skipped"):
                 event.update({"type": "tool_executed", "tool": result.get("tool"), "tool_name": result.get("tool"),
                               "app_id": result.get("app_id"), "connected": True})
+            if result.get("skipped"):
+                event.update({"practice_skipped": True, "would_call": result["would_call"]})
+            if result.get("uncertain"):
+                event["uncertain"] = True
             if node_type == "output":
                 final_output = output
             event["input"] = _sanitize(result.get("input", {}))
@@ -819,8 +868,10 @@ _active_runs: dict[str, asyncio.Task] = {}
 _semaphores: dict[int, tuple[int, asyncio.Semaphore]] = {}
 
 
-def _run_input(input_data: dict[str, Any], trigger: dict[str, Any]) -> dict[str, Any]:
-    return input_data if trigger == {"type": "manual"} else {**input_data, "trigger": trigger}
+def _run_input(input_data: dict[str, Any], trigger: dict[str, Any], practice: bool = False) -> dict[str, Any]:
+    run_input = input_data if trigger == {"type": "manual"} else {**input_data, "trigger": trigger}
+    # Stored with the run, so a resumed or re-run practice run stays one instead of changing things for real.
+    return {**run_input, "practice": True} if practice else run_input
 
 
 def _concurrency_limit(row: Any) -> int:
@@ -877,7 +928,7 @@ async def _run_workflow_as_owner(
     started_at = _utc_now()
     input_data = dict(req.input_data or {})
     trigger = trigger or {"type": "manual"}
-    run_input = _run_input(input_data, trigger)
+    run_input = _run_input(input_data, trigger, req.practice)
 
     conn = get_connection()
     try:
@@ -892,6 +943,7 @@ async def _run_workflow_as_owner(
 
     nodes, edges = load_workflow_graph(row)
     state = RunState(tool_registry, app_connections, row["llm_provider_id"], run_id, depth, dict(reuse or {}))
+    state.practice = req.practice
     state.progress = lambda: _update_progress(run_id, state.events)
     status, first_error, final_output = "completed", None, {}
 
@@ -944,7 +996,7 @@ async def _run_workflow_as_owner(
         first_error or f"{sum(1 for e in events if e['status'] == 'success')} step(s) succeeded",
         {"workflow_id": workflow_id, "run_id": run_id, "status": status, "trigger": trigger.get("type")},
     )
-    if status == "failed":
+    if status == "failed" and not req.practice:
         await _alert_failure(row["name"], first_error)
     return result
 
@@ -973,7 +1025,7 @@ def start_background_run(
     """Create the run row now and execute in the background; returns the run id."""
     trigger = trigger or {"type": "manual"}
     run_id = str(uuid4())
-    _insert_run(run_id, workflow_id, _utc_now(), _run_input(dict(req.input_data or {}), trigger))
+    _insert_run(run_id, workflow_id, _utc_now(), _run_input(dict(req.input_data or {}), trigger, req.practice))
     task = asyncio.create_task(run_workflow(
         workflow_id, tool_registry, app_connections, req, trigger=trigger, run_id=run_id, reuse=reuse,
     ))

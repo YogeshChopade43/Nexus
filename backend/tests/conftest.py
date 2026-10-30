@@ -93,11 +93,13 @@ def account():
 
 @pytest.fixture(autouse=True)
 def _act_as_test_account():
+    from app.api.routes import auth
     from app.auth import store
     from app.auth.context import current_user
     from app.core.database import init_db
 
     init_db()
+    auth.reset_rate_limits()  # per-IP limits are process-global; don't let one test's attempts spill into the next
     user = _test_account()
     token = current_user.set(user)
     yield

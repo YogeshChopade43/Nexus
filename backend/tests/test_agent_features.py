@@ -140,7 +140,12 @@ def test_streaming_pauses_for_approval(client, llm):
     set_policies(client, {})
 
 
-def test_conversation_to_workflow(client, llm):
+def test_conversation_to_workflow_replays_calls_when_drafting_fails(client, llm, monkeypatch):
+    from app.workflows import drafting
+
+    async def fail(description, current=None):
+        raise ValueError("No LLM provider configured")
+    monkeypatch.setattr(drafting, "draft_workflow", fail)
     llm.tool, llm.args = "agent_echo__list_items", {"count": 3}
     sid = session(client)
     client.post("/api/agent/run", json={"message": "list please", "session_id": sid})
@@ -152,6 +157,38 @@ def test_conversation_to_workflow(client, llm):
     empty = session(client)
     client.post("/api/agent/run", json={"message": "just talk", "session_id": empty})
     assert client.post(f"/api/agent/sessions/{empty}/workflow").status_code == 400
+
+
+def _drafted(client, llm, monkeypatch, trigger):
+    from app.workflows import drafting
+
+    seen = {}
+
+    async def draft(description, current=None):
+        seen["description"] = description
+        return {"name": "Echo a word", "description": "", "warnings": [], "nodes": [
+            {"id": "trigger_1", "type": "trigger", "name": "Trigger", "config": trigger},
+            {"id": "action_1", "type": "action", "name": "echo",
+             "config": {"tool": "agent_echo__echo", "parameters": {"text": "{{ trigger.inputs.word }}"}}},
+        ], "edges": [{"id": "e1", "source": "trigger_1", "target": "action_1"}]}
+    monkeypatch.setattr(drafting, "draft_workflow", draft)
+    llm.tool, llm.args = "agent_echo__echo", {"text": "mango"}
+    sid = session(client)
+    client.post("/api/agent/run", json={"message": "echo mango please", "session_id": sid})
+    return client.post(f"/api/agent/sessions/{sid}/workflow").json(), seen["description"]
+
+
+def test_conversation_to_workflow_drafts_inputs_from_the_chat(client, llm, monkeypatch):
+    inputs = [{"name": "word", "type": "text", "required": False, "default": "mango"}]
+    wf, prompt = _drafted(client, llm, monkeypatch, {"trigger_type": "manual", "inputs": inputs})
+    assert 'agent_echo__echo({"text": "mango"})' in prompt and "echo mango please" in prompt
+    assert wf["name"] == "Echo a word" and wf["isActive"]
+    assert wf["nodes"][1]["config"]["parameters"] == {"text": "{{ trigger.inputs.word }}"}
+
+
+def test_conversation_to_workflow_schedule_starts_switched_off(client, llm, monkeypatch):
+    wf, _ = _drafted(client, llm, monkeypatch, {"trigger_type": "recurrence", "frequency": "day", "interval": 1, "at": "09:00"})
+    assert wf["isActive"] is False
 
 
 def test_attachments_reach_the_model(client, llm):

@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Awaitable, Callable, List, Optional
 
 from app.agent.tool_selection import rank_tools
+from app.core.database import log_activity
 from app.core.exceptions import AppNotConnectedError
 from app.tools.registry import ToolRegistry
 
@@ -15,6 +16,7 @@ logger = logging.getLogger(__name__)
 MAX_TOOL_ITERATIONS = 10
 MAX_TOOL_RESULT_CHARS = 8000  # what the model sees of one result at a time
 MAX_STORED_RESULT_CHARS = 200_000  # the rest stays readable through nexus_read_result
+UNDO_RESULT_CHARS = 4000  # what an approved action keeps of its result, for working out its undo
 MAX_TOOLS_PER_TURN = 24  # most app tools sent per message (only ones matching the request), plus nexus_find_tools
 
 FIND_TOOLS = "nexus_find_tools"
@@ -411,6 +413,12 @@ class BaseAgent(Agent):
                     output = await self._execute_tool_call(call["name"], call["arguments"], events, summaries,
                                                            state["results"], call["id"])
                     ok = events[-1]["type"] == "tool_executed"
+                    if needs_ok and ok:  # what the user approved, so it can be undone from Activity
+                        done = events[-1]
+                        log_activity("action_approved", done.get("summary") or call["name"], metadata={
+                            "tool": call["name"], "arguments": done.get("arguments"), "app_id": done.get("app_id"),
+                            "result": json.dumps(done.get("data"), default=str)[:UNDO_RESULT_CHARS],
+                        })
                     await self._emit({"type": "tool_result", "tool": call["name"], "ok": ok,
                                       "summary": events[-1].get("summary") or events[-1].get("error", "")})
                 if needs_ok:

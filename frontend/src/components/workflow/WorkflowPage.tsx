@@ -4,7 +4,7 @@ import { PageHeader } from '../ui/PageHeader';
 import { runState } from './runState';
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { AlertCircle, Copy, Edit3, History, LayoutTemplate, Play, Plus, RotateCcw, Share2, Sparkles, Square, Upload, X, Zap, AlertTriangle } from 'lucide-react';
+import { AlertCircle, Copy, Edit3, FlaskConical, History, LayoutTemplate, Play, Plus, RotateCcw, Share2, Sparkles, Square, Upload, X, Zap, AlertTriangle } from 'lucide-react';
 import { exportFileName, shareNote } from './sharing';
 import { cn, formatRelativeTime, getErrorMessage } from '../../lib/utils';
 import { Card } from '../ui/Card';
@@ -76,6 +76,7 @@ export function WorkflowPage() {
   useEffect(loadFolders, [loadFolders]);
   const [copied, setCopied] = useState(false);
   const [inputsFor, setInputsFor] = useState<Workflow | null>(null);
+  const [inputsPractice, setInputsPractice] = useState(false);
   const [draft, setDraft] = useState<WorkflowDraft | null>(null);
   const [templates, setTemplates] = useState<WorkflowTemplate[] | null>(null);
   const [aiOpen, setAiOpen] = useState(false);
@@ -176,16 +177,16 @@ export function WorkflowPage() {
   }, [selectWorkflow, fetchWorkflowRuns]);
 
   /** Starts the workflow and opens the live run view; resolves to an error message, or null when it started. */
-  const runNow = useCallback(async (workflow: Workflow, input: Record<string, unknown>): Promise<string | null> => {
+  const runNow = useCallback(async (workflow: Workflow, input: Record<string, unknown>, practice = false): Promise<string | null> => {
     try {
       let run;
       try {
-        run = await workflowService.startRun(workflow.id, { input_data: input });
+        run = await workflowService.startRun(workflow.id, { input_data: input, practice });
       } catch (err) {
         // The digital will refuses a plain Run: running it really sends everything in it.
         if ((err as { code?: string }).code !== 'HTTP_409') throw err;
         if (!window.confirm(getErrorMessage(err))) return null;
-        run = await workflowService.startRun(workflow.id, { input_data: input, confirm: true });
+        run = await workflowService.startRun(workflow.id, { input_data: input, confirm: true, practice });
       }
       if (currentWorkflow?.id !== workflow.id) selectWorkflow(workflow);
       showRun(workflow.id, { ...run, events: [], trace: [] });
@@ -255,13 +256,14 @@ export function WorkflowPage() {
   }, [aiText, openEditor]);
 
   /** One-click run: asks for the manual trigger's inputs first when it has any. */
-  const handleExecute = useCallback(async (workflow: Workflow, input?: Record<string, unknown>) => {
+  const handleExecute = useCallback(async (workflow: Workflow, input?: Record<string, unknown>, practice = false) => {
     setRunError(null);
     if (input === undefined && manualInputs(workflow).length > 0) {
       setInputsFor(workflow);
+      setInputsPractice(practice);
       return;
     }
-    const failure = await runNow(workflow, input ?? {});
+    const failure = await runNow(workflow, input ?? {}, practice);
     if (failure) setRunError(failure);
   }, [runNow]);
 
@@ -388,6 +390,10 @@ export function WorkflowPage() {
                     <Button variant="primary" size="sm" onClick={() => void handleExecute(currentWorkflow)}>
                       <Play className="w-3.5 h-3.5" /> Run
                     </Button>
+                    <Button variant="secondary" size="sm" onClick={() => void handleExecute(currentWorkflow, undefined, true)}
+                      title="Run without changing anything: steps that would change data are skipped and listed">
+                      <FlaskConical className="w-3.5 h-3.5" /> Practice run
+                    </Button>
                     <Button variant="secondary" size="sm" onClick={() => { setRunError(null); setRunInputOpen(true); }}>
                       Run with input
                     </Button>
@@ -461,6 +467,7 @@ export function WorkflowPage() {
                           <div className="min-w-0">
                             <div className="flex items-center gap-2">
                               <Badge size="sm" variant={STATUS_VARIANTS[run.status] ?? 'default'}>{run.status}</Badge>
+                              {run.input_data?.practice === true && <Badge size="sm" variant="warning">Practice</Badge>}
                               <span className="text-xs text-nexus-text-muted">{formatRelativeTime(run.startedAt)}</span>
                               {typeof run.input_data?.trigger === 'object' && run.input_data?.trigger !== null && (
                                 <span className="text-xs text-nexus-text-muted">· {String((run.input_data.trigger as Record<string, unknown>).type)}</span>
@@ -501,11 +508,11 @@ export function WorkflowPage() {
       {inputsFor && (
         <RunInputsModal
           open
-          title={`Run ${inputsFor.name}`}
+          title={`${inputsPractice ? 'Practice run' : 'Run'} ${inputsFor.name}`}
           inputs={manualInputs(inputsFor)}
           onClose={() => setInputsFor(null)}
           onSubmit={async (values) => {
-            const failure = await runNow(inputsFor, values);
+            const failure = await runNow(inputsFor, values, inputsPractice);
             if (!failure) setInputsFor(null);
             return failure;
           }}

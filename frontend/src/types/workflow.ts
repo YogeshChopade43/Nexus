@@ -197,6 +197,12 @@ export interface ExecutionTraceEntry {
   app_id?: string;
   connected?: boolean;
   status?: string;
+  /** A practice run skipped this step because it would change something. */
+  practice_skipped?: boolean;
+  /** What the skipped step would have called: a tool name, or "HTTP POST <url>". */
+  would_call?: string;
+  /** A condition that read a skipped step's placeholder. */
+  uncertain?: boolean;
 }
 
 export interface WorkflowExecution {
@@ -263,4 +269,6 @@ export interface WorkflowRunRequest {
   input_data?: Record<string, unknown>;
   /** Running the digital will by hand: yes, really send everything. */
   confirm?: boolean;
+  /** Skip the steps that would change something and list them instead. */
+  practice?: boolean;
 }

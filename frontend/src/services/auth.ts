@@ -20,7 +20,13 @@ export interface AuthStatus {
   google?: boolean;
   /** Email can be sent (verification, password reset). */
   email?: boolean;
+  /** The operator's own privacy policy and terms, linked on the sign-in page ('' = none). */
+  privacyUrl?: string;
+  termsUrl?: string;
 }
+
+/** What the sign-in page asks after the email: its password, Google, a new account, or nothing (sign-ups closed). */
+export type LookupNext = 'password' | 'google' | 'create' | 'closed';
 
 export interface AuthSession {
   id: string;
@@ -31,6 +37,7 @@ export interface AuthSession {
 
 export const authService = {
   status: () => api.get<AuthStatus>('/api/auth/status'),
+  lookup: (email: string) => api.post<{ next: LookupNext }>('/api/auth/lookup', { email }),
   signup: (name: string, email: string, password: string) => api.post<AuthUser>('/api/auth/signup', { name, email, password }),
   login: (email: string, password: string) => api.post<AuthUser>('/api/auth/login', { email, password }),
   logout: () => api.post<void>('/api/auth/logout'),

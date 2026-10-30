@@ -1,8 +1,11 @@
 """Sign up, log in, log out, and who is signed in.
 
 The session lives in an HttpOnly cookie (scripts can't read it), SameSite=Lax, and Secure over HTTPS. The first
-account is the owner (admin); after it, sign-ups are closed unless NEXUS_SIGNUPS=open. Every account's data is its
-own (see app/auth/owner.py).
+account is the owner (admin); anyone else can sign up too, unless the admin closes sign-ups (Settings › Admin, or
+NEXUS_SIGNUPS=closed). Every account's data is its own (see app/auth/owner.py).
+
+The sign-in page asks for the email first, then /lookup says what comes next: the password, Google, creating the
+account, or nothing (sign-ups closed).
 """
 from __future__ import annotations
 
@@ -20,8 +23,31 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 COOKIE = "nexus_session"
 MAX_FAILURES, WINDOW_SECONDS = 10, 60  # failed logins per IP per minute before it has to wait
+SIGNUP_LIMIT = 5   # new accounts per IP per minute (stops mass sign-up abuse when sign-ups are open)
+EMAIL_LIMIT = 5    # emails sent per IP per minute (reset / resend): stops mailbox flooding and token spam
+LOOKUP_LIMIT = 20  # email lookups per IP per minute: plenty for typos, too few to sweep a list of addresses
 FAILED_LOGINS: dict[str, deque[float]] = defaultdict(deque)
+RATE_BUCKETS: dict[tuple[str, str], deque[float]] = defaultdict(deque)
 WRONG = "Wrong email or password"
+
+
+def _rate_limit(bucket: str, request: Request, limit: int, window: int = WINDOW_SECONDS) -> None:
+    """Allow ``limit`` requests to ``bucket`` per IP per ``window`` seconds, else 429. Per process (one deployment)."""
+    hits = RATE_BUCKETS[(bucket, _client(request))]
+    now = time.monotonic()
+    while hits and now - hits[0] > window:
+        hits.popleft()
+    if len(hits) >= limit:
+        raise HTTPException(status_code=429, detail="Too many attempts. Please wait a minute and try again.")
+    hits.append(now)
+    if len(RATE_BUCKETS) > 10_000:  # bound memory under IP churn: drop buckets that have emptied out
+        for key in [k for k, v in RATE_BUCKETS.items() if not v]:
+            del RATE_BUCKETS[key]
+
+
+def reset_rate_limits() -> None:
+    FAILED_LOGINS.clear()
+    RATE_BUCKETS.clear()
 
 
 class SignupIn(BaseModel):
@@ -82,12 +108,31 @@ def status(request: Request) -> dict[str, Any]:
     user = session_user(request)
     from app.api.routes.auth_google import configured as google_ready
 
+    from app.quota import instance
+
+    links = instance()
     return {"hasUsers": store.user_count() > 0, "signupsOpen": signups_open(), "user": store.public(user) if user else None,
-            "google": google_ready(), "email": mailer.configured()}
+            "google": google_ready(), "email": mailer.configured(),
+            "privacyUrl": links["privacyUrl"], "termsUrl": links["termsUrl"]}
+
+
+@router.post("/lookup")
+def lookup(body: EmailIn, request: Request) -> dict[str, str]:
+    """What the sign-in page asks after the email. This tells whether an email has an account, which sign-up has to
+    say anyway (with open sign-ups); the rate limit keeps it from being used to sweep a list of addresses."""
+    _rate_limit("lookup", request, LOOKUP_LIMIT)
+    email = store.normalise_email(body.email)
+    if not store.EMAIL.match(email):
+        raise HTTPException(status_code=422, detail="Enter a valid email address")
+    user = store._row("email = ?", email)
+    if user is not None:  # disabled accounts too: sign-in itself refuses them without saying why
+        return {"next": "password" if user["password_hash"] else "google"}
+    return {"next": "create" if signups_open() else "closed"}
 
 
 @router.post("/signup")
 def signup(body: SignupIn, request: Request, response: Response) -> dict[str, Any]:
+    _rate_limit("signup", request, SIGNUP_LIMIT)
     if not signups_open():
         raise HTTPException(status_code=403, detail="Sign-ups are closed on this Nexus. Ask its owner for an account.")
     try:
@@ -137,6 +182,7 @@ def resend_verification(request: Request) -> Response:
     user = session_user(request)
     if user is None:
         raise HTTPException(status_code=401, detail="Sign in to use Nexus")
+    _rate_limit("email", request, EMAIL_LIMIT)
     if store.needs_verification(user):
         try:
             mailer.send_verification(user["email"], store.issue_token(user["id"], "verify", 48))
@@ -146,8 +192,9 @@ def resend_verification(request: Request) -> Response:
 
 
 @router.post("/forgot-password", status_code=204)
-def forgot_password(body: EmailIn) -> Response:
+def forgot_password(body: EmailIn, request: Request) -> Response:
     """Always the same answer, so it never tells whether an email has an account."""
+    _rate_limit("email", request, EMAIL_LIMIT)
     user = store._row("email = ?", store.normalise_email(body.email))
     if user is not None and not user["disabled"] and mailer.configured():
         try:

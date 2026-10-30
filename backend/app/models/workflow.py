@@ -68,6 +68,7 @@ class WorkflowResponse(BaseModel):
 class WorkflowRunRequest(BaseModel):
     input_data: Dict[str, Any] = Field(default_factory=dict)
     confirm: bool = False  # running the digital will by hand needs it
+    practice: bool = False  # skip the steps that would change something and list them instead
     input: Optional[Dict[str, Any]] = None
 
     def model_post_init(self, __context: Any) -> None:

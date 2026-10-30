@@ -26,20 +26,27 @@ const at = (path: string) => render(
   <MemoryRouter initialEntries={[path]}><AuthProvider><AuthGate><p>The app</p></AuthGate></AuthProvider></MemoryRouter>);
 const signedOut = { hasUsers: true, signupsOpen: true, user: null, google: true, email: true };
 
-test('sign-in offers Google and a forgotten password, and shows why a Google sign-in failed', async () => {
-  serve({ ...signedOut });
+test('sign-in offers Google, shows why a Google sign-in failed, and a forgotten password keeps the email', async () => {
+  serve({ ...signedOut }, { 'POST /api/auth/lookup': [200, { next: 'password' }] });
   at('/login?error=Sign-ups%20are%20closed');
   const google = await screen.findByRole('link', { name: /Continue with Google/ });
   expect(google.getAttribute('href')).toMatch(/\/api\/auth\/google\/start$/);
   expect(screen.getByRole('alert')).toHaveTextContent('Sign-ups are closed');
-  expect(screen.getByRole('link', { name: 'Forgot password?' })).toHaveAttribute('href', '/forgot-password');
+  fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'ana@example.com' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+  fireEvent.click(await screen.findByRole('link', { name: 'Forgot password?' }));
+  expect(await screen.findByRole('heading', { name: 'Reset your password' })).toBeInTheDocument();
+  expect(screen.getByLabelText('Email')).toHaveValue('ana@example.com');  // no need to type it twice
 });
 
 test('without Google keys or email there is neither button', async () => {
-  serve({ ...signedOut, google: false, email: false });
+  serve({ ...signedOut, google: false, email: false }, { 'POST /api/auth/lookup': [200, { next: 'password' }] });
   at('/login');
-  await screen.findByRole('heading', { name: 'Sign in to Nexus' });
+  await screen.findByRole('heading', { name: 'Welcome to Nexus' });
   expect(screen.queryByRole('link', { name: /Continue with Google/ })).toBeNull();
+  fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'ana@example.com' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+  await screen.findByRole('heading', { name: 'Welcome back' });
   expect(screen.queryByRole('link', { name: 'Forgot password?' })).toBeNull();
 });
 

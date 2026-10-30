@@ -5,7 +5,7 @@
 #      NEXUS_DOMAIN=nexus.example.com
 #      NEXUS_SECRET_KEY=<python -c "import secrets; print(secrets.token_urlsafe(32))">   keep a copy: it decrypts stored keys
 #      POSTGRES_PASSWORD=<another long random string>
-#    Optional: NEXUS_SIGNUPS=open, email (NEXUS_SMTP_HOST, NEXUS_SMTP_PORT, NEXUS_SMTP_USER, NEXUS_SMTP_PASSWORD,
+#    Optional: NEXUS_SIGNUPS=closed (anyone can sign up otherwise), email (NEXUS_SMTP_HOST, NEXUS_SMTP_PORT, NEXUS_SMTP_USER, NEXUS_SMTP_PASSWORD,
 #    NEXUS_MAIL_FROM, or NEXUS_RESEND_API_KEY) and Google sign-in (NEXUS_GOOGLE_CLIENT_ID, NEXUS_GOOGLE_CLIENT_SECRET).
 # 3. docker compose up -d --build, open https://<your domain> and create the first account: it owns this Nexus.
 services:
@@ -49,16 +49,25 @@ services:
       NEXUS_RESEND_API_KEY: ${NEXUS_RESEND_API_KEY:-}
       NEXUS_GOOGLE_CLIENT_ID: ${NEXUS_GOOGLE_CLIENT_ID:-}
       NEXUS_GOOGLE_CLIENT_SECRET: ${NEXUS_GOOGLE_CLIENT_SECRET:-}
+      SENTRY_DSN: ${SENTRY_DSN:-}
     volumes:
       - nexus-data:/app/backend/data  # files people create and upload, MCP server logs
     mem_limit: 2g  # a crafted upload or feed that expands in a shared worker OOMs this container, not the host
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
     networks: [internal]
     restart: unless-stopped
 
   caddy:
     image: caddy:2-alpine
     command: caddy reverse-proxy --from ${NEXUS_DOMAIN} --to nexus:8000
-    depends_on: [nexus]
+    depends_on:
+      nexus:
+        condition: service_healthy  # no visitor sees an error page while Nexus is still starting
     ports:
       - "80:80"
       - "443:443"
@@ -67,6 +76,33 @@ services:
     networks:
       internal:
         ipv4_address: 172.30.0.10
+    restart: unless-stopped
+
+  backup:
+    image: postgres:16-alpine
+    depends_on:
+      nexus:
+        condition: service_healthy  # Nexus has created the schema: the first dump isn't an empty database
+    environment:
+      PGHOST: db
+      PGUSER: nexus
+      PGDATABASE: nexus
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    # A dump now and then every day, the last 14 kept in the backups volume. Copy them off this server
+    # (docker compose cp backup:/backups ./backups), and keep
+    # NEXUS_SECRET_KEY with them: stored keys can't be read without it. Restore: pg_restore -d nexus --clean <file>
+    entrypoint:
+      - sh
+      - -c
+      - |
+        while true; do
+          f=/backups/nexus-$$(date +%Y%m%d-%H%M).dump
+          if pg_dump -Fc -f "$$f"; then find /backups -name 'nexus-*.dump' -mtime +13 -delete; else rm -f "$$f"; fi
+          sleep 86400
+        done
+    volumes:
+      - backups:/backups  # a named volume: Podman won't create a missing host folder for a bind mount
+    networks: [internal]
     restart: unless-stopped
 
 networks:
@@ -79,3 +115,4 @@ volumes:
   postgres-data:
   nexus-data:
   caddy-data:
+  backups:

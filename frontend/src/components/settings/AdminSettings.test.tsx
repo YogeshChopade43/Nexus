@@ -17,7 +17,7 @@ function serve() {
     const replies: Record<string, unknown> = {
       'GET /api/auth/status': { hasUsers: true, signupsOpen: false, user: OWNER },
       'GET /api/admin/users': [{ ...OWNER, disabled: false, createdAt: '2026-09-01T10:00:00Z', tokens30d: 0, storageBytes: 0 }, BO],
-      'GET /api/admin/instance': { signups: null, storageLimitMb: 1024 },
+      'GET /api/admin/instance': { signups: null, storageLimitMb: 1024, privacyUrl: '', termsUrl: '' },
       'GET /api/admin/deployment': [
         { id: 'database', title: 'Database', ok: true, detail: 'PostgreSQL.' },
         { id: 'https', title: 'HTTPS', ok: false, detail: 'Put Nexus behind a TLS proxy.' },
@@ -56,12 +56,13 @@ test('accounts show their usage, and someone can be disabled (never yourself)', 
   expect(await within(bo).findByText('Disabled')).toBeInTheDocument();
 });
 
-test('sign-ups and the storage limit are saved for the whole instance', async () => {
+test('sign-ups, the storage limit and the policy links are saved for the whole instance', async () => {
   const calls = serve();
   show();
   fireEvent.change(await screen.findByLabelText('Sign-ups'), { target: { value: 'open' } });
   fireEvent.change(screen.getByLabelText('Storage per person (MB)'), { target: { value: '500' } });
+  fireEvent.change(screen.getByLabelText('Privacy policy link'), { target: { value: 'https://example.com/privacy' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(calls.find(c => c.method === 'PATCH' && c.path === '/api/admin/instance')?.body)
-    .toEqual({ signups: 'open', storageLimitMb: 500 }));
+    .toEqual({ signups: 'open', storageLimitMb: 500, privacyUrl: 'https://example.com/privacy', termsUrl: '' }));
 });

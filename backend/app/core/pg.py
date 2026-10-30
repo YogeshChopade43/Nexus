@@ -14,12 +14,14 @@ SQLite (local, tests) and PostgreSQL (production). ``translate`` turns the SQLit
 - an INSERT into a table with an ``id`` column gets ``RETURNING id``, which is ``lastrowid``
 A unique-key violation is raised as ``sqlite3.IntegrityError``, so existing ``except`` clauses keep working.
 
-ponytail: a new connection per get_connection() call (as with SQLite); add psycopg_pool if connection setup shows up.
+Connections come from a pool per database (POOL_SIZE at most); close() hands one back, discarding anything uncommitted.
 """
 from __future__ import annotations
 
+import atexit
 import re
 import sqlite3
+import threading
 from typing import Any, Iterator, Optional, Sequence
 
 _NOW = "to_char(now() at time zone 'utc', 'YYYY-MM-DD HH24:MI:SS')"
@@ -120,6 +122,21 @@ class Cursor:
         return iter(self.fetchall())
 
 
+POOL_SIZE = 20  # per process: request threads plus the scheduler, bots and the ingest worker
+_pools: dict[str, Any] = {}
+_pools_lock = threading.Lock()
+
+
+def _pool(url: str) -> Any:
+    with _pools_lock:
+        if url not in _pools:
+            from psycopg_pool import ConnectionPool
+
+            _pools[url] = ConnectionPool(url, min_size=1, max_size=POOL_SIZE, open=True)
+            atexit.register(_pools[url].close)
+        return _pools[url]
+
+
 class Connection:
     """The sqlite3.Connection subset Nexus uses, on PostgreSQL."""
 
@@ -128,7 +145,8 @@ class Connection:
     def __init__(self, url: str) -> None:
         import psycopg
 
-        self._conn = psycopg.connect(url)
+        self._pool = _pool(url)
+        self._conn = self._pool.getconn()
         self.row_factory = None  # accepted for compatibility; rows are always Row
 
     def _has_id(self, table: str) -> bool:
@@ -173,7 +191,14 @@ class Connection:
         self._conn.rollback()
 
     def close(self) -> None:
-        self._conn.close()
+        if self._conn is None:
+            return
+        from psycopg.pq import TransactionStatus
+
+        if self._conn.info.transaction_status != TransactionStatus.IDLE:
+            self._conn.rollback()  # like sqlite3: closing without commit discards the change
+        self._pool.putconn(self._conn)
+        self._conn = None
 
     def __enter__(self) -> "Connection":
         return self

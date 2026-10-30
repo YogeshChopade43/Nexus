@@ -17,10 +17,14 @@ import {
   MessageCircle,
   CheckCircle,
   AlarmClock,
+  Undo2,
+  ShieldCheck,
 } from 'lucide-react';
 import { useActivity } from '../../hooks/useActivity';
-import { formatRelativeTime } from '../../lib/utils';
-import type { Activity, ActivityType } from '../../types/activity';
+import { formatRelativeTime, getErrorMessage } from '../../lib/utils';
+import { Modal } from '../ui/Modal';
+import { activityService } from '../../services/activity';
+import type { Activity, ActivityType, UndoPlan } from '../../types/activity';
 
 type ActivityGroup = 'all' | 'messages' | 'apps' | 'workflows' | 'settings';
 
@@ -44,6 +48,8 @@ const typeLabels: Record<ActivityType, string> = {
   run_once_set: 'Run once set',
   run_once_ran: 'Ran once',
   settings_changed: 'Settings changed',
+  action_approved: 'Action approved',
+  action_undone: 'Action undone',
 };
 
 const typeIcons: Record<ActivityType, typeof ActivityIcon> = {
@@ -66,11 +72,13 @@ const typeIcons: Record<ActivityType, typeof ActivityIcon> = {
   run_once_set: Repeat1,
   run_once_ran: Repeat1,
   settings_changed: Settings,
+  action_approved: ShieldCheck,
+  action_undone: Undo2,
 };
 
 function activityGroup(type: ActivityType): ActivityGroup {
   if (type === 'message_sent' || type === 'message_received') return 'messages';
-  if (type === 'app_connected' || type === 'app_disconnected' || type === 'server_error') return 'apps';
+  if (type === 'app_connected' || type === 'app_disconnected' || type === 'server_error' || type === 'action_approved' || type === 'action_undone') return 'apps';
   if (
     type === 'workflow_created' ||
     type === 'workflow_updated' ||
@@ -88,7 +96,78 @@ function activityGroup(type: ActivityType): ActivityGroup {
   return 'settings';
 }
 
-function ActivityCard({ activity }: { activity: Activity }) {
+/** Undo for an action approved in chat: the AI proposes the reverse call, the user confirms it. */
+function UndoAction({ activity }: { activity: Activity }) {
+  const [undone, setUndone] = useState(Boolean(activity.metadata?.undone_at));
+  const [open, setOpen] = useState(false);
+  const [plan, setPlan] = useState<UndoPlan | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  if (undone) return <Badge variant="success" size="sm">Undone</Badge>;
+
+  const start = async () => {
+    setOpen(true);
+    setPlan(null);
+    setError(null);
+    setBusy(true);
+    try {
+      setPlan(await activityService.planUndo(activity.id));
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirm = async () => {
+    if (!plan) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await activityService.runUndo(activity.id, plan);
+      setUndone(true);
+      setOpen(false);
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <Button variant="secondary" size="sm" onClick={() => void start()} className="gap-1.5">
+        <Undo2 className="w-3.5 h-3.5" aria-hidden /> Undo
+      </Button>
+      <Modal open={open} onClose={() => setOpen(false)} title="Undo this action?" size="md">
+        <div className="space-y-3">
+          {busy && !plan && <p className="text-sm text-nexus-text-muted">Working out how to undo it…</p>}
+          {plan && (
+            <>
+              <p className="text-sm text-nexus-text">{plan.explanation}</p>
+              <pre className="p-2 bg-nexus-bg text-nexus-text-secondary text-xs font-mono rounded overflow-x-auto max-w-full">
+                {`${plan.tool}
+${JSON.stringify(plan.arguments, null, 2)}`}
+              </pre>
+            </>
+          )}
+          {error && <p className="text-sm text-nexus-danger">{error}</p>}
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>Cancel</Button>
+            {plan && (
+              <Button variant="primary" size="sm" onClick={() => void confirm()} disabled={busy}>
+                {busy ? 'Undoing…' : 'Undo it'}
+              </Button>
+            )}
+          </div>
+        </div>
+      </Modal>
+    </>
+  );
+}
+
+export function ActivityCard({ activity }: { activity: Activity }) {
   const Icon = typeIcons[activity.type] ?? ActivityIcon;
   const isError = activity.type === 'app_disconnected' || activity.type === 'workflow_failed';
 
@@ -101,6 +180,7 @@ function ActivityCard({ activity }: { activity: Activity }) {
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-sm font-medium text-nexus-text">{activity.title}</span>
           <Badge variant={isError ? 'danger' : 'default'} size="sm">{typeLabels[activity.type]}</Badge>
+          {activity.type === 'action_approved' && <span className="ml-auto"><UndoAction activity={activity} /></span>}
         </div>
         <p className="text-sm text-nexus-text-secondary mt-1 break-words">{activity.description}</p>
         {Object.keys(activity.metadata ?? {}).length > 0 && (

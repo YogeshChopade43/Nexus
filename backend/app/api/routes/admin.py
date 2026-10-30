@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app import quota
 from app.auth import store
@@ -61,6 +61,17 @@ def change_user(user_id: int, body: UserChange) -> dict[str, Any]:
 class InstanceChange(BaseModel):
     signups: Optional[Literal["open", "closed"]] = None
     storageLimitMb: Optional[int] = Field(default=None, ge=0, le=10_000_000)
+    privacyUrl: Optional[str] = Field(default=None, max_length=500)
+    termsUrl: Optional[str] = Field(default=None, max_length=500)
+
+    @field_validator("privacyUrl", "termsUrl")
+    @classmethod
+    def _web_address(cls, value: Optional[str]) -> Optional[str]:
+        """Shown as a link to everyone signing in: a web address or nothing (never javascript: and the like)."""
+        value = value.strip() if value is not None else None
+        if value and not value.startswith(("https://", "http://")):
+            raise ValueError("Use a full web address, starting with https://")
+        return value
 
 
 @router.get("/instance")
@@ -72,9 +83,8 @@ def get_instance() -> dict[str, Any]:
 @router.patch("/instance")
 def change_instance(body: InstanceChange) -> dict[str, Any]:
     require_admin("Instance settings")
-    changes = body.model_dump(exclude_unset=True)
-    if changes.get("storageLimitMb") is None:
-        changes.pop("storageLimitMb", None)
+    # None means "leave as is", except for sign-ups, where it means "as the server is set".
+    changes = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None or k == "signups"}
     return quota.save_instance(changes)
 
 
@@ -111,6 +121,9 @@ def deployment(request: Request) -> list[dict[str, Any]]:
                "Set NEXUS_SMTP_HOST (or NEXUS_RESEND_API_KEY) so people can verify their address and reset passwords."),
         _check("google", "Google sign-in", auth_google.configured(),
                "On." if auth_google.configured() else "Optional: set NEXUS_GOOGLE_CLIENT_ID and NEXUS_GOOGLE_CLIENT_SECRET."),
+        _check("error_reports", "Error reports", bool(os.getenv("SENTRY_DSN")),
+               "Unexpected errors are sent to Sentry." if os.getenv("SENTRY_DSN") else
+               "Optional: set SENTRY_DSN to hear about crashes before your users tell you."),
         _check("signups", "Sign-ups", True,
                "Anyone can create an account." if signups_open else "Closed: only existing accounts can sign in."),
     ]

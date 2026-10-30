@@ -99,9 +99,10 @@ def test_new_google_accounts_follow_the_sign_up_setting(google, monkeypatch):
     client, profile = google
     client.post("/api/auth/signup", json={"email": "owner@example.com", "password": "correct horse battery"})
     client.cookies.clear()
+    monkeypatch.setenv("NEXUS_SIGNUPS", "closed")
     back = client.get("/api/auth/google/callback", params={"code": "good-code", "state": start(client)})
     assert "error=" in back.headers["location"] and "closed" in back.headers["location"].lower()
-    monkeypatch.setenv("NEXUS_SIGNUPS", "open")
+    monkeypatch.delenv("NEXUS_SIGNUPS")  # back to the default: anyone can sign up
     client.get("/api/auth/google/callback", params={"code": "good-code", "state": start(client)})
     assert client.get("/api/auth/me").json()["isAdmin"] is False
 

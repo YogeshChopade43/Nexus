@@ -27,6 +27,7 @@ function safeSlice(str: string, len: number): string {
 
 export function ExecutionTrace({ trace, autoScroll = true }: ExecutionTraceProps) {
   const traceEndRef = useRef<HTMLDivElement>(null);
+  const skipped = trace.filter(entry => entry.practice_skipped);
 
   useEffect(() => {
     if (autoScroll) {
@@ -51,7 +52,10 @@ export function ExecutionTrace({ trace, autoScroll = true }: ExecutionTraceProps
     }
   };
 
-  const getStatusBadge = (type: ExecutionTraceEntry['type'], status?: string) => {
+  const getStatusBadge = (entry: ExecutionTraceEntry) => {
+    const { type, status } = entry;
+    if (entry.practice_skipped) return <Badge variant="warning" size="sm">Practice</Badge>;
+    if (entry.uncertain) return <Badge variant="warning" size="sm">Uncertain (practice)</Badge>;
     if (status === 'running') return <Badge variant="info" size="sm">Running</Badge>;
     if (status === 'cancelled') return <Badge variant="default" size="sm">Cancelled</Badge>;
     if (status === 'success') return <Badge variant="success" size="sm">Completed</Badge>;
@@ -97,6 +101,30 @@ export function ExecutionTrace({ trace, autoScroll = true }: ExecutionTraceProps
 
       <ScrollArea className="flex-1">
         <div className="p-4 space-y-4">
+          {skipped.length > 0 && (
+            <div className="rounded-lg border border-nexus-warning/40 bg-nexus-warning/5 p-3">
+              <p className="text-sm font-medium text-nexus-text">
+                Would have made {skipped.length} {skipped.length === 1 ? 'change' : 'changes'}
+              </p>
+              <p className="mb-2 text-xs text-nexus-text-muted">Practice run: these steps were skipped, so nothing was changed.</p>
+              <ul className="space-y-1.5">
+                {skipped.map((entry, index) => (
+                  <li key={entry.id || `skipped-${index}`}>
+                    <details className="group">
+                      <summary className="flex cursor-pointer items-center gap-1.5 text-xs text-nexus-text-secondary">
+                        <ChevronRight className="h-3.5 w-3.5 transition-transform group-open:rotate-90" />
+                        <span className="text-nexus-text">{entry.nodeName || entry.nodeId}</span>
+                        <span className="font-mono">{entry.would_call}</span>
+                      </summary>
+                      <pre className="mt-1 max-w-full overflow-x-auto rounded bg-nexus-bg p-2 font-mono text-xs text-nexus-text-secondary">
+                        {safeSlice(safeStringify(entry.input), 5000)}
+                      </pre>
+                    </details>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           {trace.map((entry, index) => (
             <div
               key={entry.id || `trace-${index}`}
@@ -114,7 +142,7 @@ export function ExecutionTrace({ trace, autoScroll = true }: ExecutionTraceProps
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
                       <span className="font-mono text-sm text-nexus-text">{entry.nodeName || entry.nodeId || 'Unknown'}</span>
-                      {getStatusBadge(entry.type, entry.status)}
+                      {getStatusBadge(entry)}
                       {entry.reused && <Badge variant="default" size="sm">reused from last run</Badge>}
                       {entry.duration !== undefined && entry.duration !== null && (
                         <span className="text-xs text-nexus-text-muted ml-auto">

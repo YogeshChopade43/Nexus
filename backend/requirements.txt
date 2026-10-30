@@ -47,3 +47,5 @@ websockets==17.1
 playwright==1.63.0  # the built-in web browser (drives installed Chrome/Edge)
 pillow==12.3.0  # images in documents (security fixes; pulled in by other packages)
 psycopg[binary]==3.3.6  # PostgreSQL when DATABASE_URL is set (production)
+psycopg-pool==3.3.3  # reuses PostgreSQL connections instead of opening one per query
+sentry-sdk==2.72.0  # error reports, only when SENTRY_DSN is set

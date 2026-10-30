@@ -13,6 +13,9 @@ export interface InstanceSettings {
   signups: 'open' | 'closed' | null;
   /** Per person, admins exempt; 0 = no limit. */
   storageLimitMb: number;
+  /** The operator's own policies, linked on the sign-in page ('' = none). */
+  privacyUrl: string;
+  termsUrl: string;
 }
 
 export interface DeploymentCheck {
