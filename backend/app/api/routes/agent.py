@@ -277,7 +277,8 @@ class _Prepared:
             self.history = clean_history(self.req.context.get("previousMessages", []))[-HISTORY_KEEP:]
             return
         messages = clean_history(self.session.get("messages") or [])
-        self.history = messages[-HISTORY_KEEP:]
+        # Recent replies carry what their tools returned, so follow-ups keep the IDs; the summary stays text-only.
+        self.history = clean_history(self.session.get("messages") or [], with_tools=True)[-HISTORY_KEEP:]
         older = messages[:-HISTORY_KEEP]
         metadata = dict(self.session.get("metadata") or {})
         self.summary = metadata.get("summary", "")

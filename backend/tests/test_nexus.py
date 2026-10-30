@@ -86,9 +86,11 @@ def test_agent_calls_mcp_tool_with_session_history(client, echo, monkeypatch):
     assert tool_msg["role"] == "tool" and tool_msg["tool_call_id"] == "t1" and '"items": [0, 1, 2]' in tool_msg["content"]
 
     client.post("/api/agent/run", json={"message": "and again?", "session_id": session_id})
-    assert [(m["role"], m["content"]) for m in llm.calls[-1][1:]] == [
-        ("user", "list items please"), ("assistant", "Found 3 items."), ("user", "and again?"),
-    ]
+    sent = [(m["role"], m["content"]) for m in llm.calls[-1][1:]]
+    assert [role for role, _ in sent] == ["user", "assistant", "user"]
+    assert sent[0][1] == "list items please" and sent[2][1] == "and again?"
+    # The earlier reply carries what its tool returned, so a follow-up can use it.
+    assert sent[1][1].startswith("Found 3 items.") and "echo__list_items" in sent[1][1] and '"items": [0, 1, 2]' in sent[1][1]
     assert client.get("/api/activity", params={"types": "message_received"}).json()["total"] >= 2
 
 

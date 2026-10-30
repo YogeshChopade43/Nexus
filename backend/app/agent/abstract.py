@@ -6,20 +6,59 @@ import re
 from abc import ABC, abstractmethod
 from typing import Any, Awaitable, Callable, List, Optional
 
+import jsonschema
+
 from app.agent.tool_selection import rank_tools
 from app.core.database import log_activity
 from app.core.exceptions import AppNotConnectedError
+from app.llm.errors import ProviderError
 from app.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
-MAX_TOOL_ITERATIONS = 10
+MAX_TOOL_ITERATIONS = 15
 MAX_TOOL_RESULT_CHARS = 8000  # what the model sees of one result at a time
 MAX_STORED_RESULT_CHARS = 200_000  # the rest stays readable through nexus_read_result
 UNDO_RESULT_CHARS = 4000  # what an approved action keeps of its result, for working out its undo
 MAX_TOOLS_PER_TURN = 24  # most app tools sent per message (only ones matching the request), plus nexus_find_tools
 
 FIND_TOOLS = "nexus_find_tools"
+
+
+def schema_problems(schema: dict[str, Any], arguments: dict[str, Any], limit: int = 3) -> list[str]:
+    """What's wrong with ``arguments`` for a tool with this JSON schema, as lines the model can act on.
+
+    A tool whose own schema is broken (or points at definitions that aren't there) isn't held back: its arguments
+    go to the app unchecked. Values apps accept anyway ("5" for a number, null for an optional field) pass too."""
+    try:
+        validator_class = jsonschema.validators.validator_for(schema)
+        validator_class.check_schema(schema)
+        errors = [e for e in validator_class(schema).iter_errors(arguments) if not _app_accepts(e)]
+    except Exception as exc:  # SchemaError, or an unresolvable $ref found while checking
+        logger.warning("Skipping argument check, the tool's schema can't be used: %s", getattr(exc, "message", exc))
+        return []
+    errors.sort(key=lambda e: [str(p) for p in e.absolute_path])
+    return [f"{'.'.join(str(p) for p in e.absolute_path) or '(top level)'}: {e.message}" for e in errors[:limit]]
+
+
+def _app_accepts(error: Any) -> bool:
+    """A type mismatch the app coerces itself (MCP servers built on pydantic do), so it isn't worth a round trip."""
+    if error.validator != "type":
+        return False
+    value, wanted = error.instance, error.validator_value
+    wanted = wanted if isinstance(wanted, list) else [wanted]
+    if value is None:
+        return True  # an optional field sent as null; a missing required one is caught before this
+    if not isinstance(value, str):
+        return False
+    text = value.strip().lower()
+    if "boolean" in wanted and text in ("true", "false"):
+        return True
+    try:
+        number = float(text)
+    except ValueError:
+        return False
+    return "number" in wanted or ("integer" in wanted and number.is_integer())
 
 
 def unseen_links(arguments: dict[str, Any], link_args: tuple[str, ...], seen: str) -> list[str]:
@@ -105,6 +144,13 @@ class Agent(ABC):
         pass
 
 
+NOTHING_CHANGED = "Nothing was changed after the last completed step."
+FINAL_ASK = ("Don't call any more tools. Answer my request now with what you found so far, and say plainly if "
+             "anything is unfinished.")
+REPEAT_NOTE = "You already called {tool} with these arguments twice. Use the earlier result, or try something different."
+REPEAT_STOP = "_I stopped because I was repeating the same step._"
+STOPPED = "Not run: stopped."
+REPEAT_EXEMPT = (FIND_TOOLS, READ_RESULT, ASK_USER)  # paging or searching with the same arguments is fine
 DECLINED = "The user declined this action, so it was not done. Do not retry it; tell the user it was not done."
 
 
@@ -384,6 +430,21 @@ class BaseAgent(Agent):
                     state["queue"].pop(0)
                     messages.append({"role": "tool", "tool_call_id": call["id"], "content": output})
                     continue
+                key = self._call_key(call)
+                if key and state.setdefault("calls_seen", {}).get(key, 0) >= 2:
+                    # It already ran twice: don't run (or ask the user about) it again. Steer once, then stop.
+                    state["queue"].pop(0)
+                    noted = state.setdefault("calls_noted", [])
+                    if key not in noted:
+                        noted.append(key)
+                        events.append({"type": "tool_repeat", "tool_name": call["name"], "arguments": call["arguments"]})
+                        messages.append({"role": "tool", "tool_call_id": call["id"], "content": REPEAT_NOTE.format(tool=call["name"])})
+                        continue
+                    events.append({"type": "repeat_limit", "tool_name": call["name"]})
+                    for unrun in [call, *state["queue"]]:  # every tool call needs a result, even unrun ones
+                        messages.append({"role": "tool", "tool_call_id": unrun["id"], "content": STOPPED})
+                    state["queue"] = []
+                    break
                 needs_ok = self._policy(call["name"]) == "ask" or self._unseen_links(call, messages)
                 guidance = await self._precheck(call, state, llm_provider) if needs_ok and approval is None else None
                 if guidance:  # e.g. a reminder with no alert channel: ask the user before the approval card
@@ -413,6 +474,8 @@ class BaseAgent(Agent):
                     output = await self._execute_tool_call(call["name"], call["arguments"], events, summaries,
                                                            state["results"], call["id"])
                     ok = events[-1]["type"] == "tool_executed"
+                    if ok and key:  # only calls that ran count towards a repeat (not declined or failed ones)
+                        state["calls_seen"][key] = state["calls_seen"].get(key, 0) + 1
                     if needs_ok and ok:  # what the user approved, so it can be undone from Activity
                         done = events[-1]
                         log_activity("action_approved", done.get("summary") or call["name"], metadata={
@@ -425,13 +488,19 @@ class BaseAgent(Agent):
                     approval = None  # an approval covers exactly one call
                 messages.append({"role": "tool", "tool_call_id": call["id"], "content": output})
 
+            if any(e.get("type") == "repeat_limit" for e in events):
+                content = ""
+                break
             if state["iteration"] >= MAX_TOOL_ITERATIONS:
                 events.append({"type": "step_limit", "steps": MAX_TOOL_ITERATIONS})
                 content = ""
                 break
             state["iteration"] += 1
             messages[0]["content"] = self._system_for(state)  # tools found mid-turn bring the full instructions
-            result = await llm_provider.chat_with_tools(messages=messages, tools=self._schemas_for(state))
+            try:
+                result = await llm_provider.chat_with_tools(messages=messages, tools=self._schemas_for(state))
+            except ProviderError as err:  # retries ran out: say so, never answer without the tools
+                return self._provider_failed(err, events)
             content = result.get("content") or ""
             tool_calls = result.get("tool_calls") or []
             if not tool_calls:
@@ -463,6 +532,13 @@ class BaseAgent(Agent):
             state["queue"] = calls
             content = ""
 
+        if not content:  # stopped mid-task, or no text: ask the same conversation for the answer
+            try:
+                content = await self._final_answer(state, llm_provider)
+            except ProviderError as err:
+                return self._provider_failed(err, events)
+            except Exception as exc:
+                logger.warning("Final answer failed: %s", exc)
         if content:
             await self._emit({"type": "delta", "text": content})
             final_content = content
@@ -472,7 +548,9 @@ class BaseAgent(Agent):
                 tool_results=[m["content"] for m in messages if m.get("role") == "tool"],
             )
         final_content = final_content or "Completed without a text response."
-        if any(e.get("type") == "step_limit" for e in events):
+        if any(e.get("type") == "repeat_limit" for e in events):
+            final_content += "\n\n" + REPEAT_STOP
+        elif any(e.get("type") == "step_limit" for e in events):
             final_content += (f"\n\n_I stopped after {MAX_TOOL_ITERATIONS} rounds of tool calls. "
                               "Say \"continue\" if you want me to keep going._")
         return {
@@ -482,6 +560,31 @@ class BaseAgent(Agent):
             "message": final_content,
             "response": final_content,
         }
+
+    @staticmethod
+    def _call_key(call: dict[str, Any]) -> str:
+        """The call's identity for repeat detection (tool and arguments); empty for helpers that may repeat.
+
+        Counts live in ``state["calls_seen"]``, so a paused run (saved before this existed, too) resumes counting."""
+        if call["name"] in REPEAT_EXEMPT:
+            return ""
+        return call["name"] + json.dumps(call["arguments"], sort_keys=True, default=str)
+
+    async def _final_answer(self, state: dict[str, Any], llm_provider: Any) -> str:
+        """The answer from the conversation so far, tool results included; tool calls in the reply are ignored.
+
+        The tools are still sent: Anthropic rejects tool blocks in a conversation that has no tool list."""
+        result = await llm_provider.chat_with_tools(
+            messages=[*state["messages"], {"role": "user", "content": FINAL_ASK}], tools=self._schemas_for(state))
+        return result.get("content") or ""
+
+    @staticmethod
+    def _provider_failed(err: ProviderError, events: list[dict[str, Any]]) -> dict[str, Any]:
+        message = err.user_message()
+        if any(e.get("type") == "tool_executed" for e in events):
+            message += " " + NOTHING_CHANGED
+        events.append({"type": "llm_error", "provider": err.provider, "status": err.status, "error": err.detail or str(err)})
+        return {"status": "error", "events": events, "summary": message, "message": message, "response": message}
 
     async def _execute_tool_call(
         self,
@@ -508,6 +611,11 @@ class BaseAgent(Agent):
                 return (f"Not run: {tool_name} needs {', '.join(repr(p) for p in missing)}. Work it out and call it "
                         "again (for example, look up the user's account with their app's who-am-I tool first)."
                         + self._ask_hint())
+            problems = schema_problems(getattr(tool, "parameters_schema", None) or {}, arguments)
+            if problems:  # the app would reject it anyway; let the model fix it first
+                events.append({"type": "tool_error", "tool_name": tool_name, "error": "; ".join(problems)})
+                return (f"Not run: the arguments for {tool_name} don't match its schema:\n"
+                        + "\n".join(f"- {p}" for p in problems) + "\nFix them and call it again." + self._ask_hint())
             exec_result = await self._tool_registry.execute_tool(tool_name, arguments)
         except AppNotConnectedError:
             events.append({"type": "tool_error", "tool_name": tool_name, "error": "App not connected to Nexus"})
@@ -631,15 +739,38 @@ class BaseAgent(Agent):
         except Exception as exc:
             logger.warning("LLM provider error: %s", exc)
             events.append({"type": "llm_error", "task": task, "error": str(exc)})
+            if isinstance(exc, ProviderError):
+                return exc.user_message()
             return context_summary or f"The language model request failed: {exc}"
 
 
-def clean_history(messages: Any) -> list[dict[str, Any]]:
-    """Keep only well-formed user/assistant text turns."""
+HISTORY_DATA_CHARS = 1500  # of each earlier tool result kept in the history
+HISTORY_NOTE_CHARS = 4000  # of all of one reply's tool results
+HISTORY_NOTE = "(Context for you, not shown to the user: tools used for this reply)"
+
+
+def _tools_note(events: Any) -> str:
+    """What a saved reply's tools returned, so a follow-up ("close the second one") still has the IDs."""
+    lines: list[str] = []
+    size = 0
+    for event in events if isinstance(events, list) else []:
+        if not isinstance(event, dict) or event.get("type") != "tool_executed":
+            continue
+        line = (f"- {event.get('tool_name')}({json.dumps(event.get('arguments') or {}, default=str)}) -> "
+                f"{event.get('summary') or ''}; data: {json.dumps(event.get('data'), default=str)[:HISTORY_DATA_CHARS]}")
+        if size + len(line) > HISTORY_NOTE_CHARS:
+            break
+        lines.append(line)
+        size += len(line) + 1
+    return "\n\n" + HISTORY_NOTE + "\n" + "\n".join(lines) if lines else ""
+
+
+def clean_history(messages: Any, with_tools: bool = False) -> list[dict[str, Any]]:
+    """Keep only well-formed user/assistant text turns; ``with_tools`` adds what each reply's tools returned."""
     if not isinstance(messages, list):
         return []
     return [
-        {"role": m["role"], "content": m["content"]}
+        {"role": m["role"], "content": m["content"] + (_tools_note(m.get("events")) if with_tools and m["role"] == "assistant" else "")}
         for m in messages
         if isinstance(m, dict)
         and m.get("role") in ("user", "assistant")

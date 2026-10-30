@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from app.llm.base import BaseLLMProvider
+from app.llm.errors import ProviderError
 
 PROVIDER_NAME = "litellm"
 
@@ -31,14 +32,21 @@ class LiteLLMProvider(BaseLLMProvider):
     ) -> dict[str, Any]:
         import litellm
 
-        response = await litellm.acompletion(
-            model=model or self._model,
-            messages=messages,
-            temperature=temperature if temperature is not None else 0.7,
-            max_tokens=max_tokens,
-            api_key=self._api_key,
-            base_url=self._base_url,
-        )
+        try:
+            response = await litellm.acompletion(
+                model=model or self._model,
+                messages=messages,
+                temperature=temperature if temperature is not None else 0.7,
+                max_tokens=max_tokens,
+                api_key=self._api_key,
+                base_url=self._base_url,
+            )
+        except Exception as exc:
+            # litellm's errors are its own classes but carry the upstream HTTP status.
+            status = getattr(exc, "status_code", None)
+            if isinstance(status, int):
+                raise ProviderError(PROVIDER_NAME, status, str(exc)[:500]) from exc
+            raise
 
         choice = response.choices[0]
         usage = response.usage

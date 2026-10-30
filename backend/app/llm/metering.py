@@ -6,13 +6,23 @@ Streamed replies report no usage, so those are estimated at ~4 characters per to
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
+import random
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Iterator, Optional
+from typing import Any, AsyncIterator, Awaitable, Callable, Iterator, Optional
 
 from app.core.database import get_connection
+from app.llm.errors import as_provider_error
+
+logger = logging.getLogger(__name__)
+
+MAX_RETRIES = 3
+MAX_RETRY_WAIT = 30.0  # seconds; a longer Retry-After is capped
+_sleep = asyncio.sleep  # patched in tests
 
 
 class DailyLimitReached(RuntimeError):
@@ -152,25 +162,57 @@ class Metered:
                 record_usage(self._provider_id, self._name, result.get("model") or model or self._model,
                              input_tokens, output_tokens, cached=_cached_tokens(result.get("usage")))
 
-    async def chat(self, messages: Any, **kwargs: Any) -> Any:
+    async def _wait_before_retry(self, exc: BaseException, attempt: int) -> None:
+        """Re-raise ``exc`` unless it's a passing AI-service failure with retries left; otherwise wait."""
+        error = as_provider_error(exc, self._name)
+        if error is None or not error.retryable or attempt >= MAX_RETRIES:
+            if error is not None and error is not exc:
+                raise error from exc
+            raise exc
+        wait = min(error.retry_after, MAX_RETRY_WAIT) if error.retry_after is not None             else 2 ** attempt * random.uniform(0.75, 1.25)
+        logger.warning("%s failed (%s), retrying in %.1fs", self._name, error.status or error.detail, wait)
+        await _sleep(wait)
+
+    async def _retrying(self, call: Callable[[], Awaitable[Any]]) -> Any:
         check_budget()
-        result = await self._provider.chat(messages=messages, **{**self.defaults, **kwargs})
+        attempt = 0
+        while True:
+            try:
+                return await call()
+            except Exception as exc:
+                await self._wait_before_retry(exc, attempt)
+                attempt += 1
+
+    async def chat(self, messages: Any, **kwargs: Any) -> Any:
+        result = await self._retrying(lambda: self._provider.chat(messages=messages, **{**self.defaults, **kwargs}))
         self._record(result, kwargs.get("model", ""))
         return result
 
     async def chat_with_tools(self, messages: Any, tools: Any, **kwargs: Any) -> Any:
-        check_budget()
-        result = await self._provider.chat_with_tools(messages=messages, tools=tools, **{**self.defaults, **kwargs})
+        result = await self._retrying(
+            lambda: self._provider.chat_with_tools(messages=messages, tools=tools, **{**self.defaults, **kwargs}))
         self._record(result, kwargs.get("model", ""))
         return result
 
     async def chat_stream(self, messages: Any, **kwargs: Any) -> AsyncIterator[str]:
         check_budget()
         parts: list[str] = []
+        attempt = 0
         try:
-            async for chunk in self._provider.chat_stream(messages=messages, **{**self.defaults, **kwargs}):
-                parts.append(chunk)
-                yield chunk
+            while True:
+                try:
+                    async for chunk in self._provider.chat_stream(messages=messages, **{**self.defaults, **kwargs}):
+                        parts.append(chunk)
+                        yield chunk
+                    break
+                except Exception as exc:
+                    if parts:  # part of the reply is already on screen: restarting would repeat it
+                        error = as_provider_error(exc, self._name)
+                        if error is not None and error is not exc:
+                            raise error from exc
+                        raise
+                    await self._wait_before_retry(exc, attempt)
+                    attempt += 1
         finally:
             record_usage(self._provider_id, self._name, kwargs.get("model") or self._model,
                          _estimate(json.dumps(messages, default=str)), _estimate("".join(parts)), estimated=True)

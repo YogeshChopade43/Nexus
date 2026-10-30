@@ -6,10 +6,15 @@ from typing import Any, AsyncIterator, Optional
 import httpx
 
 from app.llm.base import BaseLLMProvider
+from app.llm.errors import ProviderError, _seconds
 
 PROVIDER_NAME = "anthropic"
 API_URL = "https://api.anthropic.com/v1/messages"
 DEFAULT_MODEL = "claude-opus-5-5"
+# An error sent inside a stream that started with HTTP 200 names its type instead of a status.
+STREAM_ERRORS = {"invalid_request_error": 400, "authentication_error": 401, "permission_error": 403,
+                 "not_found_error": 404, "request_too_large": 413, "rate_limit_error": 429,
+                 "api_error": 500, "overloaded_error": 529}
 
 
 def to_anthropic_messages(messages: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
@@ -91,7 +96,8 @@ class AnthropicProvider(BaseLLMProvider):
         async with httpx.AsyncClient(timeout=300) as client:
             response = await client.post(API_URL, headers=self._headers(), json=body)
         if response.status_code >= 400:
-            raise RuntimeError(f"Anthropic API error {response.status_code}: {response.text[:500]}")
+            raise ProviderError(PROVIDER_NAME, response.status_code, response.text[:500],
+                                _seconds(response.headers.get("retry-after")))
         return self._parse_response(response.json())
 
     async def chat(self, messages, model: str = "", temperature: Optional[float] = None,
@@ -105,7 +111,7 @@ class AnthropicProvider(BaseLLMProvider):
             async with client.stream("POST", API_URL, headers=self._headers(), json=body) as response:
                 if response.status_code >= 400:
                     detail = (await response.aread()).decode("utf-8", "replace")[:500]
-                    raise RuntimeError(f"Anthropic API error {response.status_code}: {detail}")
+                    raise ProviderError(PROVIDER_NAME, response.status_code, detail, _seconds(response.headers.get("retry-after")))
                 async for line in response.aiter_lines():
                     if not line.startswith("data:"):
                         continue
@@ -114,7 +120,8 @@ class AnthropicProvider(BaseLLMProvider):
                     except ValueError:
                         continue
                     if payload.get("type") == "error":
-                        raise RuntimeError(f"Anthropic stream error: {payload.get('error')}")
+                        error = payload.get("error") or {}
+                        raise ProviderError(PROVIDER_NAME, STREAM_ERRORS.get(error.get("type"), 500), error.get("message", ""))
                     if payload.get("type") == "content_block_delta":
                         chunk = payload.get("delta", {}).get("text", "")
                         if chunk:

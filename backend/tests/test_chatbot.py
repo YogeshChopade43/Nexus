@@ -140,7 +140,8 @@ def test_large_results_can_be_paged():
 def test_step_limit_is_explained():
     registry = ToolRegistry()
     registry.register(Dummy("poke", "Poke"))
-    result = run(BaseAgent(registry, {"app": True}), "loop", ScriptedLLM(lambda m, t: ("app__poke", {})))
+    # A different argument each round, so it's the step limit that stops it, not repeat detection.
+    result = run(BaseAgent(registry, {"app": True}), "loop", ScriptedLLM(lambda m, t: ("app__poke", {"n": len(m)})))
     assert any(e["type"] == "step_limit" for e in result["events"])
     assert f"stopped after {MAX_TOOL_ITERATIONS} rounds" in result["response"]
 
